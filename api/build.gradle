@@ -1,0 +1,26 @@
+
+plugins {
+	id "java-library"
+	id "maven-publish"
+}
+
+dependencies {
+	api project(":protocol-game")
+	compileOnly(libs.bundles.netty.api)
+	compileOnly(libs.gson)
+	compileOnly(libs.guava)
+	compileOnly(libs.jsr305)
+}
+
+publishing {
+	publications {
+		maven(MavenPublication) {
+			from components.java
+			pom {
+				name = "EaglercraftXServer API - Core"
+				description = "Core API for Eaglercraft servers"
+				url = providers.gradleProperty("eaglerxserver.url").get()
+			}
+		}
+	}
+}

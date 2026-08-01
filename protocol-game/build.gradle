@@ -1,0 +1,18 @@
+
+plugins {
+	id "java-library"
+	id "maven-publish"
+}
+
+publishing {
+	publications {
+		maven(MavenPublication) {
+			from components.java
+			pom {
+				name = "EaglercraftX Protocol"
+				description = "Protocol module from the EaglercraftX client"
+				url = providers.gradleProperty("eaglerxserver.url").get()
+			}
+		}
+	}
+}

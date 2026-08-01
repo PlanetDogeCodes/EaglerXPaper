@@ -1,0 +1,24 @@
+
+plugins {
+	id "java-library"
+	id "maven-publish"
+}
+
+dependencies {
+	api project(":api")
+	compileOnly(libs.velocity.api)
+	compileOnly(libs.jsr305)
+}
+
+publishing {
+	publications {
+		maven(MavenPublication) {
+			from components.java
+			pom {
+				name = "EaglercraftXServer API - Velocity"
+				description = "Velocity API for Eaglercraft servers"
+				url = providers.gradleProperty("eaglerxserver.url").get()
+			}
+		}
+	}
+}

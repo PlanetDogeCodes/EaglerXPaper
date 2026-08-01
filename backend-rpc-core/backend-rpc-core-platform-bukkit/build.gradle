@@ -1,0 +1,14 @@
+
+plugins {
+	id "java-library"
+}
+
+dependencies {
+	api project(":backend-rpc-api-bukkit")
+	api project(":backend-rpc-core")
+	compileOnly project(":api-bukkit")
+	compileOnly(libs.paper.api)
+	compileOnly(libs.bundles.bungeecord.chat.api)
+	compileOnly(libs.pluginannotations)
+	annotationProcessor(libs.pluginannotations)
+}

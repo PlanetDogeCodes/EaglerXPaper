@@ -1,0 +1,25 @@
+
+plugins {
+	id "java-library"
+	id "maven-publish"
+}
+
+dependencies {
+	api project(":api")
+	compileOnly(libs.bundles.netty.api)
+	compileOnly(libs.paper.api)
+	compileOnly(libs.jsr305)
+}
+
+publishing {
+	publications {
+		maven(MavenPublication) {
+			from components.java
+			pom {
+				name = "EaglercraftXServer API - Bukkit"
+				description = "Bukkit API for Eaglercraft servers"
+				url = providers.gradleProperty("eaglerxserver.url").get()
+			}
+		}
+	}
+}
