@@ -1,0 +1,10 @@
+
+plugins {
+	id "java-library"
+}
+
+dependencies {
+	implementation project(":core")
+	compileOnly(libs.bundles.velocity.adventure.api)
+	compileOnly(libs.gson)
+}

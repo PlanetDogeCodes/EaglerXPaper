@@ -1,0 +1,31 @@
+
+plugins {
+        id "java-library"
+}
+
+dependencies {
+        api project(":api-bukkit")
+        api project(":core")
+        api project(":core:core-platform-bungee-chat")
+        compileOnly project(":stubs")
+        compileOnly(libs.paper.api)
+        compileOnly(libs.bundles.netty.all)
+        compileOnly(libs.pluginannotations)
+        annotationProcessor(libs.pluginannotations)
+}
+
+def generatedPluginYml = file("${buildDir}/classes/java/main/plugin.yml")
+tasks.register('mergeApiVersion') {
+        description = 'Appends api-version to the generated plugin.yml'
+        doLast {
+                if (generatedPluginYml.exists()) {
+                        String content = generatedPluginYml.text
+                        if (!content.contains('api-version:')) {
+                                generatedPluginYml.text = content + "\napi-version: '1.21'\n"
+                                logger.info('Added api-version: 1.21 to plugin.yml')
+                        }
+                }
+        }
+}
+processResources.finalizedBy mergeApiVersion
+jar.dependsOn mergeApiVersion
