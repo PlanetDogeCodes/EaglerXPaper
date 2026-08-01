@@ -15,7 +15,7 @@ EaglerXPaper is a fork of lax1dude's EaglerXServer that extends Bukkit/Spigot/Pa
 | Platform | Version Range | Status |
 |----------|--------------|--------|
 | **Paper** | 1.12.2 – 1.21.11+ | ✅ Fully supported |
-| **Spigot** | 1.12.2 – 1.21.x | ⚠️ Should work (uses NMS reflection fallback) |
+| **Spigot** | 1.12.2 – 1.21.x | ⚠️ Should work |
 | **Folia** | Any | ❌ Not supported |
 | **BungeeCord** | 1.21+ | ✅ Use upstream EaglerXServer (already supported) |
 | **Velocity** | 3.4+ | ✅ Use upstream EaglerXServer (already supported) |
@@ -62,7 +62,7 @@ where `NmsNames.PLAYER_CONNECTION = Set.of("ServerGamePacketListenerImpl", "Play
 ## Building from source
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/eaglerpaper.git
+git clone https://github.com/PlanetDogeCodes/eaglerxpaper.git
 cd eaglerpaper
 ./gradlew :core:shadowJarBukkit
 # Output: core/build/libs/EaglerXPaper.jar
