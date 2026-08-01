@@ -1,0 +1,9 @@
+
+plugins {
+	id "java-library"
+}
+
+dependencies {
+	implementation project(":core")
+	compileOnly(libs.bundles.bungeecord.chat.api)
+}
