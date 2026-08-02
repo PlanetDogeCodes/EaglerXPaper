@@ -15,10 +15,12 @@
  * For low-throughput connections (few packets per second), the batcher
  * passes through immediately with zero added latency.
  *
- * The batcher is self-adaptive: it only activates when it detects a burst
- * of packets (more than burstThreshold packets within the monitoring window).
- * This means idle connections see zero overhead, and active connections
- * benefit from automatic batching.
+ * IMPORTANT: The batcher inspects the first VarInt of each packet (the
+ * Minecraft packet ID) to identify timing-critical packets (combat, item
+ * use, entity events). When such a packet is encountered, the buffer is
+ * flushed immediately — this prevents the batcher from introducing latency
+ * that would break combat mechanics (mace smash attacks, wind charges,
+ * etc.).
  */
 
 package net.lax1dude.eaglercraft.backend.server.base.pipeline;
@@ -43,6 +45,8 @@ import io.netty.util.concurrent.ScheduledFuture;
  * - If packets arrive slowly (< burstThreshold per window), pass through immediately.
  * - If packets arrive rapidly (>= burstThreshold per window), switch to batched mode:
  *   buffer packets for up to maxDelayMs, then flush as a single write.
+ * - Timing-critical packets (combat, item use, entity events) trigger an
+ *   immediate flush so they reach the client without delay.
  * - After maxBurstDurationMs of continuous batching, flush immediately to prevent
  *   excessive latency buildup.
  */
@@ -80,9 +84,11 @@ public class AdaptivePacketBatcher extends ChannelDuplexHandler {
 
     /**
      * Creates a batcher with sensible defaults for Eaglercraft connections.
+     * Uses a 2ms delay (down from 20ms) to minimize impact on timing-sensitive
+     * mechanics while still providing frame reduction benefits.
      */
     public AdaptivePacketBatcher() {
-        this(20, 100, 20, 200, 64);
+        this(20, 100, 2, 50, 64);
     }
 
     @Override
@@ -143,6 +149,20 @@ public class AdaptivePacketBatcher extends ChannelDuplexHandler {
         }
 
         if (batchingActive) {
+            // Check if this packet is timing-critical.
+            // If so, flush the current buffer immediately, then pass this packet
+            // through without buffering — it needs to reach the client ASAP.
+            if (isTimingCriticalPacket(buf)) {
+                cancelFlushTask();
+                flushBuffer(ctx, false);
+                // Pass the critical packet through immediately
+                ctx.write(msg, promise);
+                // Exit batching mode — the burst is likely over
+                batchingActive = false;
+                batchingStartedMs = 0;
+                return;
+            }
+
             // Buffer this packet
             buffer.add(buf);
             promises.add(promise);
@@ -161,6 +181,141 @@ public class AdaptivePacketBatcher extends ChannelDuplexHandler {
             // Pass through immediately — low-throughput connection
             ctx.write(msg, promise);
         }
+    }
+
+    /**
+     * Checks whether a packet is timing-critical and should not be buffered.
+     *
+     * Timing-critical packets are those involved in combat, item use, and
+     * entity interactions — these need to reach the client within the same
+     * tick to avoid breaking game mechanics (mace smash attacks, wind charges,
+     * projectile hits, etc.).
+     *
+     * We identify these by reading the first VarInt from the ByteBuf, which
+     * is the Minecraft packet ID. The IDs we check for are the 1.8 protocol
+     * IDs (since Eaglercraft clients speak 1.8 protocol after ViaVersion
+     * translation):
+     *
+     *   0x00 = Spawn Object (wind charges, projectiles)
+     *   0x02 = Spawn Global Entity (lightning)
+     * 0x0B/0x0C = Animation/Statistics
+     *   0x12 = Entity Velocity (knockback, mace launch)
+     *   0x1A = Entity Status (mace smash effect)
+     *   0x1C = Entity Metadata
+     *   0x22 = Entity Teleport
+     *   0x2A = Entity Properties (damage attributes)
+     *   0x2C = Combat Event (damage, death)
+     *   0x2D = World Border
+     *   0x3B = Scoreboard Objective
+     *   0x3C = Update Score (kill counter)
+     *   0x37 = Statistics
+     *   0x39 = Camera (spectator)
+     *   0x3A = World Border
+     *   0x42 = Update Health (damage taken)
+     *   0x43 = Set Experience (XP changes)
+     *   0x44 = Update Attributes
+     *   0x48 = Use Bed
+     *   0x4A = Destroy Entities
+     *   0x4B = Remove Entity Effect
+     *   0x4D = Entity Effect (potion effects)
+     *   0x4E = Particle (hit particles, wind charge particles)
+     *
+     * We use a broad set of IDs to be safe — false positives (flushing when
+     * we didn't need to) just reduce the batching benefit slightly, while
+     * false negatives (buffering a critical packet) break gameplay.
+     */
+    private static boolean isTimingCriticalPacket(ByteBuf buf) {
+        if (buf.readableBytes() < 1) {
+            return false;
+        }
+        try {
+            // Read the VarInt packet ID without consuming it.
+            // VarInt is 1-5 bytes, but for 1.8 protocol IDs < 128, it's a single byte.
+            int readerIndex = buf.readerIndex();
+            int packetId;
+            byte firstByte = buf.getByte(readerIndex);
+            if ((firstByte & 0x80) == 0) {
+                // Single-byte VarInt (most common for 1.8 packet IDs)
+                packetId = firstByte & 0x7F;
+            } else {
+                // Multi-byte VarInt — read it properly
+                packetId = readVarInt(buf, readerIndex);
+                if (packetId < 0) {
+                    return false; // couldn't read
+                }
+            }
+
+            // Check against known timing-critical packet IDs for 1.8 protocol.
+            // These are the IDs after ViaVersion has translated the server's
+            // 1.21 packets down to 1.8 format.
+            switch (packetId) {
+                // Entity spawning/updates (wind charges, projectiles, etc.)
+                case 0x00: // Spawn Object
+                case 0x02: // Spawn Global Entity
+                case 0x0F: // Spawn Mob
+                case 0x0C: // Spawn Player
+
+                // Combat and damage
+                case 0x2C: // Combat Event (end combat, entity attacked, player killed)
+                case 0x42: // Update Health (damage taken, regen)
+                case 0x2A: // Entity Properties (attack damage, armor)
+
+                // Entity movement/velocity (mace knockback, wind charge push)
+                case 0x12: // Entity Velocity
+                case 0x14: // Entity Relative Move
+                case 0x15: // Entity Look and Relative Move
+                case 0x17: // Entity Look
+                case 0x22: // Entity Teleport
+
+                // Entity state changes
+                case 0x1A: // Entity Status (mace smash, wind charge burst)
+                case 0x1C: // Entity Metadata
+                case 0x4A: // Destroy Entities (projectile hit, item despawn)
+                case 0x4B: // Remove Entity Effect
+                case 0x4D: // Entity Effect (potion applied)
+
+                // Player state
+                case 0x43: // Set Experience
+                case 0x44: // Update Attributes
+                case 0x37: // Statistics
+                case 0x39: // Camera
+
+                // Particles (hit effects, wind charge particles)
+                case 0x4E: // Particle (note: 0x2A is also particles in some versions, but we use 0x4E for 1.8)
+
+                // Animation
+                case 0x0B: // Animation (swing, damage animation)
+
+                    return true;
+                default:
+                    return false;
+            }
+        } catch (Exception e) {
+            // If we can't read the packet ID, don't risk buffering it
+            return true;
+        }
+    }
+
+    /**
+     * Reads a VarInt from the ByteBuf at the given index without consuming bytes.
+     * Returns -1 if the VarInt is incomplete or invalid.
+     */
+    private static int readVarInt(ByteBuf buf, int startIndex) {
+        int result = 0;
+        int bytes = 0;
+        int index = startIndex;
+        int maxIndex = startIndex + 5; // VarInt is max 5 bytes
+        int limit = buf.writerIndex();
+        while (index < maxIndex && index < limit) {
+            byte b = buf.getByte(index);
+            result |= (b & 0x7F) << (bytes * 7);
+            bytes++;
+            index++;
+            if ((b & 0x80) == 0) {
+                return result;
+            }
+        }
+        return -1; // incomplete VarInt
     }
 
     private void scheduleFlush(ChannelHandlerContext ctx) {

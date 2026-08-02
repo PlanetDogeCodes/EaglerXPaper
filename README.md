@@ -10,6 +10,8 @@ EaglerXPaper is a fork of lax1dude's EaglerXServer that extends Bukkit/Spigot/Pa
 
 **This is largely the same project as EaglerXServer** — it only changes a few minor things to ensure 1.17+ compatibility, plus adds a couple of small features. All credit for the actual plugin goes to lax1dude.
 
+Based on EaglerXServer **v1.1.1** (includes the LimboAPI compression fix, reduced default WebSocket frame size, empty ByteBuf handshake fix, and RateLimiterLocking ternary fix from upstream).
+
 ## Compatibility
 
 | Platform | Version Range | Status |
@@ -20,9 +22,9 @@ EaglerXPaper is a fork of lax1dude's EaglerXServer that extends Bukkit/Spigot/Pa
 | **BungeeCord** | 1.21+ | ✅ Use upstream EaglerXServer (already supported) |
 | **Velocity** | 3.4+ | ✅ Use upstream EaglerXServer (already supported) |
 
-**Java requirement:** Java 17+ for Paper 1.12–1.20, Java 21+ for Paper 1.21–1.21.4, Java 25+ for Paper 26.x (1.21.11+). Generally good practice to just use Java 26 anyways.
+**Java requirement:** Java 17+ for Paper 1.12–1.20, Java 21+ for Paper 1.21–1.21.4, Java 25+ for Paper 26.x (1.21.11+).
 
-**Tested and works on:** Paper versions 1.12.2 to 26.2 with Java 25.
+**Tested and works on:** Paper versions 1.12.2 to 1.17.1, and 1.21.11 to 26.2, all with Java 25.
 
 ## How 1.17+ Compatibility Was Achieved
 
