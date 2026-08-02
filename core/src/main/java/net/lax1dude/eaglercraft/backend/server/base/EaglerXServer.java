@@ -163,6 +163,7 @@ public class EaglerXServer<PlayerObject> implements IEaglerXServerImpl<PlayerObj
         private boolean isEaglerPlayerProperyEnabled;
         private SkinService<PlayerObject> skinService;
         private DeferredStartSkinCache skinCacheService;
+        private net.lax1dude.eaglercraft.backend.server.base.skins.SkinCachePrewarmer skinCachePrewarmer;
         private Connection[] skinCacheJDBCHandle;
         private IVoiceServiceImpl<PlayerObject> voiceService;
         private NotificationService<PlayerObject> notificationService;
@@ -446,6 +447,16 @@ public class EaglerXServer<PlayerObject> implements IEaglerXServerImpl<PlayerObj
                         skinCacheService.setDelegate(new SkinCacheService(
                                         new SkinCacheDownloader(httpClient, skinConf.getValidSkinDownloadURLs()), datastore,
                                         skinConf.getSkinCacheMemoryKeepSeconds(), skinConf.getSkinCacheMemoryMaxObjects(), logger()));
+                        
+                        // Pre-warm the skin cache for recently-seen players
+                        // This eliminates first-join skin download latency
+                        if (net.lax1dude.eaglercraft.backend.server.base.config.EaglerXPaperConfig.enableSkinPrewarm) {
+                                try {
+                                        prewarmSkinCache(skinConf);
+                                } catch (Exception e) {
+                                        logger().warn("Could not start skin cache pre-warming: " + e.getMessage());
+                                }
+                        }
                 }
 
                 skinService.handleEnabled();
@@ -461,6 +472,19 @@ public class EaglerXServer<PlayerObject> implements IEaglerXServerImpl<PlayerObj
                 platform.getScheduler().executeDelayed(pipelineTransformer::nagAgain, 10000);
         }
 
+        /**
+         * Starts asynchronous skin cache pre-warming. Reads usercache.json and
+         * pre-loads skins for recently-seen players so first-join has zero latency.
+         */
+        private void prewarmSkinCache(ConfigDataSkinService skinConf) {
+                java.io.File usercache = new java.io.File("usercache.json");
+                int maxPlayers = net.lax1dude.eaglercraft.backend.server.base.config.EaglerXPaperConfig.prewarmMaxPlayers;
+                int threads = Math.max(1, Math.min(4, Runtime.getRuntime().availableProcessors() / 2));
+                skinCachePrewarmer = new net.lax1dude.eaglercraft.backend.server.base.skins.SkinCachePrewarmer(
+                                skinCacheService, logger(), usercache, maxPlayers, threads);
+                skinCachePrewarmer.startAsync();
+        }
+
         private void disableHandler() {
                 if (platformType != EnumPlatformType.BUKKIT) {
                         logger().info("Disabling " + getServerBrand() + " " + getServerVersion() + "...");
@@ -474,6 +498,12 @@ public class EaglerXServer<PlayerObject> implements IEaglerXServerImpl<PlayerObj
                 }
 
                 skinService.handleDisabled();
+
+                // Stop skin cache pre-warming if active
+                if (skinCachePrewarmer != null) {
+                        skinCachePrewarmer.shutdown();
+                        skinCachePrewarmer = null;
+                }
 
                 if (skinCacheService != null) {
                         if (skinCacheJDBCHandle != null) {

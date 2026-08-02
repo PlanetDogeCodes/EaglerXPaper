@@ -1,31 +1,53 @@
 
 plugins {
-        id "java-library"
+	id "java-library"
 }
 
 dependencies {
-        api project(":api-bukkit")
-        api project(":core")
-        api project(":core:core-platform-bungee-chat")
-        compileOnly project(":stubs")
-        compileOnly(libs.paper.api)
-        compileOnly(libs.bundles.netty.all)
-        compileOnly(libs.pluginannotations)
-        annotationProcessor(libs.pluginannotations)
+	api project(":api-bukkit")
+	api project(":core")
+	api project(":core:core-platform-bungee-chat")
+	compileOnly project(":stubs")
+	compileOnly(libs.paper.api)
+	compileOnly(libs.bundles.netty.all)
+	compileOnly(libs.pluginannotations)
+	annotationProcessor(libs.pluginannotations)
 }
 
+// Paper 1.21+: inject api-version: '1.21' into the generated plugin.yml.
+// The spigot-annotations processor generates plugin.yml in build/classes/java/main/
+// (not build/resources/main/), and it doesn't support an apiVersion field on @Plugin,
+// so we patch the generated resource after compilation.
 def generatedPluginYml = file("${buildDir}/classes/java/main/plugin.yml")
 tasks.register('mergeApiVersion') {
-        description = 'Appends api-version to the generated plugin.yml'
-        doLast {
-                if (generatedPluginYml.exists()) {
-                        String content = generatedPluginYml.text
-                        if (!content.contains('api-version:')) {
-                                generatedPluginYml.text = content + "\napi-version: '1.21'\n"
-                                logger.info('Added api-version: 1.21 to plugin.yml')
-                        }
-                }
-        }
+	description = "Injects api-version: '1.21' into the generated plugin.yml"
+	doLast {
+		if (!generatedPluginYml.exists()) {
+			logger.warn("mergeApiVersion: plugin.yml not found at ${generatedPluginYml}, skipping")
+			return
+		}
+		String contents = generatedPluginYml.getText('UTF-8')
+		if (contents.contains('api-version:')) {
+			logger.lifecycle("mergeApiVersion: api-version already present in plugin.yml, skipping")
+			return
+		}
+		// Insert api-version: '1.21' immediately after the top-level 'name:' line
+		String[] lines = contents.split('\n')
+		StringBuilder out = new StringBuilder()
+		boolean inserted = false
+		for (String line : lines) {
+			out.append(line).append('\n')
+			if (!inserted && line.startsWith('name:')) {
+				out.append("api-version: '1.21'\n")
+				inserted = true
+			}
+		}
+		if (!inserted) {
+			out.insert(0, "api-version: '1.21'\n")
+		}
+		generatedPluginYml.write(out.toString(), 'UTF-8')
+		logger.lifecycle("mergeApiVersion: injected api-version: '1.21' into ${generatedPluginYml}")
+	}
 }
 processResources.finalizedBy mergeApiVersion
 jar.dependsOn mergeApiVersion

@@ -92,7 +92,9 @@ public class EaglerListener implements IEaglerListenerInfo, IEaglerXServerListen
                                 server.logger().error("Could not load server icon: " + iconName + " (not found)");
                                 cachedServerIcon = null;
                         } catch (IOException ex) {
-                                server.logger().error("Could not load server icon: " + iconName, ex);
+                                // Don't print full stack trace for common "can't read file" errors.
+                                // Just log the message — the operator can fix the file path.
+                                server.logger().error("Could not load server icon: " + iconName + " (" + ex.getMessage() + ")");
                                 cachedServerIcon = null;
                         } catch (Throwable t) {
                                 server.logger().error("Could not load server icon: " + iconName + " (" + t.getClass().getSimpleName() + ": " + t.getMessage() + ")");

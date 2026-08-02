@@ -35,85 +35,106 @@ import net.md_5.bungee.api.chat.BaseComponent;
 
 class BukkitListener implements Listener {
 
-	private final PlatformPluginBukkit plugin;
+        private final PlatformPluginBukkit plugin;
 
-	BukkitListener(PlatformPluginBukkit plugin) {
-		this.plugin = plugin;
-	}
+        BukkitListener(PlatformPluginBukkit plugin) {
+                this.plugin = plugin;
+        }
 
-	@EventHandler(priority = EventPriority.LOWEST)
-	public void onPlayerLoginEvent(PlayerLoginEvent evt) {
-		plugin.postLoginInjector.handleLoginEvent(evt);
-	}
+        @EventHandler(priority = EventPriority.LOWEST)
+        public void onPlayerLoginEvent(PlayerLoginEvent evt) {
+                plugin.postLoginInjector.handleLoginEvent(evt);
+        }
 
-	@EventHandler(priority = EventPriority.LOW)
-	public void onPlayerLoginInitEvent(PlayerLoginInitEvent evt) {
-		Channel channel = evt.netty().getChannel();
-		PlayerPostLoginInjector.LoginEventContext ctx = channel.attr(PlayerPostLoginInjector.attr).get();
-		IPipelineData pipelineData = channel.attr(PipelineAttributes.<IPipelineData>pipelineData()).get();
-		if (pipelineData != null && pipelineData.isCompressionDisable()) {
-			ctx.markCompressionDisable(true);
-		}
-	}
+        @EventHandler(priority = EventPriority.LOW)
+        public void onPlayerLoginInitEvent(PlayerLoginInitEvent evt) {
+                Channel channel = evt.netty().getChannel();
+                PlayerPostLoginInjector.LoginEventContext ctx = channel.attr(PlayerPostLoginInjector.attr).get();
+                IPipelineData pipelineData = channel.attr(PipelineAttributes.<IPipelineData>pipelineData()).get();
+                if (pipelineData != null && pipelineData.isCompressionDisable()) {
+                        ctx.markCompressionDisable(true);
+                }
+        }
 
-	@EventHandler(priority = EventPriority.LOW)
-	public void onPlayerPostLoginEvent(PlayerLoginPostEvent evt) {
-		Player player = evt.getPlayer();
-		plugin.forEachChannel((ch) -> {
-			BukkitUnsafe.addPlayerChannel(player, ch);
-		});
-		Channel channel = evt.netty().getChannel();
-		IPipelineData pipelineData = channel.attr(PipelineAttributes.<IPipelineData>pipelineData()).getAndSet(null);
-		evt.registerIntent(plugin);
-		awaitPlayState(pipelineData, () -> {
-			PlayerPostLoginInjector.setPlayState(evt);
-			try {
-				plugin.initializePlayer(player, channel, pipelineData, (b) -> {
-					if (b != Boolean.TRUE) {
-						if (b != null) {
-							evt.setKickMessage((BaseComponent) b);
-						}
-						evt.setCancelled(true);
-					}
-					evt.completeIntent(plugin);
-				});
-			} catch (Exception ex) {
-				try {
-					evt.setCancelled(true);
-					evt.completeIntent(plugin);
-				} catch (IllegalStateException exx) {
-					return;
-				}
-				if (ex instanceof RuntimeException exx)
-					throw exx;
-				throw new RuntimeException("Uncaught exception", ex);
-			}
-		});
-	}
+        @EventHandler(priority = EventPriority.LOW)
+        public void onPlayerPostLoginEvent(PlayerLoginPostEvent evt) {
+                Player player = evt.getPlayer();
+                plugin.forEachChannel((ch) -> {
+                        BukkitUnsafe.addPlayerChannel(player, ch);
+                });
+                Channel channel = evt.netty().getChannel();
+                IPipelineData pipelineData = channel.attr(PipelineAttributes.<IPipelineData>pipelineData()).getAndSet(null);
+                evt.registerIntent(plugin);
+                awaitPlayState(pipelineData, () -> {
+                        PlayerPostLoginInjector.setPlayState(evt);
+                        try {
+                                plugin.initializePlayer(player, channel, pipelineData, (b) -> {
+                                        if (b != Boolean.TRUE) {
+                                                if (b != null) {
+                                                        evt.setKickMessage((BaseComponent) b);
+                                                }
+                                                evt.setCancelled(true);
+                                        }
+                                        evt.completeIntent(plugin);
+                                });
+                        } catch (Exception ex) {
+                                try {
+                                        evt.setCancelled(true);
+                                        evt.completeIntent(plugin);
+                                } catch (IllegalStateException exx) {
+                                        return;
+                                }
+                                if (ex instanceof RuntimeException exx)
+                                        throw exx;
+                                throw new RuntimeException("Uncaught exception", ex);
+                        }
+                });
+        }
 
-	private static void awaitPlayState(IPipelineData conn, Runnable cont) {
-		if (conn != null) {
-			conn.awaitPlayState(cont);
-		} else {
-			cont.run();
-		}
-	}
+        private static void awaitPlayState(IPipelineData conn, Runnable cont) {
+                if (conn != null) {
+                        conn.awaitPlayState(cont);
+                } else {
+                        cont.run();
+                }
+        }
 
-	@EventHandler
-	public void onPlayerJoinEvent(PlayerJoinEvent evt) {
-		plugin.confirmPlayer(evt.getPlayer());
-	}
+        @EventHandler
+        public void onPlayerJoinEvent(PlayerJoinEvent evt) {
+                plugin.confirmPlayer(evt.getPlayer());
+        }
 
-	@EventHandler(priority = EventPriority.LOW)
-	public void onPlayerChangedWorldEvent(PlayerChangedWorldEvent evt) {
-		if (evt.getFrom() != null) {
-			plugin.worldChange(evt.getPlayer());
-		}
-	}
+        @EventHandler(priority = EventPriority.LOW)
+        public void onPlayerChangedWorldEvent(PlayerChangedWorldEvent evt) {
+                if (evt.getFrom() != null) {
+                        plugin.worldChange(evt.getPlayer());
+                }
+        }
 
-	@EventHandler(priority = EventPriority.MONITOR)
-	public void onQuitEvent(PlayerQuitEvent evt) {
-		plugin.dropPlayer(evt.getPlayer());
-	}
+        @EventHandler(priority = EventPriority.MONITOR)
+        public void onQuitEvent(PlayerQuitEvent evt) {
+                plugin.dropPlayer(evt.getPlayer());
+                // Clean up any orphaned eaglerMarker properties from the player's GameProfile.
+                // These are inserted by PlayerPostLoginInjector.handleLoginEvent and are
+                // normally removed when PacketLoginOutSuccess is sent. But if login fails
+                // before that (kick, timeout, disconnect), the marker stays forever.
+                try {
+                        Object handle = BukkitUnsafe.getHandle(evt.getPlayer());
+                        com.mojang.authlib.GameProfile profile = BukkitUnsafe.getGameProfile(handle);
+                        if (profile != null) {
+                                synchronized (profile) {
+                                        com.mojang.authlib.properties.Property[] toRemove = profile.getProperties()
+                                                        .values().stream()
+                                                        .filter(p -> p.getName().startsWith("$eaglerMarker_"))
+                                                        .toArray(com.mojang.authlib.properties.Property[]::new);
+                                        for (com.mojang.authlib.properties.Property p : toRemove) {
+                                                profile.getProperties().remove(p.getName(), p);
+                                        }
+                                }
+                        }
+                } catch (Exception e) {
+                        // Best effort — don't crash on quit
+                }
+        }
 
 }

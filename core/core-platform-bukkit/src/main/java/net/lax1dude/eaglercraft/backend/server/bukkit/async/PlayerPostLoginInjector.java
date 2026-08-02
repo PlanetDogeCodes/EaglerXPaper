@@ -99,6 +99,12 @@ public class PlayerPostLoginInjector {
         protected Method loginListenerDisconnect;
         protected Field loginListenerPlayer;
 
+        /**
+         * The 'transferred' boolean field on ServerLoginPacketListenerImpl (1.20.5+).
+         * Null on older versions. Used to pass the correct value to the 3-arg constructor.
+         */
+        protected Field loginListenerTransferred;
+
         protected volatile Class<Object> packetLoginSuccessClass;
         protected Field packetLoginSuccessGameProfile;
 
@@ -412,6 +418,7 @@ public class PlayerPostLoginInjector {
                         Class<Object> enumProtocolState = null;
                         Field loginListenerState = null;
                         Field loginListenerPlayer = null;
+                        Field loginListenerTransferred = null; // 1.20.5+ boolean field
                         for (Field f : loginListenerClass.getDeclaredFields()) {
                                 if (f.getType() == mcServerClass) {
                                         f.setAccessible(true);
@@ -427,6 +434,10 @@ public class PlayerPostLoginInjector {
                                 } else if (NmsNames.matches(f.getType(), NmsNames.ENTITY_PLAYER)) {
                                         f.setAccessible(true);
                                         loginListenerPlayer = f;
+                                } else if (f.getType() == boolean.class && "transferred".equals(f.getName())) {
+                                        // 1.20.5+ has a 'transferred' boolean field
+                                        f.setAccessible(true);
+                                        loginListenerTransferred = f;
                                 }
                                 if (loginListenerServer != null && loginListenerNetManager != null && loginListenerState != null
                                                 && loginListenerPlayer != null) {
@@ -461,14 +472,27 @@ public class PlayerPostLoginInjector {
                                 } catch (NoSuchMethodException e) {
                                 }
                         }
-                        // Last resort: any single-arg disconnect method
+                        // Last resort: any single-arg disconnect method.
+                        // Prefer String, then Component types, then anything else.
                         if (loginListenerDisconnect == null) {
+                                Method stringDisconnect = null;
+                                Method componentDisconnect = null;
+                                Method anyDisconnect = null;
                                 for (Method m : loginListenerClass.getMethods()) {
                                         if (m.getName().equals("disconnect") && m.getParameterCount() == 1) {
-                                                loginListenerDisconnect = m;
-                                                break;
+                                                Class<?> paramType = m.getParameterTypes()[0];
+                                                if (paramType == String.class) {
+                                                        stringDisconnect = m;
+                                                } else if (paramType.getName().contains("Component")) {
+                                                        componentDisconnect = m;
+                                                } else {
+                                                        anyDisconnect = m;
+                                                }
                                         }
                                 }
+                                // Prefer String > Component > any
+                                loginListenerDisconnect = stringDisconnect != null ? stringDisconnect
+                                                : (componentDisconnect != null ? componentDisconnect : anyDisconnect);
                         }
                         if (loginListenerDisconnect == null) {
                                 throw new IllegalStateException(
@@ -513,6 +537,7 @@ public class PlayerPostLoginInjector {
                         this.loginListenerTick = loginListenerTick;
                         this.loginListenerDisconnect = loginListenerDisconnect;
                         this.loginListenerPlayer = loginListenerPlayer;
+                        this.loginListenerTransferred = loginListenerTransferred;
                         LOGINLISTENERCLASS_HANDLE.setRelease(this, loginListenerClass);
                 } catch (ReflectiveOperationException e) {
                         throw Util.propagateReflectThrowable(e);
@@ -531,8 +556,18 @@ public class PlayerPostLoginInjector {
                 try {
                         Object[] ctorArgs;
                         if (loginListenerCtorArgCount == 3) {
+                                // Read the 'transferred' value from the original listener (1.20.5+).
+                                // This preserves the correct transfer state for the proxy listener.
+                                boolean transferred = false;
+                                if (loginListenerTransferred != null) {
+                                        try {
+                                                transferred = loginListenerTransferred.getBoolean(loginListener);
+                                        } catch (Exception e) {
+                                                // Best effort — default to false
+                                        }
+                                }
                                 ctorArgs = new Object[] { loginListenerServer.get(loginListener), ctx.proxiedNetworkManager,
-                                                Boolean.FALSE };
+                                                transferred };
                         } else {
                                 ctorArgs = new Object[] { loginListenerServer.get(loginListener), ctx.proxiedNetworkManager };
                         }
@@ -580,7 +615,17 @@ public class PlayerPostLoginInjector {
                                                                                                         if (comp == null) {
                                                                                                                 comp = new TextComponent("Connection Closed");
                                                                                                         }
-                                                                                                        loginListenerDisconnect.invoke(loginListener, comp.toLegacyText());
+                                                                                                        String legacyText = comp.toLegacyText();
+                                                                                                        // The disconnect method may take String (1.12-1.16) or
+                                                                                                        // net.minecraft.network.chat.Component (1.17+) or
+                                                                                                        // net.kyori.adventure.text.Component (Paper adventure).
+                                                                                                        // Convert the legacy text to the correct parameter type.
+                                                                                                        Object arg = legacyText;
+                                                                                                        Class<?> paramType = loginListenerDisconnect.getParameterTypes()[0];
+                                                                                                        if (paramType != String.class) {
+                                                                                                                arg = convertToComponent(legacyText, paramType);
+                                                                                                        }
+                                                                                                        loginListenerDisconnect.invoke(loginListener, arg);
                                                                                                 }
                                                                                         } catch (ReflectiveOperationException e) {
                                                                                                 throw Util.propagateReflectThrowable(e);
@@ -621,6 +666,52 @@ public class PlayerPostLoginInjector {
                         }
                 }
                 return null;
+        }
+
+        /**
+         * Converts a legacy text string to the appropriate Component type for the
+         * disconnect method's parameter. Supports:
+         * - net.minecraft.network.chat.Component (1.17+ Mojang mappings)
+         * - net.kyori.adventure.text.Component (Paper adventure)
+         *
+         * If conversion fails, returns the original string (which will cause an
+         * IllegalArgumentException — logged but not swallowed, so the operator
+         * can diagnose the mismatch).
+         */
+        private static Object convertToComponent(String legacyText, Class<?> paramType) {
+                String typeName = paramType.getName();
+                try {
+                        // Try net.minecraft.network.chat.Component (1.17+ Mojang)
+                        if (typeName.startsWith("net.minecraft.network.chat.") && typeName.endsWith("Component")) {
+                                // Try Component.literal(text) (1.20+)
+                                try {
+                                        Method literal = paramType.getMethod("literal", String.class);
+                                        return literal.invoke(null, legacyText);
+                                } catch (NoSuchMethodException nsme) {
+                                        // Fall through to try TextComponent constructor
+                                }
+                                // Try new TextComponent(text) (1.17-1.19)
+                                try {
+                                        Class<?> textComponentClass = Class.forName("net.minecraft.network.chat.TextComponent");
+                                        return textComponentClass.getConstructor(String.class).newInstance(legacyText);
+                                } catch (ClassNotFoundException | NoSuchMethodException e) {
+                                        // Fall through
+                                }
+                        }
+                        // Try net.kyori.adventure.text.Component (Paper adventure)
+                        if (typeName.startsWith("net.kyori.adventure.text.")) {
+                                try {
+                                        Class<?> adventureComponent = Class.forName("net.kyori.adventure.text.Component");
+                                        Method text = adventureComponent.getMethod("text", String.class);
+                                        return text.invoke(null, legacyText);
+                                } catch (ClassNotFoundException | NoSuchMethodException e) {
+                                        // Fall through
+                                }
+                        }
+                } catch (Exception e) {
+                        // Conversion failed — return the string, which will fail with a clear error
+                }
+                return legacyText;
         }
 
         private static final String[] KNOWN_PLAY_DISCONNECT_FQNS = new String[] {
