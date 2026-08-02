@@ -1,6 +1,6 @@
 # EaglerXPaper
 
-> Paper 1.21.x port of [EaglerXServer](https://github.com/lax1dude/eaglerxserver) — run Eaglercraft (browser) clients on modern Paper servers.
+> Paper 1.21.x port of [EaglerXServer](https://github.com/lax1dude/eaglerxserver) — run modern Paper servers that can interface with Eaglercraft (browser) clients.
 
 [![Paper](https://img.shields.io/badge/Paper-1.21.x-blue)](https://papermc.io)
 [![Java](https://img.shields.io/badge/Java-25%2B-orange)](https://adoptium.net)
@@ -16,7 +16,7 @@ Based on EaglerXServer **v1.1.1** (includes the LimboAPI compression fix, reduce
 
 | Platform | Version Range | Status |
 |----------|--------------|--------|
-| **Paper** | 1.12.2 – 1.21.11+ | ✅ Fully supported |
+| **Paper** | 1.12.2 – 1.21.11+ | ✅ Fully supported - Needs ViaVersion/ViaBackwards/ViaRewind|
 | **Spigot** | 1.12.2 – 1.21.x | ⚠️ Should work (uses NMS reflection fallback) |
 | **Folia** | Any | ❌ Not supported |
 | **BungeeCord** | 1.21+ | ✅ Use upstream EaglerXServer (already supported) |
@@ -89,7 +89,7 @@ Both features are enabled by default and require no configuration.
 ## Installation
 
 1. Download `EaglerXPaper.jar`
-2. Place in your Paper 1.21.x server's `plugins/` folder
+2. Place in your Paper 1.21.x server's `plugins/` folder along with [ViaVersion](https://hangar.papermc.io/ViaVersion/ViaVersion/versions), [ViaBackwards](https://hangar.papermc.io/ViaVersion/ViaBackwards/versions), and [ViaRewind](https://hangar.papermc.io/ViaVersion/ViaRewind/versions).
 3. Start the server — config files generate in `plugins/EaglercraftXServer/`
 4. OPTIONAL (only needed if you use BungeeCord or Velocity) — Configure your reverse proxy / tunnel. See [the regular EaglerXServer setup guide](https://github.com/lax1dude/eaglerxserver/blob/main/CONFIG.md) for details.
 5. Connect with an Eaglercraft client to `ws://yourserver:25565/` (or `wss://` if using a reverse proxy such as Caddy, Nginx, or EaglerXServer's built-in TLS)
