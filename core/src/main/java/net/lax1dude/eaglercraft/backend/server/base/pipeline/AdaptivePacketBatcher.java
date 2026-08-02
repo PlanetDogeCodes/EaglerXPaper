@@ -252,45 +252,100 @@ public class AdaptivePacketBatcher extends ChannelDuplexHandler {
                 }
             }
 
-            // Check against known timing-critical packet IDs for 1.8 protocol.
-            // These are the IDs after ViaVersion has translated the server's
-            // 1.21 packets down to 1.8 format.
-            // Reference: wiki.vg/Protocol#Play (1.8 clientbound)
-            // IMPORTANT: These are the CORRECT 1.8 clientbound play packet IDs.
+            // Check against known timing-critical packet IDs for ALL supported
+            // Eaglercraft client protocols. Since we don't know which protocol
+            // the client uses at this point, we check IDs from ALL versions.
+            // False positives (flushing when we didn't need to) are harmless —
+            // they just slightly reduce the batching benefit.
+            //
+            // 1.8 IDs (EaglercraftX 1.8, Rewind 1.5.2 base):
+            //   Spawn Object=0x0E, Spawn Mob=0x0F, Spawn Player=0x0C, Spawn Global=0x11
+            //   Entity Velocity=0x23, Entity Teleport=0x21, Entity Status=0x1A
+            //   Entity Metadata=0x29, Destroy Entities=0x1D, Entity Effect=0x2A
+            //   Remove Entity Effect=0x2B, Entity Properties=0x22
+            //   Update Health=0x06, Combat Event=0x2E, Animation=0x0B
+            //   Particle=0x1B, Entity Relative Move=0x14, Entity Look+Move=0x15
+            //   Entity Look=0x17, Player Info=0x38, Camera=0x39, Statistics=0x37
+            //
+            // 1.7 IDs (legacy Eaglercraft 1.7 clients):
+            //   Spawn Object=0x17, Spawn Mob=0x18, Spawn Global=0x1A
+            //   Entity Velocity=0x1C, Entity Teleport=0x22, Entity Status=0x25
+            //   Entity Metadata=0x28, Destroy Entities=0x1D, Entity Effect=0x1E
+            //   Remove Entity Effect=0x1F, Entity Properties=0x20
+            //   Update Health=0x06, Animation=0x0B (same as 1.8!)
+            //   Particle=0x2A, Entity Relative Move=0x14 (same), Entity Look+Move=0x15 (same)
+            //   Entity Look=0x16, Player Info=0x38, Camera=0x39, Statistics=0x37
+            //
+            // 1.12.2 IDs (Eaglercraft 1.12.2 clients):
+            //   Spawn Object=0x00, Spawn Mob=0x03, Spawn Player=0x05, Spawn Global=0x02
+            //   Entity Velocity=0x41, Entity Teleport=0x4C, Entity Status=0x1B
+            //   Entity Metadata=0x3C, Destroy Entities=0x31, Entity Effect=0x3B
+            //   Remove Entity Effect=0x3A, Entity Properties=0x3D
+            //   Update Health=0x38, Combat Event=0x2C (same as 1.8!), Animation=0x05
+            //   Particle=0x22, Entity Relative Move=0x26, Entity Look+Move=0x27
+            //   Entity Look=0x28, Player Info=0x2E, Camera=0x2F, Statistics=0x07
             switch (packetId) {
-                // Entity spawning (wind charges, projectiles, etc.)
-                case 0x0E: // Spawn Object
-                case 0x0F: // Spawn Mob
-                case 0x0C: // Spawn Player
-                case 0x11: // Spawn Global Entity (lightning)
-
+                // === 1.8 protocol IDs ===
+                // Entity spawning
+                case 0x0E: // Spawn Object (1.8)
+                case 0x0F: // Spawn Mob (1.8)
+                case 0x0C: // Spawn Player (1.8)
+                case 0x11: // Spawn Global Entity (1.8)
                 // Combat and damage
-                case 0x2E: // Combat Event (end combat, entity attacked, player killed)
-                case 0x06: // Update Health (damage taken, regen)
-                case 0x0B: // Animation (swing, damage)
-
-                // Entity movement/velocity (mace knockback, wind charge push)
-                case 0x23: // Entity Velocity
-                case 0x14: // Entity Relative Move
-                case 0x15: // Entity Look and Relative Move
-                case 0x17: // Entity Look
-                case 0x21: // Entity Teleport
-
+                case 0x2E: // Combat Event (1.8)
+                case 0x06: // Update Health (1.8, 1.7)
+                case 0x0B: // Animation (1.8, 1.7)
+                // Entity movement/velocity
+                case 0x23: // Entity Velocity (1.8)
+                case 0x14: // Entity Relative Move (1.8, 1.7)
+                case 0x15: // Entity Look and Relative Move (1.8, 1.7)
+                case 0x17: // Entity Look (1.8) / Spawn Object (1.7)
+                case 0x21: // Entity Teleport (1.8)
                 // Entity state changes
-                case 0x1A: // Entity Status (mace smash, wind charge burst)
-                case 0x29: // Entity Metadata
-                case 0x1D: // Destroy Entities (projectile hit, item despawn)
-                case 0x2A: // Entity Effect (potion applied)
-                case 0x2B: // Remove Entity Effect
-                case 0x22: // Entity Properties (attack damage, armor)
-
-                // Particles (hit effects, wind charge particles)
-                case 0x1B: // Particle (1.8 particle packet)
-
+                case 0x1A: // Entity Status (1.8)
+                case 0x29: // Entity Metadata (1.8)
+                case 0x1D: // Destroy Entities (1.8, 1.7)
+                case 0x2A: // Entity Effect (1.8) / Particle (1.7)
+                case 0x2B: // Remove Entity Effect (1.8)
+                case 0x22: // Entity Properties (1.8) / Entity Teleport (1.7)
+                // Particles
+                case 0x1B: // Particle (1.8)
                 // Player state
-                case 0x38: // Player Info (player join/leave/gamemode change)
-                case 0x39: // Camera (spectator)
-                case 0x37: // Statistics
+                case 0x38: // Player Info (1.8, 1.7)
+                case 0x39: // Camera (1.8, 1.7)
+                case 0x37: // Statistics (1.8, 1.7)
+
+                // === 1.7 protocol IDs (additional, not overlapping with 1.8) ===
+                case 0x18: // Spawn Mob (1.7)
+                case 0x1C: // Entity Velocity (1.7)
+                case 0x25: // Entity Status (1.7)
+                case 0x28: // Entity Metadata (1.7)
+                case 0x1E: // Entity Effect (1.7)
+                case 0x1F: // Remove Entity Effect (1.7)
+                case 0x20: // Entity Properties (1.7)
+                case 0x16: // Entity Look (1.7)
+
+                // === 1.12.2 protocol IDs (additional, not already covered above) ===
+                case 0x00: // Spawn Object (1.12)
+                case 0x03: // Spawn Mob (1.12)
+                case 0x02: // Spawn Global Entity (1.12)
+                case 0x41: // Entity Velocity (1.12)
+                case 0x4C: // Entity Teleport (1.12)
+                // 0x1B already covered (Particle 1.8 / Entity Status 1.12)
+                case 0x3C: // Entity Metadata (1.12)
+                case 0x31: // Destroy Entities (1.12)
+                case 0x3B: // Entity Effect (1.12)
+                case 0x3A: // Remove Entity Effect (1.12)
+                case 0x3D: // Entity Properties (1.12)
+                // 0x38 already covered (Player Info 1.8 / Update Health 1.12)
+                case 0x2C: // Combat Event (1.12)
+                // 0x05 already covered (Spawn Player 1.8 / Animation 1.12)
+                case 0x26: // Entity Relative Move (1.12)
+                case 0x27: // Entity Look and Relative Move (1.12)
+                // 0x28 already covered (Entity Metadata 1.7 / Entity Look 1.12)
+                // 0x2E already covered (Combat Event 1.8 / Player Info 1.12)
+                case 0x2F: // Camera (1.12)
+                case 0x07: // Statistics (1.12)
 
                     return true;
                 default:
