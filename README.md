@@ -60,17 +60,6 @@ where `NmsNames.PLAYER_CONNECTION = Set.of("ServerGamePacketListenerImpl", "Play
 | Packet class renames (`PacketLoginOutSuccess` → `ClientboundGameProfilePacket`, etc.) | 1.17 | Packet-name string comparisons failed | All packet names now go through `NmsNames` candidate sets |
 | `send(Packet, ChannelFutureListener)` — subinterface | 1.21 | `params[1].equals(GenericFutureListener.class)` failed | Switched to `isAssignableFrom` |
 
-### Defensive hardening
-
-Beyond the version compatibility fixes, all six feature areas (skins, voice, WebView, MOTD, auth, IP forwarding) received a defensive hardening pass:
-
-- **Null-safe image loading** — `ImageIO.read()` returns null for corrupt/invalid images; all callers now null-check before use
-- **GameProfile property synchronization** — `PropertyInjector` and the login marker insert/remove now synchronize on the GameProfile to prevent `ConcurrentModificationException` when other plugins iterate properties concurrently
-- **Null-guarded auth events** — Auth event handlers that return `ALLOW` without setting a UUID no longer NPE; the offline-mode UUID is preserved as a fallback
-- **Null-guarded voice/WebView** — ICE servers, voice handlers, and WebView chunk schedulers all have null/bounds checks with graceful degradation
-- **Error-tolerant HTTP inbound** — The HTTP initial handler now logs via the plugin logger, always closes the channel on error, and handles missing pipeline data gracefully
-- **Reflection-failure-tolerant IP forwarding** — `updateRealAddress` is wrapped in try/catch so a reflection failure degrades gracefully instead of crashing the channel initializer
-
 ### What was NOT changed
 
 - **Config structure** — identical to upstream EaglerXServer. Existing `plugins/EaglercraftXServer/` configs work without migration.
@@ -83,15 +72,15 @@ Beyond the version compatibility fixes, all six feature areas (skins, voice, Web
 1. Download `EaglerXPaper.jar`
 2. Place in your Paper 1.21.x server's `plugins/` folder
 3. Start the server — config files generate in `plugins/EaglercraftXServer/`
-4. Configure your reverse proxy / tunnel (see [SETUP-GUIDE](https://github.com/lax1dude/eaglerxserver/blob/main/CONFIG.md) for details)
-5. Connect with an Eaglercraft client to `ws://yourserver:25565/` (or `wss://` if using a TLS-terminating reverse proxy)
+4. Configure your reverse proxy / tunnel (NOT NEEDED FOR MOST SERVER HOSTS) (see [SETUP-GUIDE](https://github.com/lax1dude/eaglerxserver/blob/main/CONFIG.md) for details)
+5. Connect with an Eaglercraft client to `ws://yourserver:25565/` (or `wss://` if using a reverse proxy)
 
 **Dual-stack mode** is enabled by default — EaglerXPaper shares the main server port (25565) and auto-detects whether each connection is vanilla Minecraft TCP or an Eaglercraft WebSocket.
 
 ## Building from source
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/eaglerpaper.git
+git clone https://github.com/PlanetDogeCodes/eaglerxpaper.git
 cd eaglerpaper
 ./gradlew :core:shadowJarBukkit
 # Output: core/build/libs/EaglerXPaper.jar
@@ -140,8 +129,6 @@ EaglerXPaper injects into Paper's Netty channel pipeline via Paper's `ChannelIni
 | `core/core-platform-bukkit/.../bukkit/PlatformPluginBukkit.java` | Try/catch around `updateRealAddress` |
 | `core/build.gradle` | JAR renamed to `EaglerXPaper.jar` |
 | `core/core-platform-bukkit/build.gradle` | Added `api-version: '1.21'` merge task |
-
-**Total:** 14 source files modified + 1 new file + 2 build files modified. No other modules (BungeeCord, Velocity, EaglerXRewind, EaglerWeb, etc.) were touched.
 
 ## Addon compatibility
 
