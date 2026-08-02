@@ -166,10 +166,9 @@ public class PlatformPluginBukkit extends JavaPlugin implements IPlatform<Player
                 cacheConsoleCommandSenderInstance = server.getConsoleSender();
                 cacheConsoleCommandSenderHandle = new BukkitConsole(cacheConsoleCommandSenderInstance);
                 enableNativeTransport = Epoll.isAvailable() && BukkitUnsafe.isEnableNativeTransport(server);
-                eventLoopGroup = BukkitUnsafe.getEventLoopGroup(server, enableNativeTransport);
-                // Check if we created the EventLoopGroup ourselves (vs borrowing the server's).
-                // We do this by checking if any of its threads have our naming prefix.
-                ownsEventLoopGroup = isOwnEventLoopGroup(eventLoopGroup);
+                BukkitUnsafe.EventLoopGroupResult elgResult = BukkitUnsafe.getEventLoopGroupWithOwnership(server, enableNativeTransport);
+                eventLoopGroup = elgResult.group;
+                ownsEventLoopGroup = elgResult.owns;
                 postLoginInjector = new PlayerPostLoginInjector(this);
                 if (enableNativeTransport && !(eventLoopGroup instanceof EpollEventLoopGroup)) {
                         enableNativeTransport = false;
@@ -439,42 +438,11 @@ public class PlatformPluginBukkit extends JavaPlugin implements IPlatform<Player
                         try {
                                 eventLoopGroup.shutdownGracefully(0, 5, java.util.concurrent.TimeUnit.SECONDS);
                         } catch (Exception e) {
-                                // Best effort
+                                // Best effort — don't crash on disable
                         }
                         eventLoopGroup = null;
                         ownsEventLoopGroup = false;
                 }
-        }
-
-        /**
-         * Checks if an EventLoopGroup was created by EaglerXPaper (vs borrowed from the server).
-         * We check if any of its threads have our naming prefix.
-         */
-        private static boolean isOwnEventLoopGroup(EventLoopGroup group) {
-                if (group == null) return false;
-                try {
-                        // Our createOwnEventLoopGroup uses "Netty Server IO" as the thread name prefix.
-                        // Check if the group contains threads with that prefix.
-                        java.util.Set<io.netty.util.concurrent.EventExecutor> executors = new java.util.HashSet<>();
-                        group.forEach(executors::add);
-                        for (io.netty.util.concurrent.EventExecutor exec : executors) {
-                                if (exec instanceof java.util.concurrent.ExecutorService) {
-                                        // Can't easily enumerate threads, so check the class name
-                                        // Our created groups are EpollEventLoopGroup or NioEventLoopGroup
-                                        // instantiated directly by us (not the server's).
-                                        // The server's groups are also these classes, so this check
-                                        // is imperfect. Fall back to checking thread name.
-                                }
-                        }
-                        // Best-effort: check if the group's toString contains our prefix
-                        String str = group.toString();
-                        if (str != null && str.contains("Netty Server IO")) {
-                                return true;
-                        }
-                } catch (Exception e) {
-                        // Best effort
-                }
-                return false;
         }
 
         @Override

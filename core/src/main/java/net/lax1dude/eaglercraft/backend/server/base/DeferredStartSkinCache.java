@@ -42,6 +42,11 @@ class DeferredStartSkinCache implements ISkinCacheService {
                                         consumer.accept(service);
                                 }
                         }
+                } else {
+                        // Clear deferred tasks on shutdown to prevent leak
+                        synchronized (deferredTasks) {
+                                deferredTasks.clear();
+                        }
                 }
         }
 
@@ -51,10 +56,17 @@ class DeferredStartSkinCache implements ISkinCacheService {
                 if (svc != null) {
                         svc.resolveSkinByURL(skinURL, callback);
                 } else {
+                        // Re-check inside the synchronized block to avoid the check-then-act race:
+                        // Thread A reads service=null, Thread B sets service+drains, Thread A adds to list.
                         synchronized (deferredTasks) {
-                                deferredTasks.add((svc2) -> {
+                                ISkinCacheService svc2 = service;
+                                if (svc2 != null) {
                                         svc2.resolveSkinByURL(skinURL, callback);
-                                });
+                                } else {
+                                        deferredTasks.add((s) -> {
+                                                s.resolveSkinByURL(skinURL, callback);
+                                        });
+                                }
                         }
                 }
         }
@@ -66,9 +78,14 @@ class DeferredStartSkinCache implements ISkinCacheService {
                         svc.resolveCapeByURL(capeURL, callback);
                 } else {
                         synchronized (deferredTasks) {
-                                deferredTasks.add((svc2) -> {
+                                ISkinCacheService svc2 = service;
+                                if (svc2 != null) {
                                         svc2.resolveCapeByURL(capeURL, callback);
-                                });
+                                } else {
+                                        deferredTasks.add((s) -> {
+                                                s.resolveCapeByURL(capeURL, callback);
+                                        });
+                                }
                         }
                 }
         }

@@ -72,14 +72,15 @@ skin_cache_prewarm:
 
 ### Adaptive Packet Batching
 
-EaglerXPaper automatically batches outbound packets for Eaglercraft connections that are sending many packets rapidly (e.g. during chunk loading or heavy entity updates). This reduces the number of WebSocket frames sent, which cuts bandwidth usage and per-frame overhead — especially helpful for mobile/slow connections.
+EaglerXPaper automatically batches outbound packets for Eaglercraft connections that are sending many packets rapidly (e.g. during chunk loading or heavy entity updates). This reduces the number of TCP flushes, which cuts per-frame overhead — especially helpful for mobile/slow connections.
 
 The batcher is self-adaptive:
 - **Idle connections** (few packets per second) — packets pass through immediately with zero added latency
-- **Burst connections** (20+ packets in 100ms) — packets are buffered for up to 20ms and flushed as a batch
-- **Sustained bursts** — forced flush every 200ms to cap latency
+- **Burst connections** (20+ packets in 100ms) — packets are buffered for up to 2ms and flushed as a batch
+- **Sustained bursts** — forced flush every 50ms to cap latency
+- **Timing-critical packets** (combat, entity velocity, health updates, particles, etc.) — detected by reading the 1.8 protocol packet ID and flushed immediately with zero delay. This ensures mace smash attacks, wind charges, and other combat mechanics work without latency.
 
-It sits between the frame codec and the handshake handler in the Netty pipeline, so it batches raw ByteBufs before they get wrapped into WebSocket frames. This is what actually reduces frame count and saves bandwidth.
+It sits after the frame codec in the Netty pipeline, so it sees raw ByteBufs and can identify packet types. It also caps the buffer at 256KB to prevent memory pressure from large chunk data packets.
 
 **Config** (`settings.yml`):
 ```yaml

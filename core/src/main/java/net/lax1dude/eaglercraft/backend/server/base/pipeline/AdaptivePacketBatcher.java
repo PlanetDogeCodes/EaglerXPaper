@@ -70,6 +70,10 @@ public class AdaptivePacketBatcher extends ChannelDuplexHandler {
     private final List<ChannelPromise> promises = new ArrayList<>();
     private ScheduledFuture<?> flushTask = null;
 
+    // Track total buffered bytes to prevent OOM from large packets
+    private int bufferedBytes = 0;
+    private static final int MAX_BUFFERED_BYTES = 256 * 1024; // 256KB
+
     /**
      * Creates a batcher with the specified configuration.
      */
@@ -166,9 +170,12 @@ public class AdaptivePacketBatcher extends ChannelDuplexHandler {
             // Buffer this packet
             buffer.add(buf);
             promises.add(promise);
+            bufferedBytes += buf.readableBytes();
 
             // Check if we need to force a flush
-            if (buffer.size() >= maxBufferSize || (now - batchingStartedMs) >= maxBurstDurationMs) {
+            if (buffer.size() >= maxBufferSize
+                    || bufferedBytes >= MAX_BUFFERED_BYTES
+                    || (now - batchingStartedMs) >= maxBurstDurationMs) {
                 cancelFlushTask();
                 flushBuffer(ctx, false);
                 // Stay in batching mode — reschedule flush for next batch
@@ -248,43 +255,42 @@ public class AdaptivePacketBatcher extends ChannelDuplexHandler {
             // Check against known timing-critical packet IDs for 1.8 protocol.
             // These are the IDs after ViaVersion has translated the server's
             // 1.21 packets down to 1.8 format.
+            // Reference: wiki.vg/Protocol#Play (1.8 clientbound)
+            // IMPORTANT: These are the CORRECT 1.8 clientbound play packet IDs.
             switch (packetId) {
-                // Entity spawning/updates (wind charges, projectiles, etc.)
-                case 0x00: // Spawn Object
-                case 0x02: // Spawn Global Entity
+                // Entity spawning (wind charges, projectiles, etc.)
+                case 0x0E: // Spawn Object
                 case 0x0F: // Spawn Mob
                 case 0x0C: // Spawn Player
+                case 0x11: // Spawn Global Entity (lightning)
 
                 // Combat and damage
-                case 0x2C: // Combat Event (end combat, entity attacked, player killed)
-                case 0x42: // Update Health (damage taken, regen)
-                case 0x2A: // Entity Properties (attack damage, armor)
+                case 0x2E: // Combat Event (end combat, entity attacked, player killed)
+                case 0x06: // Update Health (damage taken, regen)
+                case 0x0B: // Animation (swing, damage)
 
                 // Entity movement/velocity (mace knockback, wind charge push)
-                case 0x12: // Entity Velocity
+                case 0x23: // Entity Velocity
                 case 0x14: // Entity Relative Move
                 case 0x15: // Entity Look and Relative Move
                 case 0x17: // Entity Look
-                case 0x22: // Entity Teleport
+                case 0x21: // Entity Teleport
 
                 // Entity state changes
                 case 0x1A: // Entity Status (mace smash, wind charge burst)
-                case 0x1C: // Entity Metadata
-                case 0x4A: // Destroy Entities (projectile hit, item despawn)
-                case 0x4B: // Remove Entity Effect
-                case 0x4D: // Entity Effect (potion applied)
-
-                // Player state
-                case 0x43: // Set Experience
-                case 0x44: // Update Attributes
-                case 0x37: // Statistics
-                case 0x39: // Camera
+                case 0x29: // Entity Metadata
+                case 0x1D: // Destroy Entities (projectile hit, item despawn)
+                case 0x2A: // Entity Effect (potion applied)
+                case 0x2B: // Remove Entity Effect
+                case 0x22: // Entity Properties (attack damage, armor)
 
                 // Particles (hit effects, wind charge particles)
-                case 0x4E: // Particle (note: 0x2A is also particles in some versions, but we use 0x4E for 1.8)
+                case 0x1B: // Particle (1.8 particle packet)
 
-                // Animation
-                case 0x0B: // Animation (swing, damage animation)
+                // Player state
+                case 0x38: // Player Info (player join/leave/gamemode change)
+                case 0x39: // Camera (spectator)
+                case 0x37: // Statistics
 
                     return true;
                 default:
@@ -312,6 +318,10 @@ public class AdaptivePacketBatcher extends ChannelDuplexHandler {
             bytes++;
             index++;
             if ((b & 0x80) == 0) {
+                // Validate 5th byte doesn't overflow (only lower 4 bits allowed)
+                if (bytes == 5 && (b & 0xF0) != 0) {
+                    return -1; // invalid VarInt
+                }
                 return result;
             }
         }
@@ -374,20 +384,34 @@ public class AdaptivePacketBatcher extends ChannelDuplexHandler {
             }
             buffer.clear();
             promises.clear();
+            bufferedBytes = 0;
             return;
         }
 
         // Write all buffered packets, then flush once.
         // try/finally ensures buffer/promises are cleared even if write throws.
+        // If a write fails mid-loop, remaining ByteBufs are released and
+        // remaining promises are failed — no leaks, no hung promises.
+        int i = 0;
+        int size = buffer.size();
         try {
-            int size = buffer.size();
-            for (int i = 0; i < size; i++) {
+            for (; i < size; i++) {
                 ctx.write(buffer.get(i), promises.get(i));
             }
             ctx.flush();
         } finally {
+            // Release and fail any packets that weren't written (if ctx.write threw mid-loop)
+            for (int j = i; j < size; j++) {
+                ReferenceCountUtil.release(buffer.get(j));
+                try {
+                    promises.get(j).tryFailure(new java.nio.channels.ClosedChannelException());
+                } catch (Exception e) {
+                    // ignore
+                }
+            }
             buffer.clear();
             promises.clear();
+            bufferedBytes = 0;
         }
     }
 

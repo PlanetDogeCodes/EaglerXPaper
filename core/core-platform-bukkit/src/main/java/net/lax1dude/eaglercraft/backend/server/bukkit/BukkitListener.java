@@ -82,6 +82,8 @@ class BukkitListener implements Listener {
                                         evt.setCancelled(true);
                                         evt.completeIntent(plugin);
                                 } catch (IllegalStateException exx) {
+                                        plugin.getLogger().warning("Failed to complete login intent for "
+                                                        + player.getName() + ": " + ex.getMessage());
                                         return;
                                 }
                                 if (ex instanceof RuntimeException exx)
@@ -113,7 +115,11 @@ class BukkitListener implements Listener {
 
         @EventHandler(priority = EventPriority.MONITOR)
         public void onQuitEvent(PlayerQuitEvent evt) {
-                plugin.dropPlayer(evt.getPlayer());
+                try {
+                        plugin.dropPlayer(evt.getPlayer());
+                } catch (Exception e) {
+                        // Don't let dropPlayer failure break the quit event
+                }
                 // Clean up any orphaned eaglerMarker properties from the player's GameProfile.
                 // These are inserted by PlayerPostLoginInjector.handleLoginEvent and are
                 // normally removed when PacketLoginOutSuccess is sent. But if login fails

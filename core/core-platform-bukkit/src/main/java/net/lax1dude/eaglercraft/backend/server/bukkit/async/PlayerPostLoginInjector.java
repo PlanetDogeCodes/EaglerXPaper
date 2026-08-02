@@ -624,6 +624,12 @@ public class PlayerPostLoginInjector {
                                                                                                         Class<?> paramType = loginListenerDisconnect.getParameterTypes()[0];
                                                                                                         if (paramType != String.class) {
                                                                                                                 arg = convertToComponent(legacyText, paramType);
+                                                                                                                if (arg == null) {
+                                                                                                                        // Conversion failed — close the channel directly
+                                                                                                                        // instead of crashing the disconnect invocation.
+                                                                                                                        ctx.channel.close();
+                                                                                                                        return;
+                                                                                                                }
                                                                                                         }
                                                                                                         loginListenerDisconnect.invoke(loginListener, arg);
                                                                                                 }
@@ -672,11 +678,12 @@ public class PlayerPostLoginInjector {
          * Converts a legacy text string to the appropriate Component type for the
          * disconnect method's parameter. Supports:
          * - net.minecraft.network.chat.Component (1.17+ Mojang mappings)
+         * - net.minecraft.server.v1_12_R1.IChatBaseComponent (1.12-1.16 CraftBukkit mappings)
          * - net.kyori.adventure.text.Component (Paper adventure)
          *
-         * If conversion fails, returns the original string (which will cause an
-         * IllegalArgumentException — logged but not swallowed, so the operator
-         * can diagnose the mismatch).
+         * If conversion fails, returns null. The caller should close the channel
+         * directly as a fallback — this prevents an IllegalArgumentException from
+         * crashing the disconnect invocation and leaving the player in limbo.
          */
         private static Object convertToComponent(String legacyText, Class<?> paramType) {
                 String typeName = paramType.getName();
@@ -698,6 +705,27 @@ public class PlayerPostLoginInjector {
                                         // Fall through
                                 }
                         }
+                        // Try net.minecraft.server.v1_XX_R1.IChatBaseComponent (1.12-1.16 CraftBukkit)
+                        if (typeName.contains("IChatBaseComponent")) {
+                                // Try ChatComponentText constructor (1.12-1.16)
+                                String pkg = typeName.substring(0, typeName.lastIndexOf('.') + 1);
+                                try {
+                                        Class<?> chatComponentText = Class.forName(pkg + "ChatComponentText");
+                                        return chatComponentText.getConstructor(String.class).newInstance(legacyText);
+                                } catch (ClassNotFoundException | NoSuchMethodException e) {
+                                        // Fall through to try ChatSerializer
+                                }
+                                // Try ChatSerializer.a(String) — the legacy JSON-to-component method
+                                try {
+                                        Class<?> chatSerializer = Class.forName(pkg + "ChatSerializer");
+                                        Method a = chatSerializer.getMethod("a", String.class);
+                                        // Wrap in JSON text component
+                                        String json = "{\"text\":\"" + legacyText.replace("\\", "\\\\").replace("\"", "\\\"") + "\"}";
+                                        return a.invoke(null, json);
+                                } catch (ClassNotFoundException | NoSuchMethodException e) {
+                                        // Fall through
+                                }
+                        }
                         // Try net.kyori.adventure.text.Component (Paper adventure)
                         if (typeName.startsWith("net.kyori.adventure.text.")) {
                                 try {
@@ -709,9 +737,9 @@ public class PlayerPostLoginInjector {
                                 }
                         }
                 } catch (Exception e) {
-                        // Conversion failed — return the string, which will fail with a clear error
+                        // Conversion failed — return null so caller closes the channel
                 }
-                return legacyText;
+                return null;
         }
 
         private static final String[] KNOWN_PLAY_DISCONNECT_FQNS = new String[] {
@@ -777,6 +805,10 @@ public class PlayerPostLoginInjector {
                         packetPlayDisconnectCtor = ctor;
                         PACKETPLAYDISCONNECT_HANDLE.setRelease(this, clz);
                 } catch (ReflectiveOperationException ex) {
+                        // Log the failure so operators can diagnose disconnect issues.
+                        // When this fails, play-state disconnect packets are silently dropped,
+                        // which can leave players in limbo.
+                        plugin.getLogger().warning("[EaglerXPaper] Could not bind play disconnect packet class: " + ex.getMessage());
                         PACKETPLAYDISCONNECT_HANDLE.setRelease(this, void.class);
                 }
         }
