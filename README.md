@@ -10,7 +10,10 @@ EaglerXPaper is a fork of lax1dude's EaglerXServer that extends Bukkit/Spigot/Pa
 
 **This is largely the same project as EaglerXServer** — it only changes a few minor things to ensure 1.17+ compatibility, plus adds a couple of small features. All credit for the actual plugin goes to lax1dude.
 
-Based on EaglerXServer **v1.1.1** (includes the LimboAPI compression fix, reduced default WebSocket frame size, empty ByteBuf handshake fix, and RateLimiterLocking ternary fix from upstream).
+Based on EaglerXServer (includes the LimboAPI compression fix, reduced default WebSocket frame size, empty ByteBuf handshake fix, and RateLimiterLocking ternary fix from upstream).
+
+> [!NOTE]
+> This plugin requires [ViaVersion](https://hangar.papermc.io/ViaVersion/ViaVersion/versions), [ViaBackwards](https://hangar.papermc.io/ViaVersion/ViaBackwards/versions), and [ViaRewind](https://hangar.papermc.io/ViaVersion/ViaRewind/versions) to function properly. Please double-check that you have those installed before opening an issue.
 
 ## Compatibility
 
