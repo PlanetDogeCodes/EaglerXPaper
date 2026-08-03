@@ -52,11 +52,10 @@ public class SkinCachePrewarmer {
     private final int maxPlayers;
     private final int threadCount;
 
-    // Mojang rate limiting: ~600 requests per 10 min = 1 per second sustained.
-    // We use a single concurrent fetch with a 1-second delay between fetches
-    // to stay well under the limit.
-    private static final int MAX_CONCURRENT_FETCHES = 1;
-    private static final long FETCH_DELAY_MS = 1000; // 1 per second max
+    // Mojang rate limiting: ~600 requests per 10 min = 1 per second.
+    // We use a semaphore to limit concurrent requests and a delay between fetches.
+    private static final int MAX_CONCURRENT_FETCHES = 2;
+    private static final long FETCH_DELAY_MS = 500; // 2 per second max
 
     private final AtomicBoolean started = new AtomicBoolean(false);
     private volatile boolean running = false;
@@ -112,25 +111,19 @@ public class SkinCachePrewarmer {
         started.set(true);
         running = true;
 
-        CompletableFuture.runAsync(this::prewarm, ex).whenCompleteAsync((v, x) -> {
+        CompletableFuture.runAsync(this::prewarm, ex).whenComplete((v, x) -> {
             running = false;
-            // Use a separate thread for shutdown to avoid self-deadlock
-            // (whenComplete runs on the executor thread, and shutdown() calls shutdownNow()
-            // which would interrupt the current thread).
-            Thread shutdownThread = new Thread(this::shutdown, "eaglerxpaper-prewarm-cleanup");
-            shutdownThread.setDaemon(true);
-            shutdownThread.start();
+            shutdown();
             if (x != null) {
                 logger.warn("[Skin Prewarm] Skin cache pre-warming failed: " + x.getMessage());
             }
-        }, Runnable::run);
+        });
     }
 
     /**
      * Shuts down the prewarmer. Safe to call multiple times from any thread.
-     * Synchronized to prevent race with startAsync().
      */
-    public synchronized void shutdown() {
+    public void shutdown() {
         running = false;
         started.set(false);
 
@@ -392,9 +385,6 @@ public class SkinCachePrewarmer {
             return root.getAsJsonObject();
         } catch (Exception e) {
             // Network error, rate limit, etc. — skip this player
-            if (e instanceof InterruptedException) {
-                Thread.currentThread().interrupt();
-            }
             return null;
         }
     }

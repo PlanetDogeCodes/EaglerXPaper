@@ -90,6 +90,38 @@ adaptive_packet_batching:
 
 Both features are enabled by default and require no configuration.
 
+### Diagnostic Commands
+
+EaglerXPaper adds two commands to help operators manage and debug their server:
+
+**`/eaglerdiagnose`** (alias: `/eaglerdiag`) — runs a full health check and prints:
+- Plugin version and platform
+- TLS status (enabled/disabled)
+- IP forwarding status
+- Dual-stack mode
+- WebSocket frame size limit
+- Allowed Minecraft protocol range
+- Skin prewarming and adaptive batching status
+- ViaVersion/ViaBackwards/ViaRewind installation status
+- Number of Eaglercraft players online
+
+Requires permission: `eaglercraft.command.diagnose`
+
+**`/eaglerclients`** (alias: `/eaglerclientlist`) — shows a live table of all connected Eaglercraft players:
+- Player name
+- Client brand (EaglercraftX, Resent, etc.)
+- Minecraft version (1.8, 1.7, 1.12.2, etc.)
+- Eaglercraft protocol version (v3/v4/v5, with 1.5.2 indicator for Rewind players)
+- Real IP address (if IP forwarding is enabled)
+
+Requires permission: `eaglercraft.command.clients`
+
+### ViaVersion Auto-Detection
+
+On server startup, EaglerXPaper automatically checks if ViaVersion, ViaBackwards, and ViaRewind are installed. If ViaVersion is missing, it prints a prominent warning in the console explaining that Eaglercraft clients won't be able to join. If ViaBackwards or ViaRewind are missing, it prints a recommendation to install them.
+
+This check runs after all plugins have loaded (via `softdepend`), so it won't produce false warnings about plugins that are actually installed.
+
 ## Installation
 
 1. Download `EaglerXPaper.jar`
@@ -156,6 +188,10 @@ EaglerXPaper injects into Paper's Netty channel pipeline via Paper's `ChannelIni
 | `core/src/main/java/.../base/pipeline/WebSocketInitialHandler.java` | Insert `AdaptivePacketBatcher` into pipeline |
 | `core/src/main/java/.../base/config/EaglerXPaperConfig.java` | **NEW** — config holder for EaglerXPaper features |
 | `core/src/main/java/.../base/config/EaglerConfigLoader.java` | Added `skin_cache_prewarm` and `adaptive_packet_batching` config sections |
+| `core/src/main/java/.../base/command/CommandDiagnose.java` | **NEW** — `/eaglerdiagnose` health check command |
+| `core/src/main/java/.../base/command/CommandClients.java` | **NEW** — `/eaglerclients` player dashboard command |
+| `core/src/main/java/.../base/command/ViaVersionDetector.java` | **NEW** — ViaVersion detection holder |
+| `core/core-platform-bukkit/.../bukkit/PlatformPluginBukkit.java` | Try/catch `updateRealAddress`; EventLoopGroup ownership; ViaVersion detection; softdepend for Via* |
 | `core/src/main/java/.../base/DeferredStartSkinCache.java` | Made `service` field volatile for thread safety |
 | `core/core-platform-bukkit/.../bukkit/PlatformPluginBukkit.java` | Try/catch around `updateRealAddress`; EventLoopGroup ownership tracking + shutdown |
 | `core/build.gradle` | JAR renamed to `EaglerXPaper.jar` |

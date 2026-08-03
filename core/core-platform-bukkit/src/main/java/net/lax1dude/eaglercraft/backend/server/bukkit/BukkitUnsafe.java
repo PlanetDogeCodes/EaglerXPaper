@@ -647,31 +647,15 @@ public class BukkitUnsafe {
                 return true;
         }
 
-        /**
-         * Result holder for getEventLoopGroup that tracks whether we created the group
-         * (and thus need to shut it down on disable) or borrowed it from the server.
-         */
-        public static class EventLoopGroupResult {
-                public final EventLoopGroup group;
-                public final boolean owns;
-                public EventLoopGroupResult(EventLoopGroup group, boolean owns) {
-                        this.group = group;
-                        this.owns = owns;
-                }
-        }
-
-        /**
-         * Gets the server's EventLoopGroup if possible, or creates a new one.
-         * Returns a result holder that tracks ownership.
-         */
-        public static EventLoopGroupResult getEventLoopGroupWithOwnership(Server server, boolean enableNativeTransport) {
+        public static EventLoopGroup getEventLoopGroup(Server server, boolean enableNativeTransport) {
                 Object minecraftServer;
                 try {
                         Object dedicatedPlayerList = server.getClass().getMethod("getHandle").invoke(server);
                         minecraftServer = dedicatedPlayerList.getClass().getMethod("getServer").invoke(dedicatedPlayerList);
                 } catch (ReflectiveOperationException e) {
-                        return new EventLoopGroupResult(createOwnEventLoopGroup(enableNativeTransport), true);
+                        return createOwnEventLoopGroup(enableNativeTransport);
                 }
+                // getConnection() is the modern (1.17+) name; getServerConnection() is legacy (1.12-1.16)
                 Method serverConnMethod;
                 try {
                         serverConnMethod = minecraftServer.getClass().getMethod("getConnection");
@@ -679,63 +663,31 @@ public class BukkitUnsafe {
                         try {
                                 serverConnMethod = minecraftServer.getClass().getMethod("getServerConnection");
                         } catch (NoSuchMethodException e2) {
-                                return new EventLoopGroupResult(createOwnEventLoopGroup(enableNativeTransport), true);
+                                return createOwnEventLoopGroup(enableNativeTransport);
                         }
                 }
                 Class<?> serverConnection = serverConnMethod.getReturnType();
                 EventLoopGroup result = getEventLoopGroup(serverConnection, enableNativeTransport);
                 if (result != null) {
-                        return new EventLoopGroupResult(result, false); // borrowed from server
+                        return result;
                 }
-                return new EventLoopGroupResult(createOwnEventLoopGroup(enableNativeTransport), true);
-        }
-
-        public static EventLoopGroup getEventLoopGroup(Server server, boolean enableNativeTransport) {
-                return getEventLoopGroupWithOwnership(server, enableNativeTransport).group;
+                return createOwnEventLoopGroup(enableNativeTransport);
         }
 
         public static EventLoopGroup getEventLoopGroup(Class<?> serverConnection, boolean enableNativeTransport) {
-                // Use getDeclaredFields (not getFields) so we find private fields on 1.17+.
-                // Walk the superclass chain since the field may be on a parent class.
-                Class<?> walk = serverConnection;
-                do {
-                        Field[] fields = walk.getDeclaredFields();
-                        // Legacy 1.12-1.16: LazyInitVar wrapper fields
-                        if (enableNativeTransport) {
-                                for (Field field : fields) {
-                                        Class<?> clz = field.getType();
-                                        if (clz.getSimpleName().equals("LazyInitVar")) {
-                                                Type type = field.getGenericType();
-                                                if (type instanceof ParameterizedType tt) {
-                                                        Type[] args = tt.getActualTypeArguments();
-                                                        if (args.length == 1
-                                                                        && "io.netty.channel.epoll.EpollEventLoopGroup".equals(args[0].getTypeName())) {
-                                                                for (Method m : clz.getMethods()) {
-                                                                        if (m.getGenericReturnType() != m.getReturnType()) {
-                                                                                try {
-                                                                                        m.setAccessible(true);
-                                                                                        return (EventLoopGroup) m.invoke(field.get(null));
-                                                                                } catch (ReflectiveOperationException e) {
-                                                                                        throw Util.propagateReflectThrowable(e);
-                                                                                }
-                                                                        }
-                                                                }
-                                                        }
-                                                }
-                                        }
-                                }
-                        }
+                Field[] fields = serverConnection.getFields();
+                if (enableNativeTransport) {
                         for (Field field : fields) {
                                 Class<?> clz = field.getType();
                                 if (clz.getSimpleName().equals("LazyInitVar")) {
                                         Type type = field.getGenericType();
                                         if (type instanceof ParameterizedType tt) {
                                                 Type[] args = tt.getActualTypeArguments();
-                                                if (args.length == 1 && "io.netty.channel.nio.NioEventLoopGroup".equals(args[0].getTypeName())) {
+                                                if (args.length == 1
+                                                                && "io.netty.channel.epoll.EpollEventLoopGroup".equals(args[0].getTypeName())) {
                                                         for (Method m : clz.getMethods()) {
                                                                 if (m.getGenericReturnType() != m.getReturnType()) {
                                                                         try {
-                                                                                m.setAccessible(true);
                                                                                 return (EventLoopGroup) m.invoke(field.get(null));
                                                                         } catch (ReflectiveOperationException e) {
                                                                                 throw Util.propagateReflectThrowable(e);
@@ -746,55 +698,72 @@ public class BukkitUnsafe {
                                         }
                                 }
                         }
-                        // Modern direct-field lookup (1.17+): ServerConnection has static
-                        // EpollEventLoopGroup/NioEventLoopGroup fields instead of LazyInitVar wrappers.
-                        Class<?> epollType = null;
-                        Class<?> nioType = null;
-                        try {
-                                epollType = Class.forName("io.netty.channel.epoll.EpollEventLoopGroup");
-                        } catch (ClassNotFoundException e) {
-                        }
-                        try {
-                                nioType = Class.forName("io.netty.channel.nio.NioEventLoopGroup");
-                        } catch (ClassNotFoundException e) {
-                        }
-                        if (enableNativeTransport && epollType != null) {
-                                for (Field field : fields) {
-                                        if (epollType.isAssignableFrom(field.getType())) {
-                                                try {
-                                                        field.setAccessible(true);
-                                                        Object val = field.get(null);
-                                                        if (val instanceof EventLoopGroup) {
-                                                                return (EventLoopGroup) val;
+                }
+                for (Field field : fields) {
+                        Class<?> clz = field.getType();
+                        if (clz.getSimpleName().equals("LazyInitVar")) {
+                                Type type = field.getGenericType();
+                                if (type instanceof ParameterizedType tt) {
+                                        Type[] args = tt.getActualTypeArguments();
+                                        if (args.length == 1 && "io.netty.channel.nio.NioEventLoopGroup".equals(args[0].getTypeName())) {
+                                                for (Method m : clz.getMethods()) {
+                                                        if (m.getGenericReturnType() != m.getReturnType()) {
+                                                                try {
+                                                                        return (EventLoopGroup) m.invoke(field.get(null));
+                                                                } catch (ReflectiveOperationException e) {
+                                                                        throw Util.propagateReflectThrowable(e);
+                                                                }
                                                         }
-                                                } catch (ReflectiveOperationException e) {
-                                                        // ignore
                                                 }
                                         }
                                 }
                         }
-                        if (nioType != null) {
-                                for (Field field : fields) {
-                                        if (nioType.isAssignableFrom(field.getType())) {
-                                                try {
-                                                        field.setAccessible(true);
-                                                        Object val = field.get(null);
-                                                        if (val instanceof EventLoopGroup) {
-                                                                return (EventLoopGroup) val;
-                                                        }
-                                                } catch (ReflectiveOperationException e) {
-                                                        // ignore
+                }
+                // Modern direct-field lookup (1.17+): ServerConnection has static
+                // EpollEventLoopGroup/NioEventLoopGroup fields instead of LazyInitVar wrappers.
+                Class<?> epollType = null;
+                Class<?> nioType = null;
+                try {
+                        epollType = Class.forName("io.netty.channel.epoll.EpollEventLoopGroup");
+                } catch (ClassNotFoundException e) {
+                }
+                try {
+                        nioType = Class.forName("io.netty.channel.nio.NioEventLoopGroup");
+                } catch (ClassNotFoundException e) {
+                }
+                if (enableNativeTransport && epollType != null) {
+                        for (Field field : fields) {
+                                if (epollType.isAssignableFrom(field.getType())) {
+                                        try {
+                                                Object val = field.get(null);
+                                                if (val instanceof EventLoopGroup) {
+                                                        return (EventLoopGroup) val;
                                                 }
+                                        } catch (ReflectiveOperationException e) {
+                                                // ignore
                                         }
                                 }
                         }
-                } while ((walk = walk.getSuperclass()) != Object.class);
+                }
+                if (nioType != null) {
+                        for (Field field : fields) {
+                                if (nioType.isAssignableFrom(field.getType())) {
+                                        try {
+                                                Object val = field.get(null);
+                                                if (val instanceof EventLoopGroup) {
+                                                        return (EventLoopGroup) val;
+                                                }
+                                        } catch (ReflectiveOperationException e) {
+                                                // ignore
+                                        }
+                                }
+                        }
+                }
                 return null;
         }
 
         private static EventLoopGroup createOwnEventLoopGroup(boolean enableNativeTransport) {
-                // Use a unique thread name to avoid collision with Paper's own "Netty Server IO" threads.
-                java.util.concurrent.ThreadFactory tf = createDefaultThreadFactory("EaglerXPaper Netty IO");
+                java.util.concurrent.ThreadFactory tf = createDefaultThreadFactory("Netty Server IO");
                 if (enableNativeTransport) {
                         try {
                                 Class<?> epollCls = Class.forName("io.netty.channel.epoll.EpollEventLoopGroup");

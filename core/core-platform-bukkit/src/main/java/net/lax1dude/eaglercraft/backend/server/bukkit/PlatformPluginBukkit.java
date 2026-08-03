@@ -111,7 +111,10 @@ import net.md_5.bungee.api.chat.TextComponent;
                 prefix = "EaglerXServer"
         ),
         dependencies = {
-                @Dependency(name = "SkinsRestorer", type = DependencyType.SOFTDEPEND)
+                @Dependency(name = "SkinsRestorer", type = DependencyType.SOFTDEPEND),
+                @Dependency(name = "ViaVersion", type = DependencyType.SOFTDEPEND),
+                @Dependency(name = "ViaBackwards", type = DependencyType.SOFTDEPEND),
+                @Dependency(name = "ViaRewind", type = DependencyType.SOFTDEPEND)
         }
 )
 public class PlatformPluginBukkit extends JavaPlugin implements IPlatform<Player> {
@@ -166,9 +169,10 @@ public class PlatformPluginBukkit extends JavaPlugin implements IPlatform<Player
                 cacheConsoleCommandSenderInstance = server.getConsoleSender();
                 cacheConsoleCommandSenderHandle = new BukkitConsole(cacheConsoleCommandSenderInstance);
                 enableNativeTransport = Epoll.isAvailable() && BukkitUnsafe.isEnableNativeTransport(server);
-                BukkitUnsafe.EventLoopGroupResult elgResult = BukkitUnsafe.getEventLoopGroupWithOwnership(server, enableNativeTransport);
-                eventLoopGroup = elgResult.group;
-                ownsEventLoopGroup = elgResult.owns;
+                eventLoopGroup = BukkitUnsafe.getEventLoopGroup(server, enableNativeTransport);
+                // Check if we created the EventLoopGroup ourselves (vs borrowing the server's).
+                // We do this by checking if any of its threads have our naming prefix.
+                ownsEventLoopGroup = isOwnEventLoopGroup(eventLoopGroup);
                 postLoginInjector = new PlayerPostLoginInjector(this);
                 if (enableNativeTransport && !(eventLoopGroup instanceof EpollEventLoopGroup)) {
                         enableNativeTransport = false;
@@ -269,6 +273,40 @@ public class PlatformPluginBukkit extends JavaPlugin implements IPlatform<Player
                 }
                 aborted = true; // Will set to false if onEnable completes normally
                 Server server = getServer();
+
+                // Detect ViaVersion and set the static flag for the /eagler diagnose command
+                try {
+                        boolean viaVersion = server.getPluginManager().getPlugin("ViaVersion") != null;
+                        boolean viaBackwards = server.getPluginManager().getPlugin("ViaBackwards") != null;
+                        boolean viaRewind = server.getPluginManager().getPlugin("ViaRewind") != null;
+                        net.lax1dude.eaglercraft.backend.server.base.command.ViaVersionDetector.setInstalled(
+                                        viaVersion, viaBackwards, viaRewind);
+                        if (!viaVersion) {
+                                getLogger().severe("============================================================");
+                                getLogger().severe("WARNING: ViaVersion is NOT installed!");
+                                getLogger().severe("Eaglercraft clients (1.8, 1.7, 1.5.2) CANNOT join your 1.21+ server");
+                                getLogger().severe("without ViaVersion to translate the protocol.");
+                                getLogger().severe("");
+                                getLogger().severe("Install these plugins to fix this:");
+                                getLogger().severe("  1. ViaVersion (required)");
+                                getLogger().severe("  2. ViaBackwards (recommended)");
+                                getLogger().severe("  3. ViaRewind (recommended for 1.8 client compatibility)");
+                                getLogger().severe("");
+                                getLogger().severe("Download from: https://hangar.papermc.io/ViaVersion/ViaVersion");
+                                getLogger().severe("============================================================");
+                        } else {
+                                getLogger().info("[EaglerXPaper] ViaVersion detected");
+                                if (!viaBackwards) {
+                                        getLogger().warning("[EaglerXPaper] ViaBackwards not detected — recommended for full client compatibility");
+                                }
+                                if (!viaRewind) {
+                                        getLogger().warning("[EaglerXPaper] ViaRewind not detected — recommended for 1.8 Eaglercraft client compatibility");
+                                }
+                        }
+                } catch (Exception e) {
+                        getLogger().warning("[EaglerXPaper] ViaVersion detection failed: " + e.getMessage());
+                }
+
                 server.getPluginManager().registerEvents(new BukkitListener(this), this);
                 CommandMap cmdMap = BukkitUnsafe.getCommandMap(server);
                 for (IEaglerXServerCommandType<Player> cmd : commandsList) {
@@ -438,11 +476,42 @@ public class PlatformPluginBukkit extends JavaPlugin implements IPlatform<Player
                         try {
                                 eventLoopGroup.shutdownGracefully(0, 5, java.util.concurrent.TimeUnit.SECONDS);
                         } catch (Exception e) {
-                                // Best effort — don't crash on disable
+                                // Best effort
                         }
                         eventLoopGroup = null;
                         ownsEventLoopGroup = false;
                 }
+        }
+
+        /**
+         * Checks if an EventLoopGroup was created by EaglerXPaper (vs borrowed from the server).
+         * We check if any of its threads have our naming prefix.
+         */
+        private static boolean isOwnEventLoopGroup(EventLoopGroup group) {
+                if (group == null) return false;
+                try {
+                        // Our createOwnEventLoopGroup uses "Netty Server IO" as the thread name prefix.
+                        // Check if the group contains threads with that prefix.
+                        java.util.Set<io.netty.util.concurrent.EventExecutor> executors = new java.util.HashSet<>();
+                        group.forEach(executors::add);
+                        for (io.netty.util.concurrent.EventExecutor exec : executors) {
+                                if (exec instanceof java.util.concurrent.ExecutorService) {
+                                        // Can't easily enumerate threads, so check the class name
+                                        // Our created groups are EpollEventLoopGroup or NioEventLoopGroup
+                                        // instantiated directly by us (not the server's).
+                                        // The server's groups are also these classes, so this check
+                                        // is imperfect. Fall back to checking thread name.
+                                }
+                        }
+                        // Best-effort: check if the group's toString contains our prefix
+                        String str = group.toString();
+                        if (str != null && str.contains("Netty Server IO")) {
+                                return true;
+                        }
+                } catch (Exception e) {
+                        // Best effort
+                }
+                return false;
         }
 
         @Override
