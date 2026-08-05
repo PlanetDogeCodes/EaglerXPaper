@@ -235,4 +235,5 @@ If you find a bug on a specific Paper version, please open an issue and include:
 2. The full stack trace from `logs/latest.log`
 3. The output of `java -version`
 
-The reflection-based architecture means most version-specific bugs are fixable by adding a new candidate name to `NmsNames.java` or a new fallback path in `BukkitUnsafe.java` / `PlayerPostLoginInjector.java` — no API changes needed.
+Pull requests are allowed as long as you consent to your code inheriting the same license as EaglerXPaper. 
+AI-generated code is accepted as long as it isn't complete slop and you know what you're doing with it.
