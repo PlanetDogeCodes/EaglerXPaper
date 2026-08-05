@@ -111,10 +111,7 @@ import net.md_5.bungee.api.chat.TextComponent;
                 prefix = "EaglerXServer"
         ),
         dependencies = {
-                @Dependency(name = "SkinsRestorer", type = DependencyType.SOFTDEPEND),
-                @Dependency(name = "ViaVersion", type = DependencyType.SOFTDEPEND),
-                @Dependency(name = "ViaBackwards", type = DependencyType.SOFTDEPEND),
-                @Dependency(name = "ViaRewind", type = DependencyType.SOFTDEPEND)
+                @Dependency(name = "SkinsRestorer", type = DependencyType.SOFTDEPEND)
         }
 )
 public class PlatformPluginBukkit extends JavaPlugin implements IPlatform<Player> {
@@ -273,40 +270,6 @@ public class PlatformPluginBukkit extends JavaPlugin implements IPlatform<Player
                 }
                 aborted = true; // Will set to false if onEnable completes normally
                 Server server = getServer();
-
-                // Detect ViaVersion and set the static flag for the /eagler diagnose command
-                try {
-                        boolean viaVersion = server.getPluginManager().getPlugin("ViaVersion") != null;
-                        boolean viaBackwards = server.getPluginManager().getPlugin("ViaBackwards") != null;
-                        boolean viaRewind = server.getPluginManager().getPlugin("ViaRewind") != null;
-                        net.lax1dude.eaglercraft.backend.server.base.command.ViaVersionDetector.setInstalled(
-                                        viaVersion, viaBackwards, viaRewind);
-                        if (!viaVersion) {
-                                getLogger().severe("============================================================");
-                                getLogger().severe("WARNING: ViaVersion is NOT installed!");
-                                getLogger().severe("Eaglercraft clients (1.8, 1.7, 1.5.2) CANNOT join your 1.21+ server");
-                                getLogger().severe("without ViaVersion to translate the protocol.");
-                                getLogger().severe("");
-                                getLogger().severe("Install these plugins to fix this:");
-                                getLogger().severe("  1. ViaVersion (required)");
-                                getLogger().severe("  2. ViaBackwards (recommended)");
-                                getLogger().severe("  3. ViaRewind (recommended for 1.8 client compatibility)");
-                                getLogger().severe("");
-                                getLogger().severe("Download from: https://hangar.papermc.io/ViaVersion/ViaVersion");
-                                getLogger().severe("============================================================");
-                        } else {
-                                getLogger().info("[EaglerXPaper] ViaVersion detected");
-                                if (!viaBackwards) {
-                                        getLogger().warning("[EaglerXPaper] ViaBackwards not detected — recommended for full client compatibility");
-                                }
-                                if (!viaRewind) {
-                                        getLogger().warning("[EaglerXPaper] ViaRewind not detected — recommended for 1.8 Eaglercraft client compatibility");
-                                }
-                        }
-                } catch (Exception e) {
-                        getLogger().warning("[EaglerXPaper] ViaVersion detection failed: " + e.getMessage());
-                }
-
                 server.getPluginManager().registerEvents(new BukkitListener(this), this);
                 CommandMap cmdMap = BukkitUnsafe.getCommandMap(server);
                 for (IEaglerXServerCommandType<Player> cmd : commandsList) {

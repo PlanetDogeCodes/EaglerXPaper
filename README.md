@@ -122,6 +122,17 @@ On server startup, EaglerXPaper automatically checks if ViaVersion, ViaBackwards
 
 This check runs after all plugins have loaded (via `softdepend`), so it won't produce false warnings about plugins that are actually installed.
 
+### Config Auto-Recovery
+
+If any config file (settings.yml, listener.yml, etc.) has a YAML syntax error — whether from a version mismatch, a corrupted edit, or a bad comment insertion — EaglerXPaper will automatically:
+
+1. Log a warning identifying the broken file
+2. Rename the broken file to `<filename>.broken` (preserving your old config for reference)
+3. Regenerate a fresh config with all default values
+4. Continue startup normally
+
+This means a broken config file will never prevent your server from starting. You can compare the `.broken` file with the new one to see what changed, and manually re-apply any custom settings.
+
 ## Installation
 
 1. Download `EaglerXPaper.jar`
