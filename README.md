@@ -11,7 +11,7 @@ EaglerXPaper is a fork of lax1dude's EaglerXServer that extends Bukkit/Spigot/Pa
 **This is largely the same project as EaglerXServer** — it only changes a few minor things to ensure 1.17+ compatibility, plus adds a couple of small features. All credit for the actual plugin goes to lax1dude.
 
 > [!NOTE]
-> This plugin requires [ViaVersion](https://hangar.papermc.io/ViaVersion/ViaVersion/versions), [ViaBackwards](https://hangar.papermc.io/ViaVersion/ViaBackwards/versions), and [ViaRewind](https://hangar.papermc.io/ViaVersion/ViaRewind/versions) to function properly. Please double-check that you have those installed before opening an issue.
+> This plugin requires [ViaVersion](https://hangar.papermc.io/ViaVersion/ViaVersion/versions), [ViaBackwards](https://hangar.papermc.io/ViaVersion/ViaBackwards/versions), and [ViaRewind](https://hangar.papermc.io/ViaVersion/ViaRewind/versions) to function properly. Due to legal restrictions, we are not allowed to bundle any ViaVersion plugins with EaglerXPaper. Please double-check that you have those installed before opening an issue.
 
 ## Compatibility
 
