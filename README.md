@@ -10,10 +10,8 @@ EaglerXPaper is a fork of lax1dude's EaglerXServer that extends Bukkit/Spigot/Pa
 
 **This is largely the same project as EaglerXServer** — it only changes a few minor things to ensure 1.17+ compatibility, plus adds a couple of small features. All credit for the actual plugin goes to lax1dude.
 
-Based on EaglerXServer (includes the LimboAPI compression fix, reduced default WebSocket frame size, empty ByteBuf handshake fix, and RateLimiterLocking ternary fix from upstream).
-
 > [!NOTE]
-> This plugin requires [ViaVersion](https://hangar.papermc.io/ViaVersion/ViaVersion/versions), [ViaBackwards](https://hangar.papermc.io/ViaVersion/ViaBackwards/versions), and [ViaRewind](https://hangar.papermc.io/ViaVersion/ViaRewind/versions) to function properly. Please double-check that you have those installed before opening an issue.
+> This plugin requires [ViaVersion](https://hangar.papermc.io/ViaVersion/ViaVersion/versions), [ViaBackwards](https://hangar.papermc.io/ViaVersion/ViaBackwards/versions), and [ViaRewind](https://hangar.papermc.io/ViaVersion/ViaRewind/versions) to function properly. Due to legal restrictions, we are not allowed to bundle any ViaVersion plugins with EaglerXPaper. Please double-check that you have those installed before opening an issue.
 
 ## Compatibility
 
@@ -138,7 +136,7 @@ This means a broken config file will never prevent your server from starting. Yo
 1. Download `EaglerXPaper.jar`
 2. Place in your Paper 1.21.x server's `plugins/` folder along with [ViaVersion](https://hangar.papermc.io/ViaVersion/ViaVersion/versions), [ViaBackwards](https://hangar.papermc.io/ViaVersion/ViaBackwards/versions), and [ViaRewind](https://hangar.papermc.io/ViaVersion/ViaRewind/versions).
 3. Start the server — config files generate in `plugins/EaglercraftXServer/`
-4. OPTIONAL (only needed if you use BungeeCord or Velocity) — Configure your reverse proxy / tunnel. See [the regular EaglerXServer setup guide](https://github.com/lax1dude/eaglerxserver/blob/main/CONFIG.md) for details.
+4. OPTIONAL (only needed if you want your connection to be wss:// instead of ws://) — Configure your reverse proxy / tunnel. See [the regular EaglerXServer setup guide](https://github.com/lax1dude/eaglerxserver/blob/main/CONFIG.md) for details.
 5. Connect with an Eaglercraft client to `ws://yourserver:25565/` (or `wss://` if using a reverse proxy such as Caddy, Nginx, or EaglerXServer's built-in TLS)
 6. That's it! You can configure extra options if needed, but you really don't have to if all you wanted to do was "just get it working".
 
@@ -235,4 +233,5 @@ If you find a bug on a specific Paper version, please open an issue and include:
 2. The full stack trace from `logs/latest.log`
 3. The output of `java -version`
 
-The reflection-based architecture means most version-specific bugs are fixable by adding a new candidate name to `NmsNames.java` or a new fallback path in `BukkitUnsafe.java` / `PlayerPostLoginInjector.java` — no API changes needed.
+Pull requests are allowed as long as you consent to your code inheriting the same license as EaglerXPaper. 
+AI-generated code is accepted as long as it isn't complete slop and you know what you're doing with it.

@@ -585,15 +585,38 @@ public class PlayerPostLoginInjector {
                                                                 if (er instanceof EaglerError err) {
                                                                         Player player = null;
                                                                         synchronized (err.gameProfile) {
-                                                                                Iterator<Property> itr = err.gameProfile.getProperties().values().iterator();
-                                                                                while (itr.hasNext()) {
-                                                                                        Property prop = itr.next();
-                                                                                        if (prop.getName().startsWith("$eaglerMarker_")) {
-                                                                                                Player e = entityPlayers.remove(prop);
-                                                                                                if (e != null) {
-                                                                                                        player = e;
+                                                                                try {
+                                                                                        java.lang.reflect.Method getProps = err.gameProfile.getClass().getMethod("getProperties");
+                                                                                        Object props = getProps.invoke(err.gameProfile);
+                                                                                        java.lang.reflect.Method valuesMethod = props.getClass().getMethod("values");
+                                                                                        Object values = valuesMethod.invoke(props);
+                                                                                        if (values instanceof java.util.Collection<?> coll) {
+                                                                                                java.util.Iterator<?> itr = coll.iterator();
+                                                                                                while (itr.hasNext()) {
+                                                                                                        Object propObj = itr.next();
+                                                                                                        if (propObj instanceof Property prop) {
+                                                                                                                if (prop.getName().startsWith("$eaglerMarker_")) {
+                                                                                                                        Player e = entityPlayers.remove(prop);
+                                                                                                                        if (e != null) {
+                                                                                                                                player = e;
+                                                                                                                        }
+                                                                                                                        itr.remove();
+                                                                                                                }
+                                                                                                        }
                                                                                                 }
-                                                                                                itr.remove();
+                                                                                        }
+                                                                                } catch (Exception ex2) {
+                                                                                        // Fall back to direct call for old authlib
+                                                                                        Iterator<Property> itr = err.gameProfile.getProperties().values().iterator();
+                                                                                        while (itr.hasNext()) {
+                                                                                                Property prop = itr.next();
+                                                                                                if (prop.getName().startsWith("$eaglerMarker_")) {
+                                                                                                        Player e2 = entityPlayers.remove(prop);
+                                                                                                        if (e2 != null) {
+                                                                                                                player = e2;
+                                                                                                        }
+                                                                                                        itr.remove();
+                                                                                                }
                                                                                         }
                                                                                 }
                                                                         }
@@ -786,7 +809,15 @@ public class PlayerPostLoginInjector {
                 Object player = BukkitUnsafe.getHandle(event.getPlayer());
                 GameProfile profile = BukkitUnsafe.getGameProfile(player);
                 synchronized (profile) {
-                        profile.getProperties().put(marker.getName(), marker);
+                        try {
+                                java.lang.reflect.Method getProps = profile.getClass().getMethod("getProperties");
+                                Object props = getProps.invoke(profile);
+                                java.lang.reflect.Method putMethod = props.getClass().getMethod("put", Object.class, Object.class);
+                                putMethod.invoke(props, marker.getName(), marker);
+                        } catch (Exception e) {
+                                // Fall back to direct call for old authlib
+                                profile.getProperties().put(marker.getName(), marker);
+                        }
                 }
                 entityPlayers.put(marker, event.getPlayer());
         }
