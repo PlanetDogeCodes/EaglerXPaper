@@ -136,7 +136,7 @@ This means a broken config file will never prevent your server from starting. Yo
 1. Download `EaglerXPaper.jar`
 2. Place in your Paper 1.21.x server's `plugins/` folder along with [ViaVersion](https://hangar.papermc.io/ViaVersion/ViaVersion/versions), [ViaBackwards](https://hangar.papermc.io/ViaVersion/ViaBackwards/versions), and [ViaRewind](https://hangar.papermc.io/ViaVersion/ViaRewind/versions).
 3. Start the server — config files generate in `plugins/EaglercraftXServer/`
-4. OPTIONAL (only needed if you use BungeeCord or Velocity) — Configure your reverse proxy / tunnel. See [the regular EaglerXServer setup guide](https://github.com/lax1dude/eaglerxserver/blob/main/CONFIG.md) for details.
+4. OPTIONAL (only needed if you want your connection to be wss:// instead of ws://) — Configure your reverse proxy / tunnel. See [the regular EaglerXServer setup guide](https://github.com/lax1dude/eaglerxserver/blob/main/CONFIG.md) for details.
 5. Connect with an Eaglercraft client to `ws://yourserver:25565/` (or `wss://` if using a reverse proxy such as Caddy, Nginx, or EaglerXServer's built-in TLS)
 6. That's it! You can configure extra options if needed, but you really don't have to if all you wanted to do was "just get it working".
 
