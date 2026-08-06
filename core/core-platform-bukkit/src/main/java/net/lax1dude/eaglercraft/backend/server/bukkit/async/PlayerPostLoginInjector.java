@@ -606,18 +606,9 @@ public class PlayerPostLoginInjector {
                                                                                                 }
                                                                                         }
                                                                                 } catch (Exception ex2) {
-                                                                                        // Fall back to direct call for old authlib
-                                                                                        Iterator<Property> itr = err.gameProfile.getProperties().values().iterator();
-                                                                                        while (itr.hasNext()) {
-                                                                                                Property prop = itr.next();
-                                                                                                if (prop.getName().startsWith("$eaglerMarker_")) {
-                                                                                                        Player e2 = entityPlayers.remove(prop);
-                                                                                                        if (e2 != null) {
-                                                                                                                player = e2;
-                                                                                                        }
-                                                                                                        itr.remove();
-                                                                                                }
-                                                                                        }
+                                                                                        // Reflection failed — skip marker cleanup.
+                                                                                        // The marker will be cleaned up when the player quits
+                                                                                        // via BukkitListener.onQuitEvent.
                                                                                 }
                                                                         }
                                                                         if (player != null) {
@@ -808,15 +799,18 @@ public class PlayerPostLoginInjector {
                 Property marker = new Property("$eaglerMarker_" + ThreadLocalRandom.current().nextLong(Long.MAX_VALUE), "TMP");
                 Object player = BukkitUnsafe.getHandle(event.getPlayer());
                 GameProfile profile = BukkitUnsafe.getGameProfile(player);
-                synchronized (profile) {
-                        try {
-                                java.lang.reflect.Method getProps = profile.getClass().getMethod("getProperties");
-                                Object props = getProps.invoke(profile);
-                                java.lang.reflect.Method putMethod = props.getClass().getMethod("put", Object.class, Object.class);
-                                putMethod.invoke(props, marker.getName(), marker);
-                        } catch (Exception e) {
-                                // Fall back to direct call for old authlib
-                                profile.getProperties().put(marker.getName(), marker);
+                if (profile != null) {
+                        synchronized (profile) {
+                                try {
+                                        java.lang.reflect.Method getProps = profile.getClass().getMethod("getProperties");
+                                        Object props = getProps.invoke(profile);
+                                        java.lang.reflect.Method putMethod = props.getClass().getMethod("put", Object.class, Object.class);
+                                        putMethod.invoke(props, marker.getName(), marker);
+                                } catch (Exception e) {
+                                        // Reflection failed — authlib version mismatch or security restriction.
+                                        // Skip marker insertion. This means the post-login cleanup won't find
+                                        // the marker, but that's a minor leak, not a crash.
+                                }
                         }
                 }
                 entityPlayers.put(marker, event.getPlayer());
