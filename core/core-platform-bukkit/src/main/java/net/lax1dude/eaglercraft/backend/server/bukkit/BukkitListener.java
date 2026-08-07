@@ -123,12 +123,12 @@ class BukkitListener implements Listener {
                         com.mojang.authlib.GameProfile profile = BukkitUnsafe.getGameProfile(handle);
                         if (profile != null) {
                                 synchronized (profile) {
-                                        com.mojang.authlib.properties.Property[] toRemove = profile.getProperties()
-                                                        .values().stream()
+                                        com.mojang.authlib.properties.Property[] toRemove = BukkitUnsafe.getPropertyValuesSafe(profile)
+                                                        .stream()
                                                         .filter(p -> p.getName().startsWith("$eaglerMarker_"))
                                                         .toArray(com.mojang.authlib.properties.Property[]::new);
                                         for (com.mojang.authlib.properties.Property p : toRemove) {
-                                                profile.getProperties().remove(p.getName(), p);
+                                                BukkitUnsafe.removePropertySafe(profile, p.getName(), p);
                                         }
                                 }
                         }

@@ -585,7 +585,7 @@ public class PlayerPostLoginInjector {
                                                                 if (er instanceof EaglerError err) {
                                                                         Player player = null;
                                                                         synchronized (err.gameProfile) {
-                                                                                Iterator<Property> itr = err.gameProfile.getProperties().values().iterator();
+                                                                                java.util.Iterator<Property> itr = BukkitUnsafe.getPropertyValuesSafe(err.gameProfile).iterator();
                                                                                 while (itr.hasNext()) {
                                                                                         Property prop = itr.next();
                                                                                         if (prop.getName().startsWith("$eaglerMarker_")) {
@@ -786,7 +786,7 @@ public class PlayerPostLoginInjector {
                 Object player = BukkitUnsafe.getHandle(event.getPlayer());
                 GameProfile profile = BukkitUnsafe.getGameProfile(player);
                 synchronized (profile) {
-                        profile.getProperties().put(marker.getName(), marker);
+                        BukkitUnsafe.putPropertySafe(profile, marker.getName(), marker);
                 }
                 entityPlayers.put(marker, event.getPlayer());
         }
