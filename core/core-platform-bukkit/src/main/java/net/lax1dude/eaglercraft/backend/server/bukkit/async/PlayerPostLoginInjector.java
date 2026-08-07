@@ -585,30 +585,16 @@ public class PlayerPostLoginInjector {
                                                                 if (er instanceof EaglerError err) {
                                                                         Player player = null;
                                                                         synchronized (err.gameProfile) {
-                                                                                try {
-                                                                                        java.lang.reflect.Method getProps = err.gameProfile.getClass().getMethod("getProperties");
-                                                                                        Object props = getProps.invoke(err.gameProfile);
-                                                                                        java.lang.reflect.Method valuesMethod = props.getClass().getMethod("values");
-                                                                                        Object values = valuesMethod.invoke(props);
-                                                                                        if (values instanceof java.util.Collection<?> coll) {
-                                                                                                java.util.Iterator<?> itr = coll.iterator();
-                                                                                                while (itr.hasNext()) {
-                                                                                                        Object propObj = itr.next();
-                                                                                                        if (propObj instanceof Property prop) {
-                                                                                                                if (prop.getName().startsWith("$eaglerMarker_")) {
-                                                                                                                        Player e = entityPlayers.remove(prop);
-                                                                                                                        if (e != null) {
-                                                                                                                                player = e;
-                                                                                                                        }
-                                                                                                                        itr.remove();
-                                                                                                                }
-                                                                                                        }
+                                                                                Iterator<Property> itr = err.gameProfile.getProperties().values().iterator();
+                                                                                while (itr.hasNext()) {
+                                                                                        Property prop = itr.next();
+                                                                                        if (prop.getName().startsWith("$eaglerMarker_")) {
+                                                                                                Player e = entityPlayers.remove(prop);
+                                                                                                if (e != null) {
+                                                                                                        player = e;
                                                                                                 }
+                                                                                                itr.remove();
                                                                                         }
-                                                                                } catch (Exception ex2) {
-                                                                                        // Reflection failed — skip marker cleanup.
-                                                                                        // The marker will be cleaned up when the player quits
-                                                                                        // via BukkitListener.onQuitEvent.
                                                                                 }
                                                                         }
                                                                         if (player != null) {
@@ -799,19 +785,8 @@ public class PlayerPostLoginInjector {
                 Property marker = new Property("$eaglerMarker_" + ThreadLocalRandom.current().nextLong(Long.MAX_VALUE), "TMP");
                 Object player = BukkitUnsafe.getHandle(event.getPlayer());
                 GameProfile profile = BukkitUnsafe.getGameProfile(player);
-                if (profile != null) {
-                        synchronized (profile) {
-                                try {
-                                        java.lang.reflect.Method getProps = profile.getClass().getMethod("getProperties");
-                                        Object props = getProps.invoke(profile);
-                                        java.lang.reflect.Method putMethod = props.getClass().getMethod("put", Object.class, Object.class);
-                                        putMethod.invoke(props, marker.getName(), marker);
-                                } catch (Exception e) {
-                                        // Reflection failed — authlib version mismatch or security restriction.
-                                        // Skip marker insertion. This means the post-login cleanup won't find
-                                        // the marker, but that's a minor leak, not a crash.
-                                }
-                        }
+                synchronized (profile) {
+                        profile.getProperties().put(marker.getName(), marker);
                 }
                 entityPlayers.put(marker, event.getPlayer());
         }

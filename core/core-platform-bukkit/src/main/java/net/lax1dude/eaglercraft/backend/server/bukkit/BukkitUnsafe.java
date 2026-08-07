@@ -211,23 +211,14 @@ public class BukkitUnsafe {
                         bindCraftPlayer(player);
                 }
                 try {
-                        GameProfile profile = (GameProfile) method_EntityPlayer_getProfile
-                                        .invoke(method_CraftPlayer_getHandle.invoke(player));
-                        // Use reflection for getProperties() — authlib 6.x changed the return type
-                        Object props = getPropertiesReflectively(profile);
-                        if (props != null) {
-                                // Use reflection to call get("textures") on the properties multimap
-                                java.lang.reflect.Method getMethod = props.getClass().getMethod("get", Object.class);
-                                Object texCollection = getMethod.invoke(props, "textures");
-                                if (texCollection instanceof Collection<?> tex && !tex.isEmpty()) {
-                                        Object first = tex.iterator().next();
-                                        if (first instanceof Property p) {
-                                                return p.getValue();
-                                        }
-                                }
+                        Multimap<String, Property> props = ((GameProfile) method_EntityPlayer_getProfile
+                                        .invoke(method_CraftPlayer_getHandle.invoke(player))).getProperties();
+                        Collection<Property> tex = props.get("textures");
+                        if (!tex.isEmpty()) {
+                                return tex.iterator().next().getValue();
                         }
-                } catch (Exception e) {
-                        throw Util.propagateReflectThrowable(e instanceof ReflectiveOperationException ? (ReflectiveOperationException) e : new RuntimeException(e));
+                } catch (ReflectiveOperationException e) {
+                        throw Util.propagateReflectThrowable(e);
                 }
                 return null;
         }
@@ -237,50 +228,32 @@ public class BukkitUnsafe {
 
         public static class PropertyInjector {
 
-                private final Object props; // Properties multimap (type varies by authlib version)
+                private final Multimap<String, Property> props;
                 private final Object lock;
 
-                protected PropertyInjector(Object props, Object lock) {
+                protected PropertyInjector(Multimap<String, Property> props, Object lock) {
                         this.props = props;
-                        this.lock = lock != null ? lock : props;
+                        this.lock = lock;
                 }
 
                 public void injectTexturesProperty(String texturesPropertyValue, String texturesPropertySignature) {
                         synchronized (lock) {
-                                try {
-                                        java.lang.reflect.Method removeAll = props.getClass().getMethod("removeAll", Object.class);
-                                        removeAll.invoke(props, "textures");
-                                        java.lang.reflect.Method put = props.getClass().getMethod("put", Object.class, Object.class);
-                                        put.invoke(props, "textures",
-                                                        new Property("textures", texturesPropertyValue, texturesPropertySignature));
-                                } catch (Exception e) {
-                                        throw new RuntimeException("Failed to inject textures property", e);
-                                }
+                                props.removeAll("textures");
+                                props.put("textures",
+                                                new Property("textures", texturesPropertyValue, texturesPropertySignature));
                         }
                 }
 
                 public void injectIsEaglerPlayerProperty(boolean val) {
                         synchronized (lock) {
-                                try {
-                                        java.lang.reflect.Method removeAll = props.getClass().getMethod("removeAll", Object.class);
-                                        removeAll.invoke(props, "isEaglerPlayer");
-                                        java.lang.reflect.Method put = props.getClass().getMethod("put", Object.class, Object.class);
-                                        put.invoke(props, "isEaglerPlayer",
-                                                        val ? isEaglerPlayerPropertyT : isEaglerPlayerPropertyF);
-                                } catch (Exception e) {
-                                        throw new RuntimeException("Failed to inject isEaglerPlayer property", e);
-                                }
+                                props.removeAll("isEaglerPlayer");
+                                props.put("isEaglerPlayer", val ? isEaglerPlayerPropertyT : isEaglerPlayerPropertyF);
                         }
                 }
 
                 public void complete() {
                 }
 
-        }
-
-        private static Object getPropertiesReflectively(GameProfile profile) throws ReflectiveOperationException {
-                java.lang.reflect.Method getProps = profile.getClass().getMethod("getProperties");
-                return getProps.invoke(profile);
         }
 
         public static BukkitUnsafe.PropertyInjector propertyInjector(Player player) {
@@ -290,8 +263,7 @@ public class BukkitUnsafe {
                 try {
                         GameProfile profile = (GameProfile) method_EntityPlayer_getProfile
                                         .invoke(method_CraftPlayer_getHandle.invoke(player));
-                        Object props = getPropertiesReflectively(profile);
-                        return new PropertyInjector(props, profile);
+                        return new PropertyInjector(profile.getProperties(), profile);
                 } catch (ReflectiveOperationException e) {
                         throw Util.propagateReflectThrowable(e);
                 }

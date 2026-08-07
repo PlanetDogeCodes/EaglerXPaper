@@ -113,50 +113,22 @@ class BukkitListener implements Listener {
 
         @EventHandler(priority = EventPriority.MONITOR)
         public void onQuitEvent(PlayerQuitEvent evt) {
-                try {
-                        plugin.dropPlayer(evt.getPlayer());
-                } catch (Exception e) {
-                        // Don't let dropPlayer failure break the quit event
-                }
+                plugin.dropPlayer(evt.getPlayer());
                 // Clean up any orphaned eaglerMarker properties from the player's GameProfile.
                 // These are inserted by PlayerPostLoginInjector.handleLoginEvent and are
                 // normally removed when PacketLoginOutSuccess is sent. But if login fails
                 // before that (kick, timeout, disconnect), the marker stays forever.
-                //
-                // IMPORTANT: We use reflection here because authlib 6.x (Paper 26.x / MC 1.21.11)
-                // changed GameProfile.getProperties() return type from PropertyMap to a new class.
-                // Direct method calls would throw NoSuchMethodError on servers with newer authlib.
                 try {
                         Object handle = BukkitUnsafe.getHandle(evt.getPlayer());
                         com.mojang.authlib.GameProfile profile = BukkitUnsafe.getGameProfile(handle);
                         if (profile != null) {
                                 synchronized (profile) {
-                                        // Use reflection to call getProperties() — works across all authlib versions
-                                        java.lang.reflect.Method getProps = profile.getClass().getMethod("getProperties");
-                                        Object props = getProps.invoke(profile);
-                                        if (props != null) {
-                                                // Get the values collection via reflection
-                                                java.lang.reflect.Method valuesMethod = props.getClass().getMethod("values");
-                                                Object values = valuesMethod.invoke(props);
-                                                if (values instanceof java.util.Collection<?> coll) {
-                                                        // Find and remove markers
-                                                        java.util.List<Object> toRemove = new java.util.ArrayList<>();
-                                                        for (Object prop : coll) {
-                                                                if (prop instanceof com.mojang.authlib.properties.Property p) {
-                                                                        if (p.getName().startsWith("$eaglerMarker_")) {
-                                                                                toRemove.add(p);
-                                                                        }
-                                                                }
-                                                        }
-                                                        if (!toRemove.isEmpty()) {
-                                                                java.lang.reflect.Method removeMethod = props.getClass().getMethod(
-                                                                                "remove", String.class, com.mojang.authlib.properties.Property.class);
-                                                                for (Object p : toRemove) {
-                                                                        com.mojang.authlib.properties.Property prop = (com.mojang.authlib.properties.Property) p;
-                                                                        removeMethod.invoke(props, prop.getName(), prop);
-                                                                }
-                                                        }
-                                                }
+                                        com.mojang.authlib.properties.Property[] toRemove = profile.getProperties()
+                                                        .values().stream()
+                                                        .filter(p -> p.getName().startsWith("$eaglerMarker_"))
+                                                        .toArray(com.mojang.authlib.properties.Property[]::new);
+                                        for (com.mojang.authlib.properties.Property p : toRemove) {
+                                                profile.getProperties().remove(p.getName(), p);
                                         }
                                 }
                         }

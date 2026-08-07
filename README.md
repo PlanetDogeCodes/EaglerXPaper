@@ -1,8 +1,8 @@
 # EaglerXPaper
 
-> Paper 1.21.x port of [EaglerXServer](https://github.com/lax1dude/eaglerxserver) — run modern Paper servers that can interface with Eaglercraft (browser) clients.
+> Paper 1.21.x port of [EaglerXServer](https://github.com/lax1dude/eaglerxserver) — run Eaglercraft (browser) clients on modern Paper servers.
 
-[![Paper](https://img.shields.io/badge/Paper-1.12+-blue)](https://papermc.io)
+[![Paper](https://img.shields.io/badge/Paper-1.21.x-blue)](https://papermc.io)
 [![Java](https://img.shields.io/badge/Java-25%2B-orange)](https://adoptium.net)
 [![License](https://img.shields.io/badge/license-BSD--3--Clause-green)](LICENSE)
 
@@ -10,14 +10,13 @@ EaglerXPaper is a fork of lax1dude's EaglerXServer that extends Bukkit/Spigot/Pa
 
 **This is largely the same project as EaglerXServer** — it only changes a few minor things to ensure 1.17+ compatibility, plus adds a couple of small features. All credit for the actual plugin goes to lax1dude.
 
-> [!NOTE]
-> This plugin requires [ViaVersion](https://hangar.papermc.io/ViaVersion/ViaVersion/versions), [ViaBackwards](https://hangar.papermc.io/ViaVersion/ViaBackwards/versions), and [ViaRewind](https://hangar.papermc.io/ViaVersion/ViaRewind/versions) to function properly. Due to legal restrictions, we are not allowed to bundle any ViaVersion plugins with EaglerXPaper. Please double-check that you have those installed before opening an issue.
+Based on EaglerXServer **v1.1.1** (includes the LimboAPI compression fix, reduced default WebSocket frame size, empty ByteBuf handshake fix, and RateLimiterLocking ternary fix from upstream).
 
 ## Compatibility
 
 | Platform | Version Range | Status |
 |----------|--------------|--------|
-| **Paper** | 1.12.2 – 1.21.11+ | ✅ Fully supported - Needs ViaVersion/ViaBackwards/ViaRewind|
+| **Paper** | 1.12.2 – 1.21.11+ | ✅ Fully supported |
 | **Spigot** | 1.12.2 – 1.21.x | ⚠️ Should work (uses NMS reflection fallback) |
 | **Folia** | Any | ❌ Not supported |
 | **BungeeCord** | 1.21+ | ✅ Use upstream EaglerXServer (already supported) |
@@ -70,15 +69,14 @@ skin_cache_prewarm:
 
 ### Adaptive Packet Batching
 
-EaglerXPaper automatically batches outbound packets for Eaglercraft connections that are sending many packets rapidly (e.g. during chunk loading or heavy entity updates). This reduces the number of TCP flushes, which cuts per-frame overhead — especially helpful for mobile/slow connections.
+EaglerXPaper automatically batches outbound packets for Eaglercraft connections that are sending many packets rapidly (e.g. during chunk loading or heavy entity updates). This reduces the number of WebSocket frames sent, which cuts bandwidth usage and per-frame overhead — especially helpful for mobile/slow connections.
 
 The batcher is self-adaptive:
 - **Idle connections** (few packets per second) — packets pass through immediately with zero added latency
-- **Burst connections** (20+ packets in 100ms) — packets are buffered for up to 2ms and flushed as a batch
-- **Sustained bursts** — forced flush every 50ms to cap latency
-- **Timing-critical packets** (combat, entity velocity, health updates, particles, etc.) — detected by reading the 1.8 protocol packet ID and flushed immediately with zero delay. This ensures mace smash attacks, wind charges, and other combat mechanics work without latency.
+- **Burst connections** (20+ packets in 100ms) — packets are buffered for up to 20ms and flushed as a batch
+- **Sustained bursts** — forced flush every 200ms to cap latency
 
-It sits after the frame codec in the Netty pipeline, so it sees raw ByteBufs and can identify packet types. It also caps the buffer at 256KB to prevent memory pressure from large chunk data packets.
+It sits between the frame codec and the handshake handler in the Netty pipeline, so it batches raw ByteBufs before they get wrapped into WebSocket frames. This is what actually reduces frame count and saves bandwidth.
 
 **Config** (`settings.yml`):
 ```yaml
@@ -88,55 +86,12 @@ adaptive_packet_batching:
 
 Both features are enabled by default and require no configuration.
 
-### Diagnostic Commands
-
-EaglerXPaper adds two commands to help operators manage and debug their server:
-
-**`/eaglerdiagnose`** (alias: `/eaglerdiag`) — runs a full health check and prints:
-- Plugin version and platform
-- TLS status (enabled/disabled)
-- IP forwarding status
-- Dual-stack mode
-- WebSocket frame size limit
-- Allowed Minecraft protocol range
-- Skin prewarming and adaptive batching status
-- ViaVersion/ViaBackwards/ViaRewind installation status
-- Number of Eaglercraft players online
-
-Requires permission: `eaglercraft.command.diagnose`
-
-**`/eaglerclients`** (alias: `/eaglerclientlist`) — shows a live table of all connected Eaglercraft players:
-- Player name
-- Client brand (EaglercraftX, Resent, etc.)
-- Minecraft version (1.8, 1.7, 1.12.2, etc.)
-- Eaglercraft protocol version (v3/v4/v5, with 1.5.2 indicator for Rewind players)
-- Real IP address (if IP forwarding is enabled)
-
-Requires permission: `eaglercraft.command.clients`
-
-### ViaVersion Auto-Detection
-
-On server startup, EaglerXPaper automatically checks if ViaVersion, ViaBackwards, and ViaRewind are installed. If ViaVersion is missing, it prints a prominent warning in the console explaining that Eaglercraft clients won't be able to join. If ViaBackwards or ViaRewind are missing, it prints a recommendation to install them.
-
-This check runs after all plugins have loaded (via `softdepend`), so it won't produce false warnings about plugins that are actually installed.
-
-### Config Auto-Recovery
-
-If any config file (settings.yml, listener.yml, etc.) has a YAML syntax error — whether from a version mismatch, a corrupted edit, or a bad comment insertion — EaglerXPaper will automatically:
-
-1. Log a warning identifying the broken file
-2. Rename the broken file to `<filename>.broken` (preserving your old config for reference)
-3. Regenerate a fresh config with all default values
-4. Continue startup normally
-
-This means a broken config file will never prevent your server from starting. You can compare the `.broken` file with the new one to see what changed, and manually re-apply any custom settings.
-
 ## Installation
 
 1. Download `EaglerXPaper.jar`
-2. Place in your Paper 1.21.x server's `plugins/` folder along with [ViaVersion](https://hangar.papermc.io/ViaVersion/ViaVersion/versions), [ViaBackwards](https://hangar.papermc.io/ViaVersion/ViaBackwards/versions), and [ViaRewind](https://hangar.papermc.io/ViaVersion/ViaRewind/versions).
+2. Place in your Paper 1.21.x server's `plugins/` folder
 3. Start the server — config files generate in `plugins/EaglercraftXServer/`
-4. OPTIONAL (only needed if you want your connection to be wss:// instead of ws://) — Configure your reverse proxy / tunnel. See [the regular EaglerXServer setup guide](https://github.com/lax1dude/eaglerxserver/blob/main/CONFIG.md) for details.
+4. OPTIONAL (only needed if you use BungeeCord or Velocity) — Configure your reverse proxy / tunnel. See [the regular EaglerXServer setup guide](https://github.com/lax1dude/eaglerxserver/blob/main/CONFIG.md) for details.
 5. Connect with an Eaglercraft client to `ws://yourserver:25565/` (or `wss://` if using a reverse proxy such as Caddy, Nginx, or EaglerXServer's built-in TLS)
 6. That's it! You can configure extra options if needed, but you really don't have to if all you wanted to do was "just get it working".
 
@@ -197,10 +152,6 @@ EaglerXPaper injects into Paper's Netty channel pipeline via Paper's `ChannelIni
 | `core/src/main/java/.../base/pipeline/WebSocketInitialHandler.java` | Insert `AdaptivePacketBatcher` into pipeline |
 | `core/src/main/java/.../base/config/EaglerXPaperConfig.java` | **NEW** — config holder for EaglerXPaper features |
 | `core/src/main/java/.../base/config/EaglerConfigLoader.java` | Added `skin_cache_prewarm` and `adaptive_packet_batching` config sections |
-| `core/src/main/java/.../base/command/CommandDiagnose.java` | **NEW** — `/eaglerdiagnose` health check command |
-| `core/src/main/java/.../base/command/CommandClients.java` | **NEW** — `/eaglerclients` player dashboard command |
-| `core/src/main/java/.../base/command/ViaVersionDetector.java` | **NEW** — ViaVersion detection holder |
-| `core/core-platform-bukkit/.../bukkit/PlatformPluginBukkit.java` | Try/catch `updateRealAddress`; EventLoopGroup ownership; ViaVersion detection; softdepend for Via* |
 | `core/src/main/java/.../base/DeferredStartSkinCache.java` | Made `service` field volatile for thread safety |
 | `core/core-platform-bukkit/.../bukkit/PlatformPluginBukkit.java` | Try/catch around `updateRealAddress`; EventLoopGroup ownership tracking + shutdown |
 | `core/build.gradle` | JAR renamed to `EaglerXPaper.jar` |
@@ -233,5 +184,4 @@ If you find a bug on a specific Paper version, please open an issue and include:
 2. The full stack trace from `logs/latest.log`
 3. The output of `java -version`
 
-Pull requests are allowed as long as you consent to your code inheriting the same license as EaglerXPaper. 
-AI-generated code is accepted as long as it isn't complete slop and you know what you're doing with it.
+The reflection-based architecture means most version-specific bugs are fixable by adding a new candidate name to `NmsNames.java` or a new fallback path in `BukkitUnsafe.java` / `PlayerPostLoginInjector.java` — no API changes needed.
