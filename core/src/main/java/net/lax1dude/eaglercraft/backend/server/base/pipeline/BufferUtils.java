@@ -161,8 +161,7 @@ public class BufferUtils {
 			throw new IndexOutOfBoundsException();
 		}
 		if (len > buffer.readableBytes()) {
-			throw new IndexOutOfBoundsException("Buffer has " + buffer.readableBytes()
-					+ " bytes but MCString expects " + len);
+			throw new IndexOutOfBoundsException("Buffer has " + buffer.readableBytes() + " bytes but MCString expects " + len);
 		}
 		CharSequence ret = readCharSequence(buffer, len, StandardCharsets.UTF_8);
 		if (ret.length() > maxLen) {

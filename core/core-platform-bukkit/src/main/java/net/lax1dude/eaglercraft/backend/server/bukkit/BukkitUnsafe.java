@@ -220,13 +220,9 @@ public class BukkitUnsafe {
                                 Object texCollection = getMethod.invoke(propsObj, "textures");
                                 if (texCollection instanceof Collection<?> tex && !tex.isEmpty()) {
                                     Object first = tex.iterator().next();
-                                    if (first instanceof Property p) {
-                                        return p.getValue();
-                                    }
+                                    if (first instanceof Property p) return p.getValue();
                                 }
-                            } catch (Exception ex) {
-                                // Skip
-                            }
+                            } catch (Exception ex) { }
                         }
                 } catch (ReflectiveOperationException e) {
                         throw Util.propagateReflectThrowable(e);
@@ -244,34 +240,19 @@ public class BukkitUnsafe {
 
                 protected PropertyInjector(Object props, Object lock) {
                         this.props = props;
-                        this.lock = lock != null ? lock : props;
+                        this.lock = lock;
                 }
 
                 public void injectTexturesProperty(String texturesPropertyValue, String texturesPropertySignature) {
                         synchronized (lock) {
-                                try {
-                                        java.lang.reflect.Method removeAll = props.getClass().getMethod("removeAll", Object.class);
-                                        removeAll.invoke(props, "textures");
-                                        java.lang.reflect.Method put = props.getClass().getMethod("put", Object.class, Object.class);
-                                        put.invoke(props, "textures",
-                                                        new Property("textures", texturesPropertyValue, texturesPropertySignature));
-                                } catch (Exception e) {
-                                        throw new RuntimeException("Failed to inject textures property", e);
-                                }
+                                try { java.lang.reflect.Method ra = props.getClass().getMethod("removeAll", Object.class); ra.invoke(props, "textures"); java.lang.reflect.Method p = props.getClass().getMethod("put", Object.class, Object.class); p.invoke(props, "textures",
+                                                new Property("textures", texturesPropertyValue, texturesPropertySignature)); } catch (Exception e) { throw new RuntimeException("Failed to inject textures property", e); }
                         }
                 }
 
                 public void injectIsEaglerPlayerProperty(boolean val) {
                         synchronized (lock) {
-                                try {
-                                        java.lang.reflect.Method removeAll = props.getClass().getMethod("removeAll", Object.class);
-                                        removeAll.invoke(props, "isEaglerPlayer");
-                                        java.lang.reflect.Method put = props.getClass().getMethod("put", Object.class, Object.class);
-                                        put.invoke(props, "isEaglerPlayer",
-                                                        val ? isEaglerPlayerPropertyT : isEaglerPlayerPropertyF);
-                                } catch (Exception e) {
-                                        throw new RuntimeException("Failed to inject isEaglerPlayer property", e);
-                                }
+                                try { java.lang.reflect.Method ra = props.getClass().getMethod("removeAll", Object.class); ra.invoke(props, "isEaglerPlayer"); java.lang.reflect.Method p = props.getClass().getMethod("put", Object.class, Object.class); p.invoke(props, "isEaglerPlayer", val ? isEaglerPlayerPropertyT : isEaglerPlayerPropertyF); } catch (Exception e) { throw new RuntimeException("Failed to inject isEaglerPlayer property", e); }
                         }
                 }
 
@@ -394,21 +375,57 @@ public class BukkitUnsafe {
 
         public static Runnable injectChannelInitializer(Server server, Consumer<Channel> initHandler,
                         IEaglerXServerListener listener) {
-                Class<?> keyClz;
-                Object eaglerKey;
-                Class<?> paperChannelInitHolder;
-                Class<?> paperChannelInitListener;
+                // Paper 26.x (MC 1.21.11+) still has ChannelInitializeListenerHolder API but
+                // ServerConnectionListener$3.initChannel no longer calls callListeners().
+                // This means the PaperMC listener is registered but NEVER invoked.
+                // We must use the old ForwardingList injection method (ViaVersion-style) which
+                // works by intercepting new ChannelFuture additions to the ServerConnection.
+                //
+                // On older Paper (1.12-1.20.x), the PaperMC API works correctly, so we try it first.
+                // But on Paper 26.x, we skip it and go straight to the old method.
+                //
+                // Detection: Paper 26.x uses a different package version. We check by looking
+                // for the "channels" field name on ServerConnectionListener (Paper 26.x renamed it).
+                // Actually, the simplest detection: try the PaperMC method, then verify it works
+                // by checking if callListeners is actually invoked. But that's too complex.
+                //
+                // Instead: try the PaperMC method. If it succeeds, ALSO register via the old method
+                // as a backup. The old method wraps the ChannelFuture list, so it intercepts
+                // ALL new connections regardless of whether callListeners is called.
+                // Having both active is harmless — the initHandler is idempotent (it checks
+                // if the pipeline already has our handlers).
+                
+                // Try PaperMC method first (works on Paper 1.13-1.20.x)
+                Runnable paperCleanup = null;
                 try {
-                        keyClz = Class.forName("net.kyori.adventure.key.Key");
-                        eaglerKey = keyClz.getMethod("key", String.class, String.class).invoke(null, "eaglerxserver",
+                        Class<?> keyClz = Class.forName("net.kyori.adventure.key.Key");
+                        Object eaglerKey = keyClz.getMethod("key", String.class, String.class).invoke(null, "eaglerxserver",
                                         "channel_initializer");
-                        paperChannelInitHolder = Class.forName("io.papermc.paper.network.ChannelInitializeListenerHolder");
-                        paperChannelInitListener = Class.forName("io.papermc.paper.network.ChannelInitializeListener");
+                        Class<?> paperChannelInitHolder = Class.forName("io.papermc.paper.network.ChannelInitializeListenerHolder");
+                        Class<?> paperChannelInitListener = Class.forName("io.papermc.paper.network.ChannelInitializeListener");
+                        paperCleanup = injectChannelInitializerPaper(paperChannelInitHolder, paperChannelInitListener, keyClz, eaglerKey,
+                                        initHandler, listener);
                 } catch (ReflectiveOperationException ex) {
-                        return injectChannelInitializerOld(server, initHandler, listener);
+                        // PaperMC API not available — fall through to old method only
                 }
-                return injectChannelInitializerPaper(paperChannelInitHolder, paperChannelInitListener, keyClz, eaglerKey,
-                                initHandler, listener);
+                
+                // ALSO use the old injection method as a backup/primary.
+                // On Paper 26.x, the PaperMC listener is never called, so the old method
+                // is the one that actually works. On older Paper, both methods run but
+                // the initHandler is idempotent so there's no harm.
+                Runnable oldCleanup = injectChannelInitializerOld(server, initHandler, listener);
+                
+                // Return a cleanup runnable that cleans up both
+                final Runnable pc = paperCleanup;
+                final Runnable oc = oldCleanup;
+                return () -> {
+                        if (pc != null) {
+                                try { pc.run(); } catch (Exception e) { /* ignore */ }
+                        }
+                        if (oc != null) {
+                                try { oc.run(); } catch (Exception e) { /* ignore */ }
+                        }
+                };
         }
 
         private static Runnable injectChannelInitializerPaper(Class<?> paperChannelInitHolder,
@@ -818,11 +835,6 @@ public class BukkitUnsafe {
         }
 
 
-    /**
-     * Calls GameProfile.getProperties() via reflection.
-     * Works across all authlib versions (4.x returns PropertyMap, 6.x returns a different type).
-     * This is the ONLY safe way to call getProperties() — direct calls throw NoSuchMethodError on Paper 26.x.
-     */
     public static Object getPropertiesSafe(GameProfile profile) {
         if (profile == null) return null;
         try {
@@ -833,9 +845,6 @@ public class BukkitUnsafe {
         }
     }
 
-    /**
-     * Puts a property into a GameProfile's properties via reflection.
-     */
     public static void putPropertySafe(GameProfile profile, String key, Property value) {
         if (profile == null) return;
         try {
@@ -843,29 +852,9 @@ public class BukkitUnsafe {
             if (props == null) return;
             java.lang.reflect.Method put = props.getClass().getMethod("put", Object.class, Object.class);
             put.invoke(props, key, value);
-        } catch (Exception e) {
-            // Skip — can't put property
-        }
+        } catch (Exception e) { }
     }
 
-    /**
-     * Removes all properties with the given key via reflection.
-     */
-    public static void removeAllPropertiesSafe(GameProfile profile, String key) {
-        if (profile == null) return;
-        try {
-            Object props = getPropertiesSafe(profile);
-            if (props == null) return;
-            java.lang.reflect.Method removeAll = props.getClass().getMethod("removeAll", Object.class);
-            removeAll.invoke(props, key);
-        } catch (Exception e) {
-            // Skip
-        }
-    }
-
-    /**
-     * Gets all property values as a Collection via reflection.
-     */
     @SuppressWarnings("unchecked")
     public static java.util.Collection<Property> getPropertyValuesSafe(GameProfile profile) {
         if (profile == null) return java.util.Collections.emptyList();
@@ -874,18 +863,11 @@ public class BukkitUnsafe {
             if (props == null) return java.util.Collections.emptyList();
             java.lang.reflect.Method values = props.getClass().getMethod("values");
             Object result = values.invoke(props);
-            if (result instanceof java.util.Collection) {
-                return (java.util.Collection<Property>) result;
-            }
-        } catch (Exception e) {
-            // Skip
-        }
+            if (result instanceof java.util.Collection) return (java.util.Collection<Property>) result;
+        } catch (Exception e) { }
         return java.util.Collections.emptyList();
     }
 
-    /**
-     * Removes a specific property via reflection.
-     */
     public static void removePropertySafe(GameProfile profile, String key, Property value) {
         if (profile == null) return;
         try {
@@ -893,8 +875,7 @@ public class BukkitUnsafe {
             if (props == null) return;
             java.lang.reflect.Method remove = props.getClass().getMethod("remove", Object.class, Object.class);
             remove.invoke(props, key, value);
-        } catch (Exception e) {
-            // Skip
-        }
+        } catch (Exception e) { }
     }
+
 }
