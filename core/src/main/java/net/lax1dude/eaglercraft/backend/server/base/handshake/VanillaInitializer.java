@@ -196,12 +196,7 @@ public class VanillaInitializer {
 	}
 
 	private void handleKickPacket(ChannelHandlerContext ctx, ByteBuf data) {
-		String pkt;
-		try {
-			pkt = BufferUtils.readMCString(data, 32767);
-		} catch (Exception e) {
-			pkt = "Disconnected from server";
-		}
+		String pkt = BufferUtils.readMCString(data, 32767);
 		inboundHandler.terminateErrorCode(ctx, pipelineData.handshakeProtocol,
 				HandshakePacketTypes.SERVER_ERROR_CUSTOM_MESSAGE, pkt);
 		connectionState = STATE_COMPLETE;

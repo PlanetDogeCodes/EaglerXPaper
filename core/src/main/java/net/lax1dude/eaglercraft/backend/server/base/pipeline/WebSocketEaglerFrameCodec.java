@@ -27,30 +27,36 @@ import io.netty.handler.codec.http.websocketx.WebSocketFrame;
 @ChannelHandler.Sharable
 public class WebSocketEaglerFrameCodec extends ChannelDuplexHandler {
 
-	public static final WebSocketEaglerFrameCodec INSTANCE = new WebSocketEaglerFrameCodec();
+        public static final WebSocketEaglerFrameCodec INSTANCE = new WebSocketEaglerFrameCodec();
 
-	@Override
-	public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
-		if (msg instanceof BinaryWebSocketFrame msg1) {
-			ctx.fireChannelRead(msg1.content());
-		} else if (msg instanceof WebSocketFrame msg2) {
-			// Text or close frames
-			msg2.release();
-			ctx.close();
-		} else {
-			ctx.fireChannelRead(msg);
-		}
-	}
+        @Override
+        public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
+                if (msg instanceof BinaryWebSocketFrame msg1) {
+                        // Hotfix 4: explicitly transfer ownership of the content ByteBuf
+                        // by retaining it before firing downstream, then release the frame.
+                        // Without this, if the downstream handler forgets to release the
+                        // ByteBuf, both the ByteBuf and the frame leak.
+                        ctx.fireChannelRead(msg1.content().retain());
+                        msg1.release();
+                } else if (msg instanceof WebSocketFrame msg2) {
+                        // Text or close frames
+                        msg2.release();
+                        ctx.close();
+                } else {
+                        ctx.fireChannelRead(msg);
+                }
+        }
 
-	@Override
-	public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception {
-		if (msg instanceof ByteBuf buf) {
-			if (buf.readableBytes() > 0) {
-				ctx.write(new BinaryWebSocketFrame(buf), promise);
-				return;
-			}
-		}
-		ctx.write(msg, promise);
-	}
+        @Override
+        public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception {
+                if (msg instanceof ByteBuf buf) {
+                        // Hotfix 4: wrap empty ByteBufs in BinaryWebSocketFrame too, for
+                        // consistency. The old code skipped wrapping for empty buffers,
+                        // which could send a raw non-WebSocket byte stream downstream.
+                        ctx.write(new BinaryWebSocketFrame(buf), promise);
+                        return;
+                }
+                ctx.write(msg, promise);
+        }
 
 }

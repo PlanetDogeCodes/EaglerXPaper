@@ -211,22 +211,13 @@ public class BukkitUnsafe {
                         bindCraftPlayer(player);
                 }
                 try {
-                        GameProfile profile = (GameProfile) method_EntityPlayer_getProfile
-                                        .invoke(method_CraftPlayer_getHandle.invoke(player));
-                        Object propsObj = getPropertiesSafe(profile);
-                        if (propsObj != null) {
-                            try {
-                                java.lang.reflect.Method getMethod = propsObj.getClass().getMethod("get", Object.class);
-                                Object texCollection = getMethod.invoke(propsObj, "textures");
-                                if (texCollection instanceof Collection<?> tex && !tex.isEmpty()) {
-                                    Object first = tex.iterator().next();
-                                    if (first instanceof Property p) {
-                                        return p.getValue();
-                                    }
-                                }
-                            } catch (Exception ex) {
-                                // Skip
-                            }
+                        Multimap<String, Property> props = ((GameProfile) method_EntityPlayer_getProfile
+                                        .invoke(method_CraftPlayer_getHandle.invoke(player))).getProperties();
+                        Collection<Property> tex = props.get("textures");
+                        if (!tex.isEmpty()) {
+                                // Hotfix 4: use reflection-based getter to survive authlib 6.x
+                                // which renamed getValue() to value().
+                                return getPropertyValue(tex.iterator().next());
                         }
                 } catch (ReflectiveOperationException e) {
                         throw Util.propagateReflectThrowable(e);
@@ -239,39 +230,26 @@ public class BukkitUnsafe {
 
         public static class PropertyInjector {
 
-                private final Object props;
+                private final Multimap<String, Property> props;
                 private final Object lock;
 
-                protected PropertyInjector(Object props, Object lock) {
+                protected PropertyInjector(Multimap<String, Property> props, Object lock) {
                         this.props = props;
-                        this.lock = lock != null ? lock : props;
+                        this.lock = lock;
                 }
 
                 public void injectTexturesProperty(String texturesPropertyValue, String texturesPropertySignature) {
                         synchronized (lock) {
-                                try {
-                                        java.lang.reflect.Method removeAll = props.getClass().getMethod("removeAll", Object.class);
-                                        removeAll.invoke(props, "textures");
-                                        java.lang.reflect.Method put = props.getClass().getMethod("put", Object.class, Object.class);
-                                        put.invoke(props, "textures",
-                                                        new Property("textures", texturesPropertyValue, texturesPropertySignature));
-                                } catch (Exception e) {
-                                        throw new RuntimeException("Failed to inject textures property", e);
-                                }
+                                props.removeAll("textures");
+                                props.put("textures",
+                                                new Property("textures", texturesPropertyValue, texturesPropertySignature));
                         }
                 }
 
                 public void injectIsEaglerPlayerProperty(boolean val) {
                         synchronized (lock) {
-                                try {
-                                        java.lang.reflect.Method removeAll = props.getClass().getMethod("removeAll", Object.class);
-                                        removeAll.invoke(props, "isEaglerPlayer");
-                                        java.lang.reflect.Method put = props.getClass().getMethod("put", Object.class, Object.class);
-                                        put.invoke(props, "isEaglerPlayer",
-                                                        val ? isEaglerPlayerPropertyT : isEaglerPlayerPropertyF);
-                                } catch (Exception e) {
-                                        throw new RuntimeException("Failed to inject isEaglerPlayer property", e);
-                                }
+                                props.removeAll("isEaglerPlayer");
+                                props.put("isEaglerPlayer", val ? isEaglerPlayerPropertyT : isEaglerPlayerPropertyF);
                         }
                 }
 
@@ -287,7 +265,7 @@ public class BukkitUnsafe {
                 try {
                         GameProfile profile = (GameProfile) method_EntityPlayer_getProfile
                                         .invoke(method_CraftPlayer_getHandle.invoke(player));
-                        return new PropertyInjector(getPropertiesSafe(profile), profile);
+                        return new PropertyInjector(profile.getProperties(), profile);
                 } catch (ReflectiveOperationException e) {
                         throw Util.propagateReflectThrowable(e);
                 }
@@ -382,11 +360,17 @@ public class BukkitUnsafe {
                 public void run() {
                         List<ChannelInitializerHijacker> cc;
                         synchronized (this) {
+                                // Hotfix 4: null check — run() may be called twice (e.g., double-disable)
+                                if (cleanup == null) return;
                                 cc = new ArrayList<>(cleanup);
                                 cleanup = null;
                         }
                         for (ChannelInitializerHijacker c : cc) {
-                                c.deactivate();
+                                try {
+                                        c.deactivate();
+                                } catch (Throwable t) {
+                                        // Best effort — don't let one failure abort the rest
+                                }
                         }
                 }
 
@@ -699,7 +683,16 @@ public class BukkitUnsafe {
         }
 
         public static EventLoopGroup getEventLoopGroup(Class<?> serverConnection, boolean enableNativeTransport) {
-                Field[] fields = serverConnection.getFields();
+                // Hotfix 4: walk declared fields across the whole superclass chain (private
+                // fields included), not just public getFields(). Paper 1.17+ makes the
+                // static EventLoopGroup fields private on ServerConnection.
+                List<Field> fields = new ArrayList<>();
+                Class<?> walkClz = serverConnection;
+                do {
+                        for (Field f : walkClz.getDeclaredFields()) {
+                                fields.add(f);
+                        }
+                } while ((walkClz = walkClz.getSuperclass()) != Object.class);
                 if (enableNativeTransport) {
                         for (Field field : fields) {
                                 Class<?> clz = field.getType();
@@ -712,6 +705,7 @@ public class BukkitUnsafe {
                                                         for (Method m : clz.getMethods()) {
                                                                 if (m.getGenericReturnType() != m.getReturnType()) {
                                                                         try {
+                                                                                field.setAccessible(true);
                                                                                 return (EventLoopGroup) m.invoke(field.get(null));
                                                                         } catch (ReflectiveOperationException e) {
                                                                                 throw Util.propagateReflectThrowable(e);
@@ -733,6 +727,7 @@ public class BukkitUnsafe {
                                                 for (Method m : clz.getMethods()) {
                                                         if (m.getGenericReturnType() != m.getReturnType()) {
                                                                 try {
+                                                                        field.setAccessible(true);
                                                                         return (EventLoopGroup) m.invoke(field.get(null));
                                                                 } catch (ReflectiveOperationException e) {
                                                                         throw Util.propagateReflectThrowable(e);
@@ -759,6 +754,7 @@ public class BukkitUnsafe {
                         for (Field field : fields) {
                                 if (epollType.isAssignableFrom(field.getType())) {
                                         try {
+                                                field.setAccessible(true);
                                                 Object val = field.get(null);
                                                 if (val instanceof EventLoopGroup) {
                                                         return (EventLoopGroup) val;
@@ -773,6 +769,7 @@ public class BukkitUnsafe {
                         for (Field field : fields) {
                                 if (nioType.isAssignableFrom(field.getType())) {
                                         try {
+                                                field.setAccessible(true);
                                                 Object val = field.get(null);
                                                 if (val instanceof EventLoopGroup) {
                                                         return (EventLoopGroup) val;
@@ -817,84 +814,121 @@ public class BukkitUnsafe {
                 }
         }
 
+        // ===================================================================
+        // HOTFIX 4 — authlib 6.x compatibility helpers.
+        //
+        // Paper 26.x (MC 1.21.11+) ships authlib 6.x, which changed the
+        // Property class from using getName()/getValue()/getSignature()
+        // to using name()/value()/signature() (record-style accessors).
+        //
+        // The old methods were removed, causing NoSuchMethodError at runtime
+        // when EaglerXServer calls property.getName() to get the property
+        // key for the Multimap.
+        //
+        // These helpers use reflection to call whichever method exists,
+        // caching the result for performance. They are null-safe and
+        // exception-safe — if neither method exists, they return null.
+        // ===================================================================
 
-    /**
-     * Calls GameProfile.getProperties() via reflection.
-     * Works across all authlib versions (4.x returns PropertyMap, 6.x returns a different type).
-     * This is the ONLY safe way to call getProperties() — direct calls throw NoSuchMethodError on Paper 26.x.
-     */
-    public static Object getPropertiesSafe(GameProfile profile) {
-        if (profile == null) return null;
-        try {
-            java.lang.reflect.Method m = profile.getClass().getMethod("getProperties");
-            return m.invoke(profile);
-        } catch (Exception e) {
-            return null;
-        }
-    }
+        private static volatile Method propertyGetNameMethod = null;
+        private static volatile Method propertyGetValueMethod = null;
+        private static volatile boolean propertyMethodsInit = false;
 
-    /**
-     * Puts a property into a GameProfile's properties via reflection.
-     */
-    public static void putPropertySafe(GameProfile profile, String key, Property value) {
-        if (profile == null) return;
-        try {
-            Object props = getPropertiesSafe(profile);
-            if (props == null) return;
-            java.lang.reflect.Method put = props.getClass().getMethod("put", Object.class, Object.class);
-            put.invoke(props, key, value);
-        } catch (Exception e) {
-            // Skip — can't put property
+        private static synchronized void initPropertyMethods() {
+                if (propertyMethodsInit) return;
+                // Try getName() first (authlib 1.x-5.x), then name() (authlib 6.x+)
+                try {
+                        propertyGetNameMethod = Property.class.getMethod("getName");
+                } catch (NoSuchMethodException e) {
+                        try {
+                                propertyGetNameMethod = Property.class.getMethod("name");
+                        } catch (NoSuchMethodException e2) {
+                                propertyGetNameMethod = null;
+                        }
+                }
+                // Try getValue() first (authlib 1.x-5.x), then value() (authlib 6.x+)
+                try {
+                        propertyGetValueMethod = Property.class.getMethod("getValue");
+                } catch (NoSuchMethodException e) {
+                        try {
+                                propertyGetValueMethod = Property.class.getMethod("value");
+                        } catch (NoSuchMethodException e2) {
+                                propertyGetValueMethod = null;
+                        }
+                }
+                propertyMethodsInit = true;
         }
-    }
 
-    /**
-     * Removes all properties with the given key via reflection.
-     */
-    public static void removeAllPropertiesSafe(GameProfile profile, String key) {
-        if (profile == null) return;
-        try {
-            Object props = getPropertiesSafe(profile);
-            if (props == null) return;
-            java.lang.reflect.Method removeAll = props.getClass().getMethod("removeAll", Object.class);
-            removeAll.invoke(props, key);
-        } catch (Exception e) {
-            // Skip
+        /**
+         * Returns the name of a Property using reflection, surviving the
+         * authlib 6.x rename from getName() to name().
+         * Returns null if prop is null or neither method exists.
+         */
+        public static String getPropertyName(Property prop) {
+                if (prop == null) return null;
+                if (!propertyMethodsInit) initPropertyMethods();
+                if (propertyGetNameMethod == null) return null;
+                try {
+                        return (String) propertyGetNameMethod.invoke(prop);
+                } catch (Exception e) {
+                        return null;
+                }
         }
-    }
 
-    /**
-     * Gets all property values as a Collection via reflection.
-     */
-    @SuppressWarnings("unchecked")
-    public static java.util.Collection<Property> getPropertyValuesSafe(GameProfile profile) {
-        if (profile == null) return java.util.Collections.emptyList();
-        try {
-            Object props = getPropertiesSafe(profile);
-            if (props == null) return java.util.Collections.emptyList();
-            java.lang.reflect.Method values = props.getClass().getMethod("values");
-            Object result = values.invoke(props);
-            if (result instanceof java.util.Collection) {
-                return (java.util.Collection<Property>) result;
-            }
-        } catch (Exception e) {
-            // Skip
+        /**
+         * Returns the value of a Property using reflection, surviving the
+         * authlib 6.x rename from getValue() to value().
+         * Returns null if prop is null or neither method exists.
+         */
+        public static String getPropertyValue(Property prop) {
+                if (prop == null) return null;
+                if (!propertyMethodsInit) initPropertyMethods();
+                if (propertyGetValueMethod == null) return null;
+                try {
+                        return (String) propertyGetValueMethod.invoke(prop);
+                } catch (Exception e) {
+                        return null;
+                }
         }
-        return java.util.Collections.emptyList();
-    }
 
-    /**
-     * Removes a specific property via reflection.
-     */
-    public static void removePropertySafe(GameProfile profile, String key, Property value) {
-        if (profile == null) return;
-        try {
-            Object props = getPropertiesSafe(profile);
-            if (props == null) return;
-            java.lang.reflect.Method remove = props.getClass().getMethod("remove", Object.class, Object.class);
-            remove.invoke(props, key, value);
-        } catch (Exception e) {
-            // Skip
+        /**
+         * Puts a Property into a GameProfile's properties map using reflection.
+         * This wraps the put(key, value) call on the Multimap returned by
+         * getProperties(), and uses getPropertyName() to get the key.
+         *
+         * This is the single entry point for inserting marker properties
+         * during login, and is safe to call on all authlib versions.
+         */
+        @SuppressWarnings("unchecked")
+        public static void putProfileProperty(GameProfile profile, Property prop) {
+                if (profile == null || prop == null) return;
+                try {
+                        Multimap<String, Property> props = profile.getProperties();
+                        String name = getPropertyName(prop);
+                        if (name != null) {
+                                props.put(name, prop);
+                        }
+                } catch (Throwable t) {
+                        // Best effort — don't crash login on property insertion failure
+                }
         }
-    }
+
+        /**
+         * Removes a Property from a GameProfile's properties map using reflection.
+         * Uses getPropertyName() to get the key for the remove call.
+         */
+        @SuppressWarnings("unchecked")
+        public static void removeProfileProperty(GameProfile profile, Property prop) {
+                if (profile == null || prop == null) return;
+                try {
+                        Multimap<String, Property> props = profile.getProperties();
+                        String name = getPropertyName(prop);
+                        if (name != null) {
+                                props.remove(name, prop);
+                        }
+                } catch (Throwable t) {
+                        // Best effort
+                }
+        }
+
 }

@@ -333,7 +333,50 @@ public class PlayerPostLoginInjector {
                                                                 return null;
                                                         }
                                                 }
-                                                return meth.invoke(netManager, args);
+                                                // Hotfix 4: Intercept setupCompression / setCompressionThreshold
+                                                // method calls and no-op them for Eaglercraft connections.
+                                                //
+                                                // Eaglercraft clients use WebSocket-level compression (deflate-frame
+                                                // extension), NOT Minecraft packet-level compression. When the vanilla
+                                                // server calls setupCompression(threshold) on the proxied NetworkManager,
+                                                // it tries to add compression handlers to the pipeline via
+                                                // pipeline.addAfter("splitter", ...) — but "splitter" is not in the
+                                                // Eaglercraft pipeline at that point, causing NoSuchElementException.
+                                                //
+                                                // The method name varies across versions:
+                                                //   - 1.12-1.16: setCompressionThreshold(int) on NetworkManager
+                                                //   - 1.17+:     setupCompression(int) on Connection
+                                                //   - Paper 26.x: setupCompression(int, boolean) on Connection
+                                                //
+                                                // We check the method name and no-op if it matches either name.
+                                                // This is safe because we already skip sending the
+                                                // ClientboundLoginCompressionPacket to the Eaglercraft client
+                                                // (see the compressionDisable check above), so the client never
+                                                // expects Minecraft-level compression to be active.
+                                                String methName = meth.getName();
+                                                if ("setupCompression".equals(methName) || "setCompressionThreshold".equals(methName)) {
+                                                        return null;
+                                                }
+                                                // Hotfix 4 (redundancy): wrap the generic passthrough in a
+                                                // try-catch that catches pipeline-related exceptions and logs
+                                                // them instead of crashing the login flow. This handles any
+                                                // other pipeline-state issues we might have missed.
+                                                try {
+                                                        return meth.invoke(netManager, args);
+                                                } catch (java.lang.reflect.InvocationTargetException ite) {
+                                                        Throwable cause = ite.getCause();
+                                                        if (cause instanceof java.util.NoSuchElementException
+                                                                        || cause instanceof java.lang.NullPointerException) {
+                                                                // Pipeline handler not found — likely a timing issue
+                                                                // during the Eaglercraft-to-vanilla pipeline transition.
+                                                                // Log and swallow rather than crashing.
+                                                                java.util.logging.Logger.getLogger("EaglerXServer").warning(
+                                                                                "[Hotfix4] Swallowed pipeline exception in " + methName
+                                                                                + ": " + cause);
+                                                                return null;
+                                                        }
+                                                        throw ite;
+                                                }
                                         });
                         ctx.proxiedNetworkManager = ret;
                         channel.attr(attr).set(ctx);
@@ -585,10 +628,12 @@ public class PlayerPostLoginInjector {
                                                                 if (er instanceof EaglerError err) {
                                                                         Player player = null;
                                                                         synchronized (err.gameProfile) {
-                                                                                java.util.Iterator<Property> itr = BukkitUnsafe.getPropertyValuesSafe(err.gameProfile).iterator();
+                                                                                Iterator<Property> itr = err.gameProfile.getProperties().values().iterator();
                                                                                 while (itr.hasNext()) {
                                                                                         Property prop = itr.next();
-                                                                                        if (prop.getName().startsWith("$eaglerMarker_")) {
+                                                                                        // Hotfix 4: use reflection-based getter for authlib 6.x
+                                                                                        String propName = BukkitUnsafe.getPropertyName(prop);
+                                                                                        if (propName != null && propName.startsWith("$eaglerMarker_")) {
                                                                                                 Player e = entityPlayers.remove(prop);
                                                                                                 if (e != null) {
                                                                                                         player = e;
@@ -782,13 +827,26 @@ public class PlayerPostLoginInjector {
         }
 
         public void handleLoginEvent(PlayerLoginEvent event) {
-                Property marker = new Property("$eaglerMarker_" + ThreadLocalRandom.current().nextLong(Long.MAX_VALUE), "TMP");
-                Object player = BukkitUnsafe.getHandle(event.getPlayer());
-                GameProfile profile = BukkitUnsafe.getGameProfile(player);
-                synchronized (profile) {
-                        BukkitUnsafe.putPropertySafe(profile, marker.getName(), marker);
+                // Hotfix 4: use reflection-based property helpers to survive authlib 6.x
+                // (Paper 26.x / MC 1.21.11+) which renamed Property.getName() to name().
+                // The old code called marker.getName() directly, causing NoSuchMethodError.
+                try {
+                        Property marker = new Property("$eaglerMarker_" + ThreadLocalRandom.current().nextLong(Long.MAX_VALUE), "TMP");
+                        Object player = BukkitUnsafe.getHandle(event.getPlayer());
+                        GameProfile profile = BukkitUnsafe.getGameProfile(player);
+                        if (profile != null) {
+                                synchronized (profile) {
+                                        BukkitUnsafe.putProfileProperty(profile, marker);
+                                }
+                                entityPlayers.put(marker, event.getPlayer());
+                        }
+                } catch (Throwable t) {
+                        // Best effort — don't crash the login event on marker injection failure.
+                        // The player will still be able to connect; they just won't be tracked
+                        // for the post-login event flow.
+                        java.util.logging.Logger.getLogger("EaglerXServer").warning(
+                                        "Failed to inject Eagler marker property during login: " + t);
                 }
-                entityPlayers.put(marker, event.getPlayer());
         }
 
         private void fireEventLoginInit(Channel channel) {

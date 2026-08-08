@@ -51,7 +51,8 @@ class BukkitListener implements Listener {
                 Channel channel = evt.netty().getChannel();
                 PlayerPostLoginInjector.LoginEventContext ctx = channel.attr(PlayerPostLoginInjector.attr).get();
                 IPipelineData pipelineData = channel.attr(PipelineAttributes.<IPipelineData>pipelineData()).get();
-                if (pipelineData != null && pipelineData.isCompressionDisable()) {
+                // Hotfix 4: ctx can be null for non-Eaglercraft (vanilla) connections.
+                if (ctx != null && pipelineData != null && pipelineData.isCompressionDisable()) {
                         ctx.markCompressionDisable(true);
                 }
         }
@@ -123,12 +124,17 @@ class BukkitListener implements Listener {
                         com.mojang.authlib.GameProfile profile = BukkitUnsafe.getGameProfile(handle);
                         if (profile != null) {
                                 synchronized (profile) {
-                                        com.mojang.authlib.properties.Property[] toRemove = BukkitUnsafe.getPropertyValuesSafe(profile)
-                                                        .stream()
-                                                        .filter(p -> p.getName().startsWith("$eaglerMarker_"))
-                                                        .toArray(com.mojang.authlib.properties.Property[]::new);
+                                        // Hotfix 4: use reflection-based getter for authlib 6.x compatibility.
+                                        // Also collect first, then remove, to avoid ConcurrentModificationException.
+                                        java.util.List<com.mojang.authlib.properties.Property> toRemove = new java.util.ArrayList<>();
+                                        for (com.mojang.authlib.properties.Property p : profile.getProperties().values()) {
+                                                String name = BukkitUnsafe.getPropertyName(p);
+                                                if (name != null && name.startsWith("$eaglerMarker_")) {
+                                                        toRemove.add(p);
+                                                }
+                                        }
                                         for (com.mojang.authlib.properties.Property p : toRemove) {
-                                                BukkitUnsafe.removePropertySafe(profile, p.getName(), p);
+                                                BukkitUnsafe.removeProfileProperty(profile, p);
                                         }
                                 }
                         }
