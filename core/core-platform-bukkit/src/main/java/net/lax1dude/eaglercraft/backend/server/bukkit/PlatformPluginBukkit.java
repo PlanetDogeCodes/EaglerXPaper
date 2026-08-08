@@ -166,11 +166,10 @@ public class PlatformPluginBukkit extends JavaPlugin implements IPlatform<Player
                 cacheConsoleCommandSenderInstance = server.getConsoleSender();
                 cacheConsoleCommandSenderHandle = new BukkitConsole(cacheConsoleCommandSenderInstance);
                 enableNativeTransport = Epoll.isAvailable() && BukkitUnsafe.isEnableNativeTransport(server);
-                // Bug #14/#15 fix: use explicit ownership-tracking API instead of inspecting
-                // the group's toString() for our thread name prefix.
-                BukkitUnsafe.EventLoopGroupResult elgResult = BukkitUnsafe.getEventLoopGroupWithOwnership(server, enableNativeTransport);
-                eventLoopGroup = elgResult.group;
-                ownsEventLoopGroup = elgResult.owns;
+                eventLoopGroup = BukkitUnsafe.getEventLoopGroup(server, enableNativeTransport);
+                // Check if we created the EventLoopGroup ourselves (vs borrowing the server's).
+                // We do this by checking if any of its threads have our naming prefix.
+                ownsEventLoopGroup = isOwnEventLoopGroup(eventLoopGroup);
                 postLoginInjector = new PlayerPostLoginInjector(this);
                 if (enableNativeTransport && !(eventLoopGroup instanceof EpollEventLoopGroup)) {
                         enableNativeTransport = false;
@@ -403,43 +402,39 @@ public class PlatformPluginBukkit extends JavaPlugin implements IPlatform<Player
 
         @Override
         public void onDisable() {
-                // Bug #15 fix: ALWAYS shut down the EventLoopGroup if we own it, even if aborted
-                // is true. Previously, if onEnable threw after creating the group, aborted stayed
-                // true and the group was leaked.
+                if (aborted) {
+                        return;
+                }
                 if (cleanupListeners != null) {
-                        try { cleanupListeners.run(); } catch (Throwable t) { /* best effort */ }
+                        cleanupListeners.run();
                         cleanupListeners = null;
                 }
                 if (onServerDisable != null) {
-                        try { onServerDisable.run(); } catch (Throwable t) { /* best effort */ }
+                        onServerDisable.run();
                 }
                 Server server = getServer();
-                if (commandsList != null) {
-                        for (IEaglerXServerCommandType<Player> cmd : commandsList) {
-                                try { server.getPluginManager().removePermission(cmd.getPermission()); } catch (Throwable t) { /* best effort */ }
-                        }
+                for (IEaglerXServerCommandType<Player> cmd : commandsList) {
+                        server.getPluginManager().removePermission(cmd.getPermission());
                 }
-                if (playerChannelsList != null) {
-                        Messenger msgr = server.getMessenger();
+                Messenger msgr = server.getMessenger();
+                if (!post_v1_13) {
+                        msgr.unregisterIncomingPluginChannel(this, "MC|Brand");
+                }
+                msgr.unregisterIncomingPluginChannel(this, "minecraft:brand");
+                for (IEaglerXServerMessageChannel<Player> channel : playerChannelsList) {
+                        IEaglerXServerMessageHandler<Player> handler = channel.getHandler();
+                        msgr.unregisterOutgoingPluginChannel(this, channel.getModernName());
                         if (!post_v1_13) {
-                                try { msgr.unregisterIncomingPluginChannel(this, "MC|Brand"); } catch (Throwable t) { /* best effort */ }
+                                msgr.unregisterOutgoingPluginChannel(this, channel.getLegacyName());
                         }
-                        try { msgr.unregisterIncomingPluginChannel(this, "minecraft:brand"); } catch (Throwable t) { /* best effort */ }
-                        for (IEaglerXServerMessageChannel<Player> channel : playerChannelsList) {
-                                IEaglerXServerMessageHandler<Player> handler = channel.getHandler();
-                                try { msgr.unregisterOutgoingPluginChannel(this, channel.getModernName()); } catch (Throwable t) { /* best effort */ }
+                        if (handler != null) {
+                                msgr.unregisterIncomingPluginChannel(this, channel.getModernName());
                                 if (!post_v1_13) {
-                                        try { msgr.unregisterOutgoingPluginChannel(this, channel.getLegacyName()); } catch (Throwable t) { /* best effort */ }
-                                }
-                                if (handler != null) {
-                                        try { msgr.unregisterIncomingPluginChannel(this, channel.getModernName()); } catch (Throwable t) { /* best effort */ }
-                                        if (!post_v1_13) {
-                                                try { msgr.unregisterIncomingPluginChannel(this, channel.getLegacyName()); } catch (Throwable t) { /* best effort */ }
-                                        }
+                                        msgr.unregisterIncomingPluginChannel(this, channel.getLegacyName());
                                 }
                         }
                 }
-                // Bug #14/#15 fix: ALWAYS shut down the EventLoopGroup if we own it (no aborted check).
+                // Shut down EventLoopGroup if we created it (don't shut down the server's own)
                 if (ownsEventLoopGroup && eventLoopGroup != null) {
                         try {
                                 eventLoopGroup.shutdownGracefully(0, 5, java.util.concurrent.TimeUnit.SECONDS);
@@ -451,9 +446,36 @@ public class PlatformPluginBukkit extends JavaPlugin implements IPlatform<Player
                 }
         }
 
-        // Bug #14/#15 fix: the unreliable isOwnEventLoopGroup(EventLoopGroup) method
-        // was removed. We now use the explicit EventLoopGroupResult.owns flag returned
-        // by BukkitUnsafe.getEventLoopGroupWithOwnership(...).
+        /**
+         * Checks if an EventLoopGroup was created by EaglerXPaper (vs borrowed from the server).
+         * We check if any of its threads have our naming prefix.
+         */
+        private static boolean isOwnEventLoopGroup(EventLoopGroup group) {
+                if (group == null) return false;
+                try {
+                        // Our createOwnEventLoopGroup uses "Netty Server IO" as the thread name prefix.
+                        // Check if the group contains threads with that prefix.
+                        java.util.Set<io.netty.util.concurrent.EventExecutor> executors = new java.util.HashSet<>();
+                        group.forEach(executors::add);
+                        for (io.netty.util.concurrent.EventExecutor exec : executors) {
+                                if (exec instanceof java.util.concurrent.ExecutorService) {
+                                        // Can't easily enumerate threads, so check the class name
+                                        // Our created groups are EpollEventLoopGroup or NioEventLoopGroup
+                                        // instantiated directly by us (not the server's).
+                                        // The server's groups are also these classes, so this check
+                                        // is imperfect. Fall back to checking thread name.
+                                }
+                        }
+                        // Best-effort: check if the group's toString contains our prefix
+                        String str = group.toString();
+                        if (str != null && str.contains("Netty Server IO")) {
+                                return true;
+                        }
+                } catch (Exception e) {
+                        // Best effort
+                }
+                return false;
+        }
 
         @Override
         public EnumAdapterPlatformType getType() {
@@ -668,12 +690,6 @@ public class PlatformPluginBukkit extends JavaPlugin implements IPlatform<Player
 
                         @Override
                         public void complete() {
-                                // Bug #16 fix: idempotency guard. If complete() is called twice
-                                // (e.g., due to a race between the confirm task timeout and the
-                                // normal completion path), the second call is a no-op.
-                                if (!p.initialized.compareAndSet(false, true)) {
-                                        return;
-                                }
                                 Object obj = null;
                                 synchronized (p) {
                                         if (p.closeRedirector != null) {
@@ -688,16 +704,6 @@ public class PlatformPluginBukkit extends JavaPlugin implements IPlatform<Player
                                 playerInstanceMap.put(player, p);
                                 p.confirmTask = getServer().getScheduler().runTaskLaterAsynchronously(PlatformPluginBukkit.this, () -> {
                                         p.confirmTask = null;
-                                        // Bug #19 fix: check if the player is still online before dropping.
-                                        // During server lag spikes, 100 ticks may take much longer than 5
-                                        // seconds of real time, and the player may have already joined but
-                                        // the join event hasn't been processed yet.
-                                        if (player.isOnline()) {
-                                                getLogger().info("Player " + p.getUsername()
-                                                                + " is online but PlayerJoinEvent hasn't fired yet (lag?),"
-                                                                + " keeping them registered.");
-                                                return;
-                                        }
                                         getLogger().warning("Player " + p.getUsername()
                                                         + " was initialized, but never fired PlayerJoinEvent, dropping...");
                                         dropPlayer(player);
@@ -711,10 +717,6 @@ public class PlatformPluginBukkit extends JavaPlugin implements IPlatform<Player
 
                         @Override
                         public void cancel() {
-                                // Bug #16 fix: idempotency guard for cancel() too.
-                                if (!p.initialized.compareAndSet(false, true)) {
-                                        return;
-                                }
                                 Object obj = null;
                                 synchronized (p) {
                                         if (p.closeRedirector != null) {
@@ -761,13 +763,7 @@ public class PlatformPluginBukkit extends JavaPlugin implements IPlatform<Player
                 if (p != null) {
                         IEaglerXServerJoinListener<Player> listener = serverJoinListener;
                         if (listener != null) {
-                                // Bug #17 fix: worldChange previously called BOTH handlePreConnect
-                                // and handlePostConnect in sequence, which is incorrect — the
-                                // player is already connected, they just changed worlds. This
-                                // double-firing can confuse listeners that track state transitions.
-                                // We now only call handlePostConnect, which is the correct
-                                // semantic for a world change (the player has "connected" to a
-                                // new world server).
+                                listener.handlePreConnect(p);
                                 listener.handlePostConnect(p, p.getServer());
                         }
                 }
@@ -783,30 +779,16 @@ public class PlatformPluginBukkit extends JavaPlugin implements IPlatform<Player
         }
 
         private boolean isPost_v1_13() {
-                // Bug #18 fix: use a regex to extract the major.minor version from the
-                // Bukkit version string, which can take many forms:
-                //   "1.21.1-R0.1-SNAPSHOT", "git-Paper-123 (MC: 1.21.1)", "1.12.2-R0.1-SNAPSHOT",
-                //   "1.21.1-pre1", etc. The old split-based approach threw NumberFormatException
-                // on non-standard version strings and silently returned false (treating a 1.21
-                // server as pre-1.13), causing the plugin to register legacy plugin channels.
-                String ver = getServer().getBukkitVersion();
-                if (ver == null || ver.isEmpty()) {
-                        // Conservative default: assume modern.
-                        return true;
-                }
-                java.util.regex.Matcher m = java.util.regex.Pattern.compile("(?<![0-9])([0-9]+)\\.([0-9]+)").matcher(ver);
-                if (m.find()) {
+                String[] ver = getServer().getBukkitVersion().split("[\\.\\-]");
+                if (ver.length >= 2) {
                         try {
-                                int major = Integer.parseInt(m.group(1));
-                                int minor = Integer.parseInt(m.group(2));
-                                return major > 1 || (major == 1 && minor >= 13);
+                                int i = Integer.parseInt(ver[0]);
+                                int j = Integer.parseInt(ver[1]);
+                                return i > 1 || (i == 1 && j >= 13);
                         } catch (NumberFormatException ex) {
-                                // fall through
                         }
                 }
-                // Could not parse — assume modern (the plugin is more likely to run on
-                // modern Paper than on 1.12 or earlier).
-                return true;
+                return false;
         }
 
 }

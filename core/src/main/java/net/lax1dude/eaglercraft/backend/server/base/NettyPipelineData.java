@@ -55,403 +55,385 @@ import net.lax1dude.eaglercraft.backend.server.util.EnumRateLimitState;
 import net.lax1dude.eaglercraft.v1_8.socket.protocol.GamePluginMessageProtocol;
 
 public class NettyPipelineData extends IIdentifiedConnection.Base
-                implements IEaglerConnection, INettyChannel.NettyUnsafe, IPipelineData {
+		implements IEaglerConnection, INettyChannel.NettyUnsafe, IPipelineData {
 
-        private static final VarHandle PLAY_STATE_REACHED_HANDLE;
+	private static final VarHandle PLAY_STATE_REACHED_HANDLE;
 
-        static {
-                try {
-                        MethodHandles.Lookup l = MethodHandles.lookup();
-                        PLAY_STATE_REACHED_HANDLE = l.findVarHandle(NettyPipelineData.class, "playStateReached", Runnable.class);
-                } catch (ReflectiveOperationException e) {
-                        throw new ExceptionInInitializerError(e);
-                }
-        }
+	static {
+		try {
+			MethodHandles.Lookup l = MethodHandles.lookup();
+			PLAY_STATE_REACHED_HANDLE = l.findVarHandle(NettyPipelineData.class, "playStateReached", Runnable.class);
+		} catch (ReflectiveOperationException e) {
+			throw new ExceptionInInitializerError(e);
+		}
+	}
 
-        public static class ProfileDataHolder {
+	public static class ProfileDataHolder {
 
-                public final byte[] skinDataV1Init;
-                public final byte[] skinDataV2Init;
-                public final byte[] capeDataInit;
-                public final byte[] updateCertInit;
-                public final UUID brandUUID;
-                public final Map<String, byte[]> extraData;
+		public final byte[] skinDataV1Init;
+		public final byte[] skinDataV2Init;
+		public final byte[] capeDataInit;
+		public final byte[] updateCertInit;
+		public final UUID brandUUID;
+		public final Map<String, byte[]> extraData;
 
-                protected ProfileDataHolder(byte[] skinDataV1Init, byte[] skinDataV2Init, byte[] capeDataInit,
-                                byte[] updateCertInit, UUID brandUUID, Map<String, byte[]> extraData) {
-                        this.skinDataV1Init = skinDataV1Init;
-                        this.skinDataV2Init = skinDataV2Init;
-                        this.capeDataInit = capeDataInit;
-                        this.updateCertInit = updateCertInit;
-                        this.brandUUID = brandUUID;
-                        this.extraData = extraData;
-                }
+		protected ProfileDataHolder(byte[] skinDataV1Init, byte[] skinDataV2Init, byte[] capeDataInit,
+				byte[] updateCertInit, UUID brandUUID, Map<String, byte[]> extraData) {
+			this.skinDataV1Init = skinDataV1Init;
+			this.skinDataV2Init = skinDataV2Init;
+			this.capeDataInit = capeDataInit;
+			this.updateCertInit = updateCertInit;
+			this.brandUUID = brandUUID;
+			this.extraData = extraData;
+		}
 
-        }
+	}
 
-        private static final Set<String> profileDataStandard = ImmutableSet.of("skin_v1", "skin_v2", "cape_v1",
-                        "update_cert_v1", "brand_uuid_v1");
+	private static final Set<String> profileDataStandard = ImmutableSet.of("skin_v1", "skin_v2", "cape_v1",
+			"update_cert_v1", "brand_uuid_v1");
 
-        public final Channel channel;
-        public final EaglerXServer<?> server;
-        public final EaglerAttributeManager.EaglerAttributeHolder attributeHolder;
-        public final Consumer<SocketAddress> realAddressHandle;
-        public SocketAddress realSocketAddressInstance;
-        public CompoundRateLimiterMap.ICompoundRatelimits rateLimits;
-        public IdleStateHandler idleStateHandler;
-        public boolean initStall;
+	public final Channel channel;
+	public final EaglerXServer<?> server;
+	public final EaglerAttributeManager.EaglerAttributeHolder attributeHolder;
+	public final Consumer<SocketAddress> realAddressHandle;
+	public SocketAddress realSocketAddressInstance;
+	public CompoundRateLimiterMap.ICompoundRatelimits rateLimits;
+	public IdleStateHandler idleStateHandler;
+	public boolean initStall;
 
-        public EaglerListener listenerInfo;
-        public String eaglerBrandString;
-        public String eaglerVersionString;
+	public EaglerListener listenerInfo;
+	public String eaglerBrandString;
+	public String eaglerVersionString;
 
-        public boolean wss;
-        public String headerHost;
-        public String headerOrigin;
-        public String headerUserAgent;
-        public String headerCookie;
-        public String headerAuthorization;
-        public String requestPath;
-        public String realAddress;
-        public InetAddress realInetAddress;
+	public boolean wss;
+	public String headerHost;
+	public String headerOrigin;
+	public String headerUserAgent;
+	public String headerCookie;
+	public String headerAuthorization;
+	public String requestPath;
+	public String realAddress;
+	public InetAddress realInetAddress;
 
-        public int handshakeProtocol;
-        public GamePluginMessageProtocol gameProtocol;
-        public int minecraftProtocol;
-        public boolean handshakeAuthEnabled;
-        public byte[] handshakeAuthUsername;
+	public int handshakeProtocol;
+	public GamePluginMessageProtocol gameProtocol;
+	public int minecraftProtocol;
+	public boolean handshakeAuthEnabled;
+	public byte[] handshakeAuthUsername;
 
-        public String username;
-        public UUID uuid;
-        public String requestedServer;
-        public boolean authEventEnabled;
-        public byte authType;
-        public String authMessage;
-        public boolean nicknameSelectionEnabled;
-        public byte[] authSalt;
-        public boolean cookieSupport;
-        public boolean cookieEnabled;
-        public boolean cookieAuthEventEnabled;
-        public byte[] cookieData;
-        public Map<String, byte[]> profileDatas;
-        public int acceptedCapabilitiesMask;
-        public byte[] acceptedCapabilitiesVers;
-        public Map<UUID, Byte> acceptedExtendedCapabilities;
+	public String username;
+	public UUID uuid;
+	public String requestedServer;
+	public boolean authEventEnabled;
+	public byte authType;
+	public String authMessage;
+	public boolean nicknameSelectionEnabled;
+	public byte[] authSalt;
+	public boolean cookieSupport;
+	public boolean cookieEnabled;
+	public boolean cookieAuthEventEnabled;
+	public byte[] cookieData;
+	public Map<String, byte[]> profileDatas;
+	public int acceptedCapabilitiesMask;
+	public byte[] acceptedCapabilitiesVers;
+	public Map<UUID, Byte> acceptedExtendedCapabilities;
 
-        public IPlatformSubLogger connectionLogger;
+	public IPlatformSubLogger connectionLogger;
 
-        public Object rewindAttachment;
-        public IEaglerXRewindProtocol<?, ?> rewindProtocol;
-        public int rewindProtocolVersion = -1;
-        public RewindMessageControllerHandle rewindMessageControllerHandle;
+	public Object rewindAttachment;
+	public IEaglerXRewindProtocol<?, ?> rewindProtocol;
+	public int rewindProtocolVersion = -1;
+	public RewindMessageControllerHandle rewindMessageControllerHandle;
 
-        public EaglerPendingStateAdapter pendingConnection;
-        public EaglerLoginStateAdapter loginConnection;
+	public EaglerPendingStateAdapter pendingConnection;
+	public EaglerLoginStateAdapter loginConnection;
 
-        // Bug #35 fix: volatile so the unsynchronized fast-path reads in
-        // scheduleLoginTimeoutHelper and cancelLoginTimeoutHelper always see the
-        // latest write from another thread. Without volatile, thread B may see a
-        // stale null value due to CPU caching and skip the cancellation, causing
-        // the login timeout task to fire later and disconnect an already-logged-in
-        // player.
-        private volatile IPlatformTask disconnectTask = null;
+	private IPlatformTask disconnectTask = null;
 
-        private static final Runnable REACHED = () -> {
-        };
+	private static final Runnable REACHED = () -> {
+	};
 
-        private Runnable playStateReached = null;
+	private Runnable playStateReached = null;
 
-        public NettyPipelineData(Channel channel, EaglerXServer<?> server, EaglerListener listenerInfo,
-                        EaglerAttributeManager.EaglerAttributeHolder attributeHolder, Consumer<SocketAddress> realAddressHandle,
-                        CompoundRateLimiterMap.ICompoundRatelimits rateLimits) {
-                this.channel = channel;
-                this.server = server;
-                this.listenerInfo = listenerInfo;
-                this.attributeHolder = attributeHolder;
-                this.realAddressHandle = realAddressHandle;
-                this.connectionLogger = server.logger().createSubLogger("" + channel.remoteAddress());
-                this.rateLimits = rateLimits;
-        }
+	public NettyPipelineData(Channel channel, EaglerXServer<?> server, EaglerListener listenerInfo,
+			EaglerAttributeManager.EaglerAttributeHolder attributeHolder, Consumer<SocketAddress> realAddressHandle,
+			CompoundRateLimiterMap.ICompoundRatelimits rateLimits) {
+		this.channel = channel;
+		this.server = server;
+		this.listenerInfo = listenerInfo;
+		this.attributeHolder = attributeHolder;
+		this.realAddressHandle = realAddressHandle;
+		this.connectionLogger = server.logger().createSubLogger("" + channel.remoteAddress());
+		this.rateLimits = rateLimits;
+	}
 
-        @Override
-        public SocketAddress getSocketAddress() {
-                return channel.remoteAddress();
-        }
+	@Override
+	public SocketAddress getSocketAddress() {
+		return channel.remoteAddress();
+	}
 
-        public SocketAddress getPlayerAddress() {
-                return realSocketAddressInstance != null ? realSocketAddressInstance : channel.remoteAddress();
-        }
+	public SocketAddress getPlayerAddress() {
+		return realSocketAddressInstance != null ? realSocketAddressInstance : channel.remoteAddress();
+	}
 
-        @Override
-        public String getRealAddress() {
-                return realAddress;
-        }
+	@Override
+	public String getRealAddress() {
+		return realAddress;
+	}
 
-        @Override
-        public boolean isEaglerPlayer() {
-                return listenerInfo != null;
-        }
+	@Override
+	public boolean isEaglerPlayer() {
+		return listenerInfo != null;
+	}
 
-        @Override
-        public boolean isCompressionDisable() {
-                return listenerInfo != null;
-        }
+	@Override
+	public boolean isCompressionDisable() {
+		return listenerInfo != null;
+	}
 
-        @Override
-        public boolean isConnected() {
-                return channel.isActive();
-        }
+	@Override
+	public boolean isConnected() {
+		return channel.isActive();
+	}
 
-        @Override
-        public void disconnect() {
-                channel.close();
-        }
+	@Override
+	public void disconnect() {
+		channel.close();
+	}
 
-        @Override
-        public Object getIdentityToken() {
-                return attributeHolder;
-        }
+	@Override
+	public Object getIdentityToken() {
+		return attributeHolder;
+	}
 
-        @Override
-        public <T> T get(IAttributeKey<T> key) {
-                return attributeHolder.get(key);
-        }
+	@Override
+	public <T> T get(IAttributeKey<T> key) {
+		return attributeHolder.get(key);
+	}
 
-        @Override
-        public <T> void set(IAttributeKey<T> key, T value) {
-                attributeHolder.set(key, value);
-        }
+	@Override
+	public <T> void set(IAttributeKey<T> key, T value) {
+		attributeHolder.set(key, value);
+	}
 
-        @Override
-        public IEaglerListenerInfo getListenerInfo() {
-                return listenerInfo;
-        }
+	@Override
+	public IEaglerListenerInfo getListenerInfo() {
+		return listenerInfo;
+	}
 
-        @Override
-        public boolean isWebSocketSecure() {
-                return wss;
-        }
+	@Override
+	public boolean isWebSocketSecure() {
+		return wss;
+	}
 
-        @Override
-        public String getWebSocketHeader(EnumWebSocketHeader header) {
-                if (header == null) {
-                        throw new NullPointerException("header");
-                }
-                return switch (header) {
-                case HEADER_HOST -> headerHost;
-                case HEADER_ORIGIN -> headerOrigin;
-                case HEADER_USER_AGENT -> headerUserAgent;
-                case HEADER_COOKIE -> headerCookie;
-                case HEADER_AUTHORIZATION -> headerAuthorization;
-                default -> null;
-                };
-        }
+	@Override
+	public String getWebSocketHeader(EnumWebSocketHeader header) {
+		if (header == null) {
+			throw new NullPointerException("header");
+		}
+		return switch (header) {
+		case HEADER_HOST -> headerHost;
+		case HEADER_ORIGIN -> headerOrigin;
+		case HEADER_USER_AGENT -> headerUserAgent;
+		case HEADER_COOKIE -> headerCookie;
+		case HEADER_AUTHORIZATION -> headerAuthorization;
+		default -> null;
+		};
+	}
 
-        @Override
-        public String getWebSocketPath() {
-                return requestPath;
-        }
+	@Override
+	public String getWebSocketPath() {
+		return requestPath;
+	}
 
-        public void scheduleLoginTimeoutHelper() {
-                if (disconnectTask == null) {
-                        synchronized (this) {
-                                if (disconnectTask != null) {
-                                        return;
-                                }
-                                disconnectTask = server.getPlatform().getScheduler().executeAsyncDelayedTask(() -> {
-                                        channel.close();
-                                }, server.getConfig().getSettings().getEaglerLoginTimeout());
-                        }
-                }
-        }
+	public void scheduleLoginTimeoutHelper() {
+		if (disconnectTask == null) {
+			synchronized (this) {
+				if (disconnectTask != null) {
+					return;
+				}
+				disconnectTask = server.getPlatform().getScheduler().executeAsyncDelayedTask(() -> {
+					channel.close();
+				}, server.getConfig().getSettings().getEaglerLoginTimeout());
+			}
+		}
+	}
 
-        public void cancelLoginTimeoutHelper() {
-                if (disconnectTask != null) {
-                        IPlatformTask task;
-                        synchronized (this) {
-                                task = disconnectTask;
-                                if (task == null) {
-                                        return;
-                                }
-                                disconnectTask = null;
-                        }
-                        task.cancel();
-                }
-        }
+	public void cancelLoginTimeoutHelper() {
+		if (disconnectTask != null) {
+			IPlatformTask task;
+			synchronized (this) {
+				task = disconnectTask;
+				if (task == null) {
+					return;
+				}
+				disconnectTask = null;
+			}
+			task.cancel();
+		}
+	}
 
-        public ProfileDataHolder profileDataHelper() {
-                if (profileDatas != null) {
-                        byte[] skinV2 = profileDatas.get("skin_v2");
-                        byte[] skinV1 = skinV2 == null ? profileDatas.get("skin_v1") : null;
-                        byte[] cape = profileDatas.get("cape_v1");
-                        byte[] updateCert = profileDatas.get("update_cert_v1");
-                        byte[] uuid = profileDatas.get("brand_uuid_v1");
-                        UUID brandUUID = null;
-                        if (uuid != null && uuid.length == 16) {
-                                ByteBuf buf = Unpooled.wrappedBuffer(uuid);
-                                UUID ret = new UUID(buf.readLong(), buf.readLong());
-                                if (server.getBrandService().sanitizeUUID(ret)) {
-                                        brandUUID = ret;
-                                }
-                        }
-                        if (brandUUID == null) {
-                                // Bug #37 fix: null-check eaglerBrandString before passing to
-                                // getBrandUUIDClientLegacy. It can be null if the handshake
-                                // didn't set it (malformed or early-disconnect connection).
-                                if (eaglerBrandString != null) {
-                                        brandUUID = server.getBrandService().getBrandUUIDClientLegacy(eaglerBrandString);
-                                }
-                        }
-                        ImmutableMap.Builder<String, byte[]> ret = null;
-                        if (profileDatas != null) {
-                                for (Entry<String, byte[]> extra : profileDatas.entrySet()) {
-                                        if (!profileDataStandard.contains(extra.getKey())) {
-                                                if (ret == null) {
-                                                        ret = ImmutableMap.builder();
-                                                }
-                                                ret.put(extra.getKey(), extra.getValue());
-                                        }
-                                }
-                        }
-                        return new ProfileDataHolder(skinV1, skinV2, cape, updateCert, brandUUID, ret != null ? ret.build() : null);
-                } else {
-                        return new ProfileDataHolder(null, null, null, null,
-                                        server.getBrandService().getBrandUUIDClientLegacy(eaglerBrandString), Collections.emptyMap());
-                }
-        }
+	public ProfileDataHolder profileDataHelper() {
+		if (profileDatas != null) {
+			byte[] skinV2 = profileDatas.get("skin_v2");
+			byte[] skinV1 = skinV2 == null ? profileDatas.get("skin_v1") : null;
+			byte[] cape = profileDatas.get("cape_v1");
+			byte[] updateCert = profileDatas.get("update_cert_v1");
+			byte[] uuid = profileDatas.get("brand_uuid_v1");
+			UUID brandUUID = null;
+			if (uuid != null && uuid.length == 16) {
+				ByteBuf buf = Unpooled.wrappedBuffer(uuid);
+				UUID ret = new UUID(buf.readLong(), buf.readLong());
+				if (server.getBrandService().sanitizeUUID(ret)) {
+					brandUUID = ret;
+				}
+			}
+			if (brandUUID == null) {
+				brandUUID = server.getBrandService().getBrandUUIDClientLegacy(eaglerBrandString);
+			}
+			ImmutableMap.Builder<String, byte[]> ret = null;
+			if (profileDatas != null) {
+				for (Entry<String, byte[]> extra : profileDatas.entrySet()) {
+					if (!profileDataStandard.contains(extra.getKey())) {
+						if (ret == null) {
+							ret = ImmutableMap.builder();
+						}
+						ret.put(extra.getKey(), extra.getValue());
+					}
+				}
+			}
+			return new ProfileDataHolder(skinV1, skinV2, cape, updateCert, brandUUID, ret != null ? ret.build() : null);
+		} else {
+			return new ProfileDataHolder(null, null, null, null,
+					server.getBrandService().getBrandUUIDClientLegacy(eaglerBrandString), Collections.emptyMap());
+		}
+	}
 
-        @Override
-        public NettyUnsafe netty() {
-                return this;
-        }
+	@Override
+	public NettyUnsafe netty() {
+		return this;
+	}
 
-        @Override
-        public Channel getChannel() {
-                return channel;
-        }
+	@Override
+	public Channel getChannel() {
+		return channel;
+	}
 
-        public IEaglerPendingConnection asPendingConnection() {
-                if (loginConnection != null) {
-                        return loginConnection;
-                } else if (pendingConnection != null) {
-                        return pendingConnection;
-                } else {
-                        return pendingConnection = new EaglerPendingStateAdapter(this);
-                }
-        }
+	public IEaglerPendingConnection asPendingConnection() {
+		if (loginConnection != null) {
+			return loginConnection;
+		} else if (pendingConnection != null) {
+			return pendingConnection;
+		} else {
+			return pendingConnection = new EaglerPendingStateAdapter(this);
+		}
+	}
 
-        public IEaglerLoginConnection asLoginConnection() {
-                if (loginConnection != null) {
-                        return loginConnection;
-                } else {
-                        loginConnection = new EaglerLoginStateAdapter(this);
-                        pendingConnection = null;
-                        return loginConnection;
-                }
-        }
+	public IEaglerLoginConnection asLoginConnection() {
+		if (loginConnection != null) {
+			return loginConnection;
+		} else {
+			loginConnection = new EaglerLoginStateAdapter(this);
+			pendingConnection = null;
+			return loginConnection;
+		}
+	}
 
-        public boolean processRealAddress() {
-                if (realAddress != null) {
-                        Consumer<SocketAddress> handle = realAddressHandle;
-                        if (handle != null) {
-                                // Bug #36 fix: listenerInfo can be null for non-Eagler connections.
-                                // Don't access listenerInfo.getConfigData() without checking.
-                                if (listenerInfo == null) {
-                                        connectionLogger.error("Invalid forward IP header on non-eagler connection: " + realAddress);
-                                        return false;
-                                }
-                                InetAddress addr;
-                                if (realInetAddress != null) {
-                                        addr = realInetAddress;
-                                } else {
-                                        try {
-                                                addr = InetAddresses.forString(realAddress);
-                                        } catch (IllegalArgumentException ex) {
-                                                connectionLogger.error("Connected with an invalid \""
-                                                                + listenerInfo.getConfigData().getForwardIPHeader() + "\" header, disconnecting...",
-                                                                ex);
-                                                return false;
-                                        }
-                                }
-                                // Bug #30 (related): default port 0 instead of 65535.
-                                int port = 0;
-                                SocketAddress addr2 = channel.remoteAddress();
-                                if ((addr2 instanceof InetSocketAddress inetAddr)) {
-                                        port = inetAddr.getPort();
-                                }
-                                handle.accept(realSocketAddressInstance = new InetSocketAddress(addr, port));
-                        }
-                }
-                return true;
-        }
+	public boolean processRealAddress() {
+		if (realAddress != null) {
+			Consumer<SocketAddress> handle = realAddressHandle;
+			if (handle != null) {
+				InetAddress addr;
+				if (realInetAddress != null) {
+					addr = realInetAddress;
+				} else {
+					try {
+						addr = InetAddresses.forString(realAddress);
+					} catch (IllegalArgumentException ex) {
+						connectionLogger.error("Connected with an invalid \""
+								+ listenerInfo.getConfigData().getForwardIPHeader() + "\" header, disconnecting...",
+								ex);
+						return false;
+					}
+				}
+				int port = 65535;
+				SocketAddress addr2 = channel.remoteAddress();
+				if ((addr2 instanceof InetSocketAddress inetAddr)) {
+					port = inetAddr.getPort();
+				}
+				handle.accept(realSocketAddressInstance = new InetSocketAddress(addr, port));
+			}
+		}
+		return true;
+	}
 
-        public boolean processLoginRatelimit(ChannelHandlerContext ctx) {
-                if (rateLimits != null) {
-                        EnumRateLimitState state = rateLimits.rateLimitLogin();
-                        if (!state.isOk()) {
-                                switch (state) {
-                                case BLOCKED:
-                                        ctx.writeAndFlush(RateLimitMessage.getBlockedLoginMessage())
-                                                        .addListener(ChannelFutureListener.CLOSE);
-                                        break;
-                                case BLOCKED_LOCKED:
-                                        ctx.writeAndFlush(RateLimitMessage.getLockedLoginMessage())
-                                                        .addListener(ChannelFutureListener.CLOSE);
-                                        break;
-                                default:
-                                        ctx.close();
-                                        break;
-                                }
-                                return false;
-                        }
-                }
-                return true;
-        }
+	public boolean processLoginRatelimit(ChannelHandlerContext ctx) {
+		if (rateLimits != null) {
+			EnumRateLimitState state = rateLimits.rateLimitLogin();
+			if (!state.isOk()) {
+				switch (state) {
+				case BLOCKED:
+					ctx.writeAndFlush(RateLimitMessage.getBlockedLoginMessage())
+							.addListener(ChannelFutureListener.CLOSE);
+					break;
+				case BLOCKED_LOCKED:
+					ctx.writeAndFlush(RateLimitMessage.getLockedLoginMessage())
+							.addListener(ChannelFutureListener.CLOSE);
+					break;
+				default:
+					ctx.close();
+					break;
+				}
+				return false;
+			}
+		}
+		return true;
+	}
 
-        public boolean processQueryRatelimit(ChannelHandlerContext ctx) {
-                if (rateLimits != null) {
-                        EnumRateLimitState state = rateLimits.rateLimitQuery();
-                        if (!state.isOk()) {
-                                switch (state) {
-                                case BLOCKED:
-                                        ctx.writeAndFlush(RateLimitMessage.getBlockedQueryMessage())
-                                                        .addListener(ChannelFutureListener.CLOSE);
-                                        break;
-                                case BLOCKED_LOCKED:
-                                        ctx.writeAndFlush(RateLimitMessage.getLockedQueryMessage())
-                                                        .addListener(ChannelFutureListener.CLOSE);
-                                        break;
-                                default:
-                                        ctx.close();
-                                        break;
-                                }
-                                return false;
-                        }
-                }
-                return true;
-        }
+	public boolean processQueryRatelimit(ChannelHandlerContext ctx) {
+		if (rateLimits != null) {
+			EnumRateLimitState state = rateLimits.rateLimitQuery();
+			if (!state.isOk()) {
+				switch (state) {
+				case BLOCKED:
+					ctx.writeAndFlush(RateLimitMessage.getBlockedQueryMessage())
+							.addListener(ChannelFutureListener.CLOSE);
+					break;
+				case BLOCKED_LOCKED:
+					ctx.writeAndFlush(RateLimitMessage.getLockedQueryMessage())
+							.addListener(ChannelFutureListener.CLOSE);
+					break;
+				default:
+					ctx.close();
+					break;
+				}
+				return false;
+			}
+		}
+		return true;
+	}
 
-        public boolean hasLoginStateRedirectCap() {
-                return gameProtocol.ver >= 5 && CapabilityBits.hasCapability(acceptedCapabilitiesMask, acceptedCapabilitiesVers,
-                                EnumCapabilityType.REDIRECT.getId(), 0);
-        }
+	public boolean hasLoginStateRedirectCap() {
+		return gameProtocol.ver >= 5 && CapabilityBits.hasCapability(acceptedCapabilitiesMask, acceptedCapabilitiesVers,
+				EnumCapabilityType.REDIRECT.getId(), 0);
+	}
 
-        public void signalPlayState() {
-                Runnable runnable = (Runnable) PLAY_STATE_REACHED_HANDLE.getAndSet(this, REACHED);
-                if (runnable != null) {
-                        runnable.run();
-                }
-        }
+	public void signalPlayState() {
+		Runnable runnable = (Runnable) PLAY_STATE_REACHED_HANDLE.getAndSet(this, REACHED);
+		if (runnable != null) {
+			runnable.run();
+		}
+	}
 
-        @Override
-        public void awaitPlayState(Runnable continueHandler) {
-                if (listenerInfo != null) {
-                        if (!PLAY_STATE_REACHED_HANDLE.compareAndSet(this, null, continueHandler)) {
-                                continueHandler.run();
-                        }
-                } else {
-                        continueHandler.run();
-                }
-        }
+	@Override
+	public void awaitPlayState(Runnable continueHandler) {
+		if (listenerInfo != null) {
+			if (!PLAY_STATE_REACHED_HANDLE.compareAndSet(this, null, continueHandler)) {
+				continueHandler.run();
+			}
+		} else {
+			continueHandler.run();
+		}
+	}
 
 }

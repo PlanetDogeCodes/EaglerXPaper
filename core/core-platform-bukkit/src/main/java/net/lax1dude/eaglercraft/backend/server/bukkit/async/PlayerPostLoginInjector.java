@@ -337,21 +337,7 @@ public class PlayerPostLoginInjector {
                                         });
                         ctx.proxiedNetworkManager = ret;
                         channel.attr(attr).set(ctx);
-                        // Bug #42 fix: verify the current handler is still a HandshakeListener
-                        // before setting handshakeListenerNetManager on it. The handler may have
-                        // transitioned to LoginListener between bind() and this wrap call.
-                        Object currentHandler = getHandlerMethod.invoke(netManager);
-                        if (currentHandler != null && handshakeListenerClass != null
-                                        && handshakeListenerClass.isInstance(currentHandler)) {
-                                handshakeListenerNetManager.set(currentHandler, ret);
-                        } else {
-                                // Handler has transitioned (or is null). Skip setting handshakeListenerNetManager
-                                // — it will be set when the LoginListener is wrapped.
-                                java.util.logging.Logger.getLogger("EaglerXServer").fine(
-                                                "wrapNetworkManager: handler is no longer HandshakeListener ("
-                                                                + (currentHandler == null ? "null" : currentHandler.getClass().getName())
-                                                                + "), skipping handshakeListenerNetManager.set");
-                        }
+                        handshakeListenerNetManager.set(getHandlerMethod.invoke(netManager), ret);
                         netManagerChannel.set(ret, channel);
                         return ret;
                 } catch (ReflectiveOperationException e) {
@@ -613,81 +599,43 @@ public class PlayerPostLoginInjector {
                                                                         }
                                                                         if (player != null) {
                                                                                 final Player playerFinal = player;
-                                                                                try {
-                                                                                        fireEventLoginPostAsync(playerFinal, ctx, (res) -> {
-                                                                                                // Bug #9 fix: pipeline operations MUST run on the channel's event loop.
-                                                                                                // The callback may be invoked from Bukkit's main thread (via
-                                                                                                // completeIntent), so we wrap pipeline ops in eventLoop().execute().
-                                                                                                io.netty.channel.EventLoop el = ctx.channel.eventLoop();
-                                                                                                Runnable task = () -> {
-                                                                                                        try {
-                                                                                                                if (!res.isCancelled()) {
-                                                                                                                        handlerAdded.set(ctx.originalNetworkManager, false);
-                                                                                                                        ctx.channel.pipeline().replace("packet_handler", "packet_handler",
-                                                                                                                                        (ChannelHandler) ctx.originalNetworkManager);
-                                                                                                                        Object entityPlayer = BukkitUnsafe.getHandle(playerFinal);
-                                                                                                                        loginListenerNetManager.set(loginListener,
-                                                                                                                                        ctx.originalNetworkManager);
-                                                                                                                        loginListenerPlayer.set(loginListener, entityPlayer);
-                                                                                                                        loginListenerState.set(loginListener, protocolStateOnResume);
-                                                                                                                } else {
-                                                                                                                        BaseComponent comp = res.getMessage();
-                                                                                                                        if (comp == null) {
-                                                                                                                                comp = new TextComponent("Connection Closed");
-                                                                                                                        }
-                                                                                                                        String legacyText = comp.toLegacyText();
-                                                                                                                        // The disconnect method may take String (1.12-1.16) or
-                                                                                                                        // net.minecraft.network.chat.Component (1.17+) or
-                                                                                                                        // net.kyori.adventure.text.Component (Paper adventure).
-                                                                                                                        // Convert the legacy text to the correct parameter type.
-                                                                                                                        Object arg = legacyText;
-                                                                                                                        Class<?> paramType = loginListenerDisconnect.getParameterTypes()[0];
-                                                                                                                        if (paramType != String.class) {
-                                                                                                                                arg = convertToComponent(legacyText, paramType);
-                                                                                                                        }
-                                                                                                                        try {
-                                                                                                                                loginListenerDisconnect.invoke(loginListener, arg);
-                                                                                                                        } catch (ReflectiveOperationException roe) {
-                                                                                                                                // Bug #10 fix: if disconnect invoke fails (e.g. component
-                                                                                                                                // conversion mismatch), close the channel directly as a fallback.
-                                                                                                                                java.util.logging.Logger.getLogger("EaglerXServer").warning(
-                                                                                                                                                "Failed to invoke disconnect on login listener, closing channel: " + roe);
-                                                                                                                                try {
-                                                                                                                                        ctx.channel.close();
-                                                                                                                                } catch (Throwable t2) { /* best effort */ }
-                                                                                                                        }
-                                                                                                                }
-                                                                                                        } catch (ReflectiveOperationException e) {
-                                                                                                                throw Util.propagateReflectThrowable(e);
-                                                                                                        } catch (Throwable t) {
-                                                                                                                // Bug #8 fix: catch any unexpected Throwable so we don't crash the
-                                                                                                                // server's main tick loop. Log and try to close the channel.
-                                                                                                                java.util.logging.Logger.getLogger("EaglerXServer").log(
-                                                                                                                                java.util.logging.Level.SEVERE,
-                                                                                                                                "Unexpected error during login post-fire-event callback", t);
-                                                                                                                try { ctx.channel.close(); } catch (Throwable t2) { /* best effort */ }
-                                                                                                        }
-                                                                                                };
-                                                                                                if (el.inEventLoop()) {
-                                                                                                        task.run();
+                                                                                fireEventLoginPostAsync(playerFinal, ctx, (res) -> {
+                                                                                        try {
+                                                                                                if (!res.isCancelled()) {
+                                                                                                        handlerAdded.set(ctx.originalNetworkManager, false);
+                                                                                                        ctx.channel.pipeline().replace("packet_handler", "packet_handler",
+                                                                                                                        (ChannelHandler) ctx.originalNetworkManager);
+                                                                                                        Object entityPlayer = BukkitUnsafe.getHandle(playerFinal);
+                                                                                                        loginListenerNetManager.set(loginListener,
+                                                                                                                        ctx.originalNetworkManager);
+                                                                                                        loginListenerPlayer.set(loginListener, entityPlayer);
+                                                                                                        loginListenerState.set(loginListener, protocolStateOnResume);
                                                                                                 } else {
-                                                                                                        el.execute(task);
+                                                                                                        BaseComponent comp = res.getMessage();
+                                                                                                        if (comp == null) {
+                                                                                                                comp = new TextComponent("Connection Closed");
+                                                                                                        }
+                                                                                                        String legacyText = comp.toLegacyText();
+                                                                                                        // The disconnect method may take String (1.12-1.16) or
+                                                                                                        // net.minecraft.network.chat.Component (1.17+) or
+                                                                                                        // net.kyori.adventure.text.Component (Paper adventure).
+                                                                                                        // Convert the legacy text to the correct parameter type.
+                                                                                                        Object arg = legacyText;
+                                                                                                        Class<?> paramType = loginListenerDisconnect.getParameterTypes()[0];
+                                                                                                        if (paramType != String.class) {
+                                                                                                                arg = convertToComponent(legacyText, paramType);
+                                                                                                        }
+                                                                                                        loginListenerDisconnect.invoke(loginListener, arg);
                                                                                                 }
-                                                                                        });
-                                                                                } catch (Throwable fireErr) {
-                                                                                        // Bug #8 fix: if fireEventLoginPostAsync itself throws, log and close.
-                                                                                        java.util.logging.Logger.getLogger("EaglerXServer").log(
-                                                                                                        java.util.logging.Level.SEVERE,
-                                                                                                        "Failed to fire login post event async", fireErr);
-                                                                                        try { ctx.channel.close(); } catch (Throwable t2) { /* best effort */ }
-                                                                                }
+                                                                                        } catch (ReflectiveOperationException e) {
+                                                                                                throw Util.propagateReflectThrowable(e);
+                                                                                        }
+                                                                                });
                                                                                 return null;
                                                                         } else {
                                                                                 throw new IllegalStateException();
                                                                         }
                                                                 } else {
-                                                                        // Bug #13 fix: re-throw Errors as Errors, not wrapped in RuntimeException.
-                                                                        if (er instanceof Error ee) throw ee;
                                                                         if (er instanceof RuntimeException ee)
                                                                                 throw ee;
                                                                         throw new RuntimeException(er);
@@ -834,31 +782,13 @@ public class PlayerPostLoginInjector {
         }
 
         public void handleLoginEvent(PlayerLoginEvent event) {
-                // Bug #11 fix: null-check intermediate values. During early login phases on
-                // some Paper versions, the EntityPlayer or GameProfile may not yet be set.
-                try {
-                        Property marker = new Property("$eaglerMarker_" + ThreadLocalRandom.current().nextLong(Long.MAX_VALUE), "TMP");
-                        Object player = BukkitUnsafe.getHandle(event.getPlayer());
-                        if (player == null) {
-                                java.util.logging.Logger.getLogger("EaglerXServer").warning(
-                                                "handleLoginEvent: getHandle returned null for " + event.getPlayer() + ", skipping marker injection");
-                                return;
-                        }
-                        GameProfile profile = BukkitUnsafe.getGameProfile(player);
-                        if (profile == null) {
-                                java.util.logging.Logger.getLogger("EaglerXServer").warning(
-                                                "handleLoginEvent: getGameProfile returned null for " + event.getPlayer() + ", skipping marker injection");
-                                return;
-                        }
-                        synchronized (profile) {
-                                BukkitUnsafe.putPropertySafe(profile, marker.getName(), marker);
-                        }
-                        entityPlayers.put(marker, event.getPlayer());
-                } catch (Throwable t) {
-                        // Bug #12 partial fix: don't crash login flow on marker injection failure.
-                        java.util.logging.Logger.getLogger("EaglerXServer").log(java.util.logging.Level.WARNING,
-                                        "Failed to inject Eagler marker property during login", t);
+                Property marker = new Property("$eaglerMarker_" + ThreadLocalRandom.current().nextLong(Long.MAX_VALUE), "TMP");
+                Object player = BukkitUnsafe.getHandle(event.getPlayer());
+                GameProfile profile = BukkitUnsafe.getGameProfile(player);
+                synchronized (profile) {
+                        BukkitUnsafe.putPropertySafe(profile, marker.getName(), marker);
                 }
+                entityPlayers.put(marker, event.getPlayer());
         }
 
         private void fireEventLoginInit(Channel channel) {

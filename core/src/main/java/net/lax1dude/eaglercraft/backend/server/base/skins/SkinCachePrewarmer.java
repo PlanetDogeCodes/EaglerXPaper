@@ -62,12 +62,7 @@ public class SkinCachePrewarmer {
     private volatile ExecutorService executor;
     private volatile HttpClient httpClient;
     private final Semaphore fetchSemaphore = new Semaphore(MAX_CONCURRENT_FETCHES);
-    // Bug #27 fix: use AtomicLong for lastFetchTime so the read-modify-write
-    // (sleep + update) is serialized across concurrent fetcher threads. Without
-    // this, two threads could both read the same last value, both sleep the same
-    // duration, and both update — effectively doubling the request rate to
-    // Mojang's API and triggering 429 rate limits.
-    private final java.util.concurrent.atomic.AtomicLong lastFetchTime = new java.util.concurrent.atomic.AtomicLong(0);
+    private volatile long lastFetchTime = 0;
 
     public SkinCachePrewarmer(ISkinCacheService skinCacheService, IPlatformLogger logger,
             File usercacheFile, int maxPlayers, int threadCount) {
@@ -127,12 +122,8 @@ public class SkinCachePrewarmer {
 
     /**
      * Shuts down the prewarmer. Safe to call multiple times from any thread.
-     *
-     * Bug #26 fix: synchronized to coordinate with startAsync(). Without this,
-     * shutdown() could null out executor/httpClient while startAsync() is still
-     * setting them up, leaving dangling resources that are never cleaned up.
      */
-    public synchronized void shutdown() {
+    public void shutdown() {
         running = false;
         started.set(false);
 
@@ -264,26 +255,14 @@ public class SkinCachePrewarmer {
         try {
             fetchSemaphore.acquire();
             try {
-                // Enforce minimum delay between fetches.
-                // Bug #27 fix: use a CAS loop to atomically claim a "fetch slot" by
-                // advancing lastFetchTime. If two threads race, only one wins the CAS
-                // and the loser must sleep longer to respect the delay.
-                long sleepUntil;
-                while (true) {
-                    long now = System.currentTimeMillis();
-                    long last = lastFetchTime.get();
-                    long earliestNext = Math.max(last + FETCH_DELAY_MS, now);
-                    // Try to claim this slot. If we win, lastFetchTime is now earliestNext.
-                    if (lastFetchTime.compareAndSet(last, earliestNext)) {
-                        sleepUntil = earliestNext;
-                        break;
-                    }
-                    // Lost the race — retry with the new value.
+                // Enforce minimum delay between fetches
+                long now = System.currentTimeMillis();
+                long last = lastFetchTime;
+                long elapsed = now - last;
+                if (elapsed < FETCH_DELAY_MS) {
+                    Thread.sleep(FETCH_DELAY_MS - elapsed);
                 }
-                long sleepMs = sleepUntil - System.currentTimeMillis();
-                if (sleepMs > 0) {
-                    Thread.sleep(sleepMs);
-                }
+                lastFetchTime = System.currentTimeMillis();
 
                 if (!running) return new int[]{0, 0};
 
@@ -404,20 +383,8 @@ public class SkinCachePrewarmer {
             JsonElement root = new JsonParser().parse(body);
             if (root == null || !root.isJsonObject()) return null;
             return root.getAsJsonObject();
-        } catch (java.io.IOException | InterruptedException e) {
-            // Bug #28 fix: distinguish expected network errors (IOException) from
-            // unexpected ones (NPE, JsonParseException, SecurityException, etc.).
-            // Network errors are common (429s, DNS issues, connection refused) so
-            // we log at DEBUG only. Other exceptions indicate a code bug and are
-            // logged at WARN.
-            if (e instanceof InterruptedException) {
-                Thread.currentThread().interrupt();
-            }
-            return null;
-        } catch (RuntimeException e) {
-            // Bug #28 fix: log non-network exceptions so operators can diagnose
-            // JsonParseException, NPE, etc.
-            logger.warn("[Skin Prewarm] Unexpected error fetching profile for " + uuid + ": " + e);
+        } catch (Exception e) {
+            // Network error, rate limit, etc. — skip this player
             return null;
         }
     }
