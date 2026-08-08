@@ -32,6 +32,7 @@ import net.lax1dude.eaglercraft.backend.server.api.bukkit.event.PlayerLoginInitE
 import net.lax1dude.eaglercraft.backend.server.api.bukkit.event.PlayerLoginPostEvent;
 import net.lax1dude.eaglercraft.backend.server.bukkit.async.PlayerPostLoginInjector;
 import net.md_5.bungee.api.chat.BaseComponent;
+import net.md_5.bungee.api.chat.TextComponent;
 
 class BukkitListener implements Listener {
 
@@ -51,7 +52,11 @@ class BukkitListener implements Listener {
                 Channel channel = evt.netty().getChannel();
                 PlayerPostLoginInjector.LoginEventContext ctx = channel.attr(PlayerPostLoginInjector.attr).get();
                 IPipelineData pipelineData = channel.attr(PipelineAttributes.<IPipelineData>pipelineData()).get();
-                if (pipelineData != null && pipelineData.isCompressionDisable()) {
+                // Bug #20 fix: ctx can be null for non-Eaglercraft (vanilla) connections.
+                // The EaglerXServer post-login hack attribute is only set for Eaglercraft
+                // connections. Vanilla MC clients connecting through the same port don't
+                // have it, so we must null-check before calling ctx.markCompressionDisable.
+                if (ctx != null && pipelineData != null && pipelineData.isCompressionDisable()) {
                         ctx.markCompressionDisable(true);
                 }
         }
@@ -71,7 +76,15 @@ class BukkitListener implements Listener {
                                 plugin.initializePlayer(player, channel, pipelineData, (b) -> {
                                         if (b != Boolean.TRUE) {
                                                 if (b != null) {
-                                                        evt.setKickMessage((BaseComponent) b);
+                                                        // Bug #21 fix: b may not be a BaseComponent — it could be a
+                                                        // String, an Exception, or anything else from CloseRedirector.
+                                                        if (b instanceof BaseComponent bc) {
+                                                                evt.setKickMessage(bc);
+                                                        } else if (b instanceof String s) {
+                                                                evt.setKickMessage(new TextComponent(s));
+                                                        } else {
+                                                                evt.setKickMessage(new TextComponent("Connection Closed"));
+                                                        }
                                                 }
                                                 evt.setCancelled(true);
                                         }
@@ -123,10 +136,17 @@ class BukkitListener implements Listener {
                         com.mojang.authlib.GameProfile profile = BukkitUnsafe.getGameProfile(handle);
                         if (profile != null) {
                                 synchronized (profile) {
+                                        // Bug #22 fix: collect the markers to remove FIRST, then remove them
+                                        // in a separate pass. Iterating and modifying the live values
+                                        // collection simultaneously throws ConcurrentModificationException.
+                                        java.util.List<com.mojang.authlib.properties.Property> toRemove = new java.util.ArrayList<>();
                                         for (com.mojang.authlib.properties.Property p : BukkitUnsafe.getPropertyValuesSafe(profile)) {
                                                 if (p.getName().startsWith("$eaglerMarker_")) {
-                                                        BukkitUnsafe.removePropertySafe(profile, p.getName(), p);
+                                                        toRemove.add(p);
                                                 }
+                                        }
+                                        for (com.mojang.authlib.properties.Property p : toRemove) {
+                                                BukkitUnsafe.removePropertySafe(profile, p.getName(), p);
                                         }
                                 }
                         }

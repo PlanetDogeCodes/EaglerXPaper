@@ -223,11 +223,27 @@ public class AdaptivePacketBatcher extends ChannelDuplexHandler {
         }
 
         // Write all buffered packets, then flush once.
-        // try/finally ensures buffer/promises are cleared even if write throws.
+        // Bug #24 fix: try/catch ensures that if ctx.write throws on the N-th packet,
+        // the remaining ByteBufs are released and the remaining promises are failed,
+        // rather than leaked and left hanging.
         try {
             int size = buffer.size();
             for (int i = 0; i < size; i++) {
-                ctx.write(buffer.get(i), promises.get(i));
+                try {
+                    ctx.write(buffer.get(i), promises.get(i));
+                } catch (Throwable t) {
+                    // ctx.write threw on this packet — release it and fail its promise,
+                    // then release all remaining buffers and fail their promises.
+                    try { ReferenceCountUtil.release(buffer.get(i)); } catch (Throwable t2) { /* best effort */ }
+                    try { promises.get(i).tryFailure(t); } catch (Throwable t2) { /* best effort */ }
+                    for (int j = i + 1; j < size; j++) {
+                        try { ReferenceCountUtil.release(buffer.get(j)); } catch (Throwable t2) { /* best effort */ }
+                        try { promises.get(j).tryFailure(new java.nio.channels.ClosedChannelException()); } catch (Throwable t2) { /* best effort */ }
+                    }
+                    buffer.clear();
+                    promises.clear();
+                    return;
+                }
             }
             ctx.flush();
         } finally {
