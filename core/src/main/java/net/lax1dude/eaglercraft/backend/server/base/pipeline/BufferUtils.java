@@ -27,9 +27,8 @@ public class BufferUtils {
         public static final boolean RETAINEDSLICE_SUPPORT;
 
         static {
-                // Hotfix 4: use separate boolean variables for each capability check.
-                // The old code reused a single `b` variable — if readCharSequence existed
-                // but readRetainedSlice didn't, RETAINEDSLICE_SUPPORT was incorrectly true.
+                // Hotfix 5: separate booleans — old code reused `b`, causing
+                // RETAINEDSLICE_SUPPORT to be true even when readRetainedSlice doesn't exist.
                 boolean charseqOk = false;
                 try {
                         ByteBuf.class.getMethod("readCharSequence", int.class, Charset.class);

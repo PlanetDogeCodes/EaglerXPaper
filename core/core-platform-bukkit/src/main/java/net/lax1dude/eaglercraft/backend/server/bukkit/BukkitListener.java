@@ -51,7 +51,7 @@ class BukkitListener implements Listener {
                 Channel channel = evt.netty().getChannel();
                 PlayerPostLoginInjector.LoginEventContext ctx = channel.attr(PlayerPostLoginInjector.attr).get();
                 IPipelineData pipelineData = channel.attr(PipelineAttributes.<IPipelineData>pipelineData()).get();
-                // Hotfix 4: ctx can be null for non-Eaglercraft (vanilla) connections.
+                // Hotfix 5: ctx can be null for non-Eaglercraft connections
                 if (ctx != null && pipelineData != null && pipelineData.isCompressionDisable()) {
                         ctx.markCompressionDisable(true);
                 }
@@ -115,17 +115,11 @@ class BukkitListener implements Listener {
         @EventHandler(priority = EventPriority.MONITOR)
         public void onQuitEvent(PlayerQuitEvent evt) {
                 plugin.dropPlayer(evt.getPlayer());
-                // Clean up any orphaned eaglerMarker properties from the player's GameProfile.
-                // These are inserted by PlayerPostLoginInjector.handleLoginEvent and are
-                // normally removed when PacketLoginOutSuccess is sent. But if login fails
-                // before that (kick, timeout, disconnect), the marker stays forever.
                 try {
                         Object handle = BukkitUnsafe.getHandle(evt.getPlayer());
                         com.mojang.authlib.GameProfile profile = BukkitUnsafe.getGameProfile(handle);
                         if (profile != null) {
                                 synchronized (profile) {
-                                        // Hotfix 4: use reflection-based getter for authlib 6.x compatibility.
-                                        // Also collect first, then remove, to avoid ConcurrentModificationException.
                                         java.util.List<com.mojang.authlib.properties.Property> toRemove = new java.util.ArrayList<>();
                                         for (com.mojang.authlib.properties.Property p : profile.getProperties().values()) {
                                                 String name = BukkitUnsafe.getPropertyName(p);
@@ -139,7 +133,7 @@ class BukkitListener implements Listener {
                                 }
                         }
                 } catch (Exception e) {
-                        // Best effort — don't crash on quit
+                        // Best effort
                 }
         }
 

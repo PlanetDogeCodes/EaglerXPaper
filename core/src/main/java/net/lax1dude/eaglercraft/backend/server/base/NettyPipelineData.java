@@ -148,9 +148,7 @@ public class NettyPipelineData extends IIdentifiedConnection.Base
         public EaglerPendingStateAdapter pendingConnection;
         public EaglerLoginStateAdapter loginConnection;
 
-        // Hotfix 4: volatile so the unsynchronized fast-path reads in
-        // scheduleLoginTimeoutHelper and cancelLoginTimeoutHelper always see
-        // the latest write from another thread.
+        // Hotfix 5: volatile for cross-thread visibility
         private volatile IPlatformTask disconnectTask = null;
 
         private static final Runnable REACHED = () -> {

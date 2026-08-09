@@ -57,10 +57,6 @@ public class BukkitUnsafe {
                         method_CraftPlayer_getHandle = clz.getMethod("getHandle");
                         Object entityPlayer = method_CraftPlayer_getHandle.invoke(playerObject);
                         Class<?> clz2 = entityPlayer.getClass();
-                        // Hotfix 4: use findGameProfileGetter instead of blindly calling getProfile().
-                        // On MC 1.21+, getProfile() returns ResolvableProfile (not GameProfile),
-                        // which would cause a ClassCastException at the call site. We need to
-                        // find a method that actually returns GameProfile.
                         method_EntityPlayer_getProfile = findGameProfileGetter(clz2);
                         class_EntityPlayer = clz2;
                         CLASS_CRAFTPLAYER_HANDLE.setRelease(clz);
@@ -69,35 +65,17 @@ public class BukkitUnsafe {
                 }
         }
 
-        /**
-         * Hotfix 4: Finds a GameProfile-returning getter on the EntityPlayer class.
-         * On 1.17+ the canonical method is getGameProfile(); on 1.21+ getProfile()
-         * returns ResolvableProfile (which would ClassCastException), so we explicitly
-         * check the return type. Falls back to walking all 0-arg methods returning
-         * GameProfile.
-         */
         private static Method findGameProfileGetter(Class<?> entityPlayerClass) {
-                // Try getGameProfile() first (1.17+ Mojang mappings)
                 try {
                         Method m = entityPlayerClass.getMethod("getGameProfile");
-                        if (GameProfile.class.isAssignableFrom(m.getReturnType())) {
-                                return m;
-                        }
-                } catch (NoSuchMethodException ex) {
-                }
-                // Try getProfile() but only if it returns GameProfile (not ResolvableProfile)
+                        if (GameProfile.class.isAssignableFrom(m.getReturnType())) return m;
+                } catch (NoSuchMethodException ex) {}
                 try {
                         Method m = entityPlayerClass.getMethod("getProfile");
-                        if (GameProfile.class.isAssignableFrom(m.getReturnType())) {
-                                return m;
-                        }
-                } catch (NoSuchMethodException ex) {
-                }
-                // Fallback: walk all 0-arg methods returning GameProfile
+                        if (GameProfile.class.isAssignableFrom(m.getReturnType())) return m;
+                } catch (NoSuchMethodException ex) {}
                 for (Method m : entityPlayerClass.getMethods()) {
-                        if (m.getParameterCount() == 0 && GameProfile.class.isAssignableFrom(m.getReturnType())) {
-                                return m;
-                        }
+                        if (m.getParameterCount() == 0 && GameProfile.class.isAssignableFrom(m.getReturnType())) return m;
                 }
                 throw new RuntimeException("Could not locate GameProfile getter on " + entityPlayerClass.getName());
         }
@@ -106,7 +84,6 @@ public class BukkitUnsafe {
 
         static {
                 boolean paperProfileAPISupport_ = false;
-                // Hotfix 4: check both the old and new Paper Profile API package locations.
                 try {
                         Class.forName("com.destroystokyo.paper.profile.PlayerProfile");
                         paperProfileAPISupport_ = true;
@@ -114,15 +91,11 @@ public class BukkitUnsafe {
                         try {
                                 Class.forName("io.papermc.paper.profile.PlayerProfile");
                                 paperProfileAPISupport_ = true;
-                        } catch (ClassNotFoundException e2) {
-                                // Paper profile API is unsupported
-                        }
+                        } catch (ClassNotFoundException e2) {}
                 }
                 paperProfileAPISupport = paperProfileAPISupport_;
         }
 
-        // Hotfix 4: authlib 6.x compatibility — Property.getValue() was renamed to value().
-        // We use reflection to call whichever method exists.
         private static volatile Method propertyGetValueMethod = null;
         private static volatile boolean propertyMethodsInit = false;
 
@@ -163,7 +136,6 @@ public class BukkitUnsafe {
                                                 .invoke(method_CraftPlayer_getHandle.invoke(player))).getProperties();
                                 Collection<Property> tex = props.get("isEaglerPlayer");
                                 if (!tex.isEmpty()) {
-                                        // Hotfix 4: use reflection-based getter for authlib 6.x compatibility
                                         return Boolean.parseBoolean(getPropertyValue(tex.iterator().next()));
                                 }
                         } catch (IllegalAccessException | IllegalArgumentException | InvocationTargetException e) {

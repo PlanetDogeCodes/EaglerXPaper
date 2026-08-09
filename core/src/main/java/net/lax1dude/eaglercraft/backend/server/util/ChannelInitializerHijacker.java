@@ -57,8 +57,7 @@ public abstract class ChannelInitializerHijacker extends ChannelInitializer<Chan
                 this.initServerChild = initServerChild;
         }
 
-        // Hotfix 4: volatile so that deactivate() writes are visible to the
-        // event-loop thread that reads impl in initChannel / ImplInitial.accept.
+        // Hotfix 5: volatile for visibility across event-loop threads
         protected volatile Consumer<Channel> impl = new ImplInitial();
 
         protected abstract void callParent(Channel channel);

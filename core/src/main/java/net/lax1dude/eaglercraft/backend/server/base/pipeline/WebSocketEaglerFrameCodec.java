@@ -32,14 +32,10 @@ public class WebSocketEaglerFrameCodec extends ChannelDuplexHandler {
         @Override
         public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
                 if (msg instanceof BinaryWebSocketFrame msg1) {
-                        // Hotfix 4: explicitly transfer ownership of the content ByteBuf
-                        // by retaining it before firing downstream, then release the frame.
-                        // Without this, if the downstream handler forgets to release the
-                        // ByteBuf, both the ByteBuf and the frame leak.
+                        // Hotfix 5: explicit retain+release for ownership transfer
                         ctx.fireChannelRead(msg1.content().retain());
                         msg1.release();
                 } else if (msg instanceof WebSocketFrame msg2) {
-                        // Text or close frames
                         msg2.release();
                         ctx.close();
                 } else {
@@ -50,9 +46,7 @@ public class WebSocketEaglerFrameCodec extends ChannelDuplexHandler {
         @Override
         public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception {
                 if (msg instanceof ByteBuf buf) {
-                        // Hotfix 4: wrap empty ByteBufs in BinaryWebSocketFrame too, for
-                        // consistency. The old code skipped wrapping for empty buffers,
-                        // which could send a raw non-WebSocket byte stream downstream.
+                        // Hotfix 5: wrap empty ByteBufs too for consistency
                         ctx.write(new BinaryWebSocketFrame(buf), promise);
                         return;
                 }

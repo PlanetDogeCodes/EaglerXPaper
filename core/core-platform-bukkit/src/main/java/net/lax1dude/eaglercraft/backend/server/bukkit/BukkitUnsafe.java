@@ -215,8 +215,6 @@ public class BukkitUnsafe {
                                         .invoke(method_CraftPlayer_getHandle.invoke(player))).getProperties();
                         Collection<Property> tex = props.get("textures");
                         if (!tex.isEmpty()) {
-                                // Hotfix 4: use reflection-based getter to survive authlib 6.x
-                                // which renamed getValue() to value().
                                 return getPropertyValue(tex.iterator().next());
                         }
                 } catch (ReflectiveOperationException e) {
@@ -360,17 +358,13 @@ public class BukkitUnsafe {
                 public void run() {
                         List<ChannelInitializerHijacker> cc;
                         synchronized (this) {
-                                // Hotfix 4: null check — run() may be called twice (e.g., double-disable)
+                                // Hotfix 5: null check for double-call safety
                                 if (cleanup == null) return;
                                 cc = new ArrayList<>(cleanup);
                                 cleanup = null;
                         }
                         for (ChannelInitializerHijacker c : cc) {
-                                try {
-                                        c.deactivate();
-                                } catch (Throwable t) {
-                                        // Best effort — don't let one failure abort the rest
-                                }
+                                try { c.deactivate(); } catch (Throwable t) {}
                         }
                 }
 
@@ -683,15 +677,11 @@ public class BukkitUnsafe {
         }
 
         public static EventLoopGroup getEventLoopGroup(Class<?> serverConnection, boolean enableNativeTransport) {
-                // Hotfix 4: walk declared fields across the whole superclass chain (private
-                // fields included), not just public getFields(). Paper 1.17+ makes the
-                // static EventLoopGroup fields private on ServerConnection.
+                // Hotfix 5: walk declared fields (private included), not just public getFields()
                 List<Field> fields = new ArrayList<>();
                 Class<?> walkClz = serverConnection;
                 do {
-                        for (Field f : walkClz.getDeclaredFields()) {
-                                fields.add(f);
-                        }
+                        for (Field f : walkClz.getDeclaredFields()) fields.add(f);
                 } while ((walkClz = walkClz.getSuperclass()) != Object.class);
                 if (enableNativeTransport) {
                         for (Field field : fields) {
@@ -815,19 +805,15 @@ public class BukkitUnsafe {
         }
 
         // ===================================================================
-        // HOTFIX 4 — authlib 6.x compatibility helpers.
+        // HOTFIX 5 — authlib 6.x compatibility helpers.
         //
-        // Paper 26.x (MC 1.21.11+) ships authlib 6.x, which changed the
-        // Property class from using getName()/getValue()/getSignature()
-        // to using name()/value()/signature() (record-style accessors).
-        //
-        // The old methods were removed, causing NoSuchMethodError at runtime
-        // when EaglerXServer calls property.getName() to get the property
-        // key for the Multimap.
+        // Paper 26.x (MC 1.21.11+) ships authlib 6.x, which changed Property
+        // from getName()/getValue()/getSignature() to name()/value()/signature()
+        // (record-style accessors). The old methods were removed, causing
+        // NoSuchMethodError at runtime.
         //
         // These helpers use reflection to call whichever method exists,
-        // caching the result for performance. They are null-safe and
-        // exception-safe — if neither method exists, they return null.
+        // caching the result for performance. They are null-safe.
         // ===================================================================
 
         private static volatile Method propertyGetNameMethod = null;
@@ -836,7 +822,6 @@ public class BukkitUnsafe {
 
         private static synchronized void initPropertyMethods() {
                 if (propertyMethodsInit) return;
-                // Try getName() first (authlib 1.x-5.x), then name() (authlib 6.x+)
                 try {
                         propertyGetNameMethod = Property.class.getMethod("getName");
                 } catch (NoSuchMethodException e) {
@@ -846,7 +831,6 @@ public class BukkitUnsafe {
                                 propertyGetNameMethod = null;
                         }
                 }
-                // Try getValue() first (authlib 1.x-5.x), then value() (authlib 6.x+)
                 try {
                         propertyGetValueMethod = Property.class.getMethod("getValue");
                 } catch (NoSuchMethodException e) {
@@ -859,11 +843,6 @@ public class BukkitUnsafe {
                 propertyMethodsInit = true;
         }
 
-        /**
-         * Returns the name of a Property using reflection, surviving the
-         * authlib 6.x rename from getName() to name().
-         * Returns null if prop is null or neither method exists.
-         */
         public static String getPropertyName(Property prop) {
                 if (prop == null) return null;
                 if (!propertyMethodsInit) initPropertyMethods();
@@ -875,11 +854,6 @@ public class BukkitUnsafe {
                 }
         }
 
-        /**
-         * Returns the value of a Property using reflection, surviving the
-         * authlib 6.x rename from getValue() to value().
-         * Returns null if prop is null or neither method exists.
-         */
         public static String getPropertyValue(Property prop) {
                 if (prop == null) return null;
                 if (!propertyMethodsInit) initPropertyMethods();
@@ -891,14 +865,6 @@ public class BukkitUnsafe {
                 }
         }
 
-        /**
-         * Puts a Property into a GameProfile's properties map using reflection.
-         * This wraps the put(key, value) call on the Multimap returned by
-         * getProperties(), and uses getPropertyName() to get the key.
-         *
-         * This is the single entry point for inserting marker properties
-         * during login, and is safe to call on all authlib versions.
-         */
         @SuppressWarnings("unchecked")
         public static void putProfileProperty(GameProfile profile, Property prop) {
                 if (profile == null || prop == null) return;
@@ -909,14 +875,10 @@ public class BukkitUnsafe {
                                 props.put(name, prop);
                         }
                 } catch (Throwable t) {
-                        // Best effort — don't crash login on property insertion failure
+                        // Best effort
                 }
         }
 
-        /**
-         * Removes a Property from a GameProfile's properties map using reflection.
-         * Uses getPropertyName() to get the key for the remove call.
-         */
         @SuppressWarnings("unchecked")
         public static void removeProfileProperty(GameProfile profile, Property prop) {
                 if (profile == null || prop == null) return;
