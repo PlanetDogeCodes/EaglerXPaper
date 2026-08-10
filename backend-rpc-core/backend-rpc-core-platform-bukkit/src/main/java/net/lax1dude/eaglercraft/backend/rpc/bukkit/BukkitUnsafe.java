@@ -49,9 +49,7 @@ public class BukkitUnsafe {
         private static Method method_EntityPlayer_getProfile = null;
 
         private static synchronized void bindCraftPlayer(Player playerObject) {
-                if (CLASS_CRAFTPLAYER_HANDLE.getAcquire() != null) {
-                        return;
-                }
+                if (CLASS_CRAFTPLAYER_HANDLE.getAcquire() != null) { return; }
                 Class<?> clz = playerObject.getClass();
                 try {
                         method_CraftPlayer_getHandle = clz.getMethod("getHandle");
@@ -60,25 +58,13 @@ public class BukkitUnsafe {
                         method_EntityPlayer_getProfile = findGameProfileGetter(clz2);
                         class_EntityPlayer = clz2;
                         CLASS_CRAFTPLAYER_HANDLE.setRelease(clz);
-                } catch (Exception ex) {
-                        throw new RuntimeException("Reflection failed!", ex);
-                }
+                } catch (Exception ex) { throw new RuntimeException("Reflection failed!", ex); }
         }
 
-        // Hotfix 6: find a GameProfile-returning getter (getGameProfile, not getProfile
-        // which returns ResolvableProfile on 1.21+)
         private static Method findGameProfileGetter(Class<?> entityPlayerClass) {
-                try {
-                        Method m = entityPlayerClass.getMethod("getGameProfile");
-                        if (GameProfile.class.isAssignableFrom(m.getReturnType())) return m;
-                } catch (NoSuchMethodException ex) {}
-                try {
-                        Method m = entityPlayerClass.getMethod("getProfile");
-                        if (GameProfile.class.isAssignableFrom(m.getReturnType())) return m;
-                } catch (NoSuchMethodException ex) {}
-                for (Method m : entityPlayerClass.getMethods()) {
-                        if (m.getParameterCount() == 0 && GameProfile.class.isAssignableFrom(m.getReturnType())) return m;
-                }
+                try { Method m = entityPlayerClass.getMethod("getGameProfile"); if (GameProfile.class.isAssignableFrom(m.getReturnType())) return m; } catch (NoSuchMethodException ex) {}
+                try { Method m = entityPlayerClass.getMethod("getProfile"); if (GameProfile.class.isAssignableFrom(m.getReturnType())) return m; } catch (NoSuchMethodException ex) {}
+                for (Method m : entityPlayerClass.getMethods()) { if (m.getParameterCount() == 0 && GameProfile.class.isAssignableFrom(m.getReturnType())) return m; }
                 throw new RuntimeException("Could not locate GameProfile getter on " + entityPlayerClass.getName());
         }
 
@@ -86,19 +72,11 @@ public class BukkitUnsafe {
 
         static {
                 boolean paperProfileAPISupport_ = false;
-                try {
-                        Class.forName("com.destroystokyo.paper.profile.PlayerProfile");
-                        paperProfileAPISupport_ = true;
-                } catch (ClassNotFoundException e) {
-                        try {
-                                Class.forName("io.papermc.paper.profile.PlayerProfile");
-                                paperProfileAPISupport_ = true;
-                        } catch (ClassNotFoundException e2) {}
-                }
+                try { Class.forName("com.destroystokyo.paper.profile.PlayerProfile"); paperProfileAPISupport_ = true; }
+                catch (ClassNotFoundException e) { try { Class.forName("io.papermc.paper.profile.PlayerProfile"); paperProfileAPISupport_ = true; } catch (ClassNotFoundException e2) {} }
                 paperProfileAPISupport = paperProfileAPISupport_;
         }
 
-        // Hotfix 6: authlib 6.x reflection helpers
         private static volatile Method propertyGetValueMethod = null;
         private static volatile Method getPropertiesMethod = null;
         private static volatile boolean propertyMethodsInit = false;
@@ -106,10 +84,7 @@ public class BukkitUnsafe {
         private static synchronized void initPropertyMethods() {
                 if (propertyMethodsInit) return;
                 try { propertyGetValueMethod = Property.class.getMethod("getValue"); }
-                catch (NoSuchMethodException e) {
-                        try { propertyGetValueMethod = Property.class.getMethod("value"); }
-                        catch (NoSuchMethodException e2) { propertyGetValueMethod = null; }
-                }
+                catch (NoSuchMethodException e) { try { propertyGetValueMethod = Property.class.getMethod("value"); } catch (NoSuchMethodException e2) { propertyGetValueMethod = null; } }
                 try { getPropertiesMethod = GameProfile.class.getMethod("getProperties"); }
                 catch (NoSuchMethodException e) { getPropertiesMethod = null; }
                 propertyMethodsInit = true;
@@ -119,42 +94,31 @@ public class BukkitUnsafe {
                 if (prop == null) return null;
                 if (!propertyMethodsInit) initPropertyMethods();
                 if (propertyGetValueMethod == null) return null;
-                try { return (String) propertyGetValueMethod.invoke(prop); }
-                catch (Exception e) { return null; }
+                try { return (String) propertyGetValueMethod.invoke(prop); } catch (Exception e) { return null; }
         }
 
         private static Object getPropertiesSafe(GameProfile profile) {
                 if (profile == null) return null;
                 if (!propertyMethodsInit) initPropertyMethods();
                 if (getPropertiesMethod == null) return null;
-                try { return getPropertiesMethod.invoke(profile); }
-                catch (Exception e) { return null; }
+                try { return getPropertiesMethod.invoke(profile); } catch (Exception e) { return null; }
         }
 
         public static boolean isEaglerPlayerProperty(Player player) {
-                if (paperProfileAPISupport) {
-                        return isEaglerPlayerPropertyPaper(player);
-                } else {
-                        if (CLASS_CRAFTPLAYER_HANDLE.getAcquire() == null) {
-                                bindCraftPlayer(player);
-                        }
+                if (paperProfileAPISupport) { return isEaglerPlayerPropertyPaper(player); }
+                else {
+                        if (CLASS_CRAFTPLAYER_HANDLE.getAcquire() == null) { bindCraftPlayer(player); }
                         try {
-                                // Hotfix 6: use reflection for getProperties() — authlib 6.x changed return type
-                                GameProfile profile = (GameProfile) method_EntityPlayer_getProfile
-                                                .invoke(method_CraftPlayer_getHandle.invoke(player));
+                                GameProfile profile = (GameProfile) method_EntityPlayer_getProfile.invoke(method_CraftPlayer_getHandle.invoke(player));
                                 Object props = getPropertiesSafe(profile);
                                 if (props == null) return false;
                                 Method getMethod = props.getClass().getMethod("get", Object.class);
                                 Object texCollection = getMethod.invoke(props, "isEaglerPlayer");
                                 if (texCollection instanceof Collection<?> tex && !tex.isEmpty()) {
                                         Object first = tex.iterator().next();
-                                        if (first instanceof Property p) {
-                                                return Boolean.parseBoolean(getPropertyValue(p));
-                                        }
+                                        if (first instanceof Property p) { return Boolean.parseBoolean(getPropertyValue(p)); }
                                 }
-                        } catch (Exception e) {
-                                throw new RuntimeException("Reflection failed!", e);
-                        }
+                        } catch (Exception e) { throw new RuntimeException("Reflection failed!", e); }
                         return false;
                 }
         }

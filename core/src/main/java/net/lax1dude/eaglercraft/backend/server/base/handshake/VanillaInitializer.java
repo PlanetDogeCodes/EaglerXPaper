@@ -196,14 +196,9 @@ public class VanillaInitializer {
         }
 
         private void handleKickPacket(ChannelHandlerContext ctx, ByteBuf data) {
-                // Hotfix 6: wrap in try-catch — PacketEvents can corrupt the buffer,
-                // causing readMCString to throw. Fall back to a generic message.
                 String pkt;
-                try {
-                        pkt = BufferUtils.readMCString(data, 32767);
-                } catch (Exception e) {
-                        pkt = "Disconnected from server";
-                }
+                try { pkt = BufferUtils.readMCString(data, 32767); }
+                catch (Exception e) { pkt = "Disconnected from server"; }
                 inboundHandler.terminateErrorCode(ctx, pipelineData.handshakeProtocol,
                                 HandshakePacketTypes.SERVER_ERROR_CUSTOM_MESSAGE, pkt);
                 connectionState = STATE_COMPLETE;

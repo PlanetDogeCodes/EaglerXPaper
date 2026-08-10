@@ -51,7 +51,6 @@ class BukkitListener implements Listener {
                 Channel channel = evt.netty().getChannel();
                 PlayerPostLoginInjector.LoginEventContext ctx = channel.attr(PlayerPostLoginInjector.attr).get();
                 IPipelineData pipelineData = channel.attr(PipelineAttributes.<IPipelineData>pipelineData()).get();
-                // Hotfix 6: ctx can be null for non-Eaglercraft connections
                 if (ctx != null && pipelineData != null && pipelineData.isCompressionDisable()) {
                         ctx.markCompressionDisable(true);
                 }
@@ -115,7 +114,6 @@ class BukkitListener implements Listener {
         @EventHandler(priority = EventPriority.MONITOR)
         public void onQuitEvent(PlayerQuitEvent evt) {
                 plugin.dropPlayer(evt.getPlayer());
-                // Hotfix 6: use reflection-based helpers for authlib 6.x compatibility.
                 try {
                         Object handle = BukkitUnsafe.getHandle(evt.getPlayer());
                         com.mojang.authlib.GameProfile profile = BukkitUnsafe.getGameProfile(handle);

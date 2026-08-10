@@ -333,18 +333,14 @@ public class PlayerPostLoginInjector {
                                                                 return null;
                                                         }
                                                 }
-                                                // Hotfix 6: wrap generic passthrough in try-catch for NoSuchElementException.
-                                                // This happens when the server calls setupCompression() on an Eaglercraft
-                                                // connection (pipeline lacks "splitter"). Vanilla Java connections have
-                                                // "splitter" so the call succeeds normally — no behavior change for them.
+                                                // Hotfix 6: catch NoSuchElementException from setupCompression.
+                                                // This happens on Eaglercraft connections (pipeline lacks "splitter").
+                                                // Vanilla Java connections have "splitter" so this never triggers for them.
                                                 try {
                                                         return meth.invoke(netManager, args);
                                                 } catch (java.lang.reflect.InvocationTargetException ite) {
                                                         Throwable cause = ite.getCause();
                                                         if (cause instanceof java.util.NoSuchElementException) {
-                                                                java.util.logging.Logger.getLogger("EaglerXServer").fine(
-                                                                                "[Hotfix6] Swallowed NoSuchElementException in "
-                                                                                + meth.getName() + ": " + cause.getMessage());
                                                                 return null;
                                                         }
                                                         throw ite;
@@ -600,7 +596,6 @@ public class PlayerPostLoginInjector {
                                                                 if (er instanceof EaglerError err) {
                                                                         Player player = null;
                                                                         synchronized (err.gameProfile) {
-                                                                                // Hotfix 6: use reflection-based getPropertyValuesSafe
                                                                                 java.util.Iterator<Property> itr = BukkitUnsafe.getPropertyValuesSafe(err.gameProfile).iterator();
                                                                                 while (itr.hasNext()) {
                                                                                         Property prop = itr.next();
@@ -799,7 +794,6 @@ public class PlayerPostLoginInjector {
         }
 
         public void handleLoginEvent(PlayerLoginEvent event) {
-                // Hotfix 6: use reflection-based helpers to survive authlib 6.x
                 try {
                         Property marker = new Property("$eaglerMarker_" + ThreadLocalRandom.current().nextLong(Long.MAX_VALUE), "TMP");
                         Object player = BukkitUnsafe.getHandle(event.getPlayer());
