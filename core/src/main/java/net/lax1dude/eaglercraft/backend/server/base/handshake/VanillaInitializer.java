@@ -190,7 +190,12 @@ public class VanillaInitializer {
                                 inboundHandler.terminateInternalError(ctx, pipelineData.handshakeProtocol);
                         }
                 } catch (IndexOutOfBoundsException ex) {
-                        ex.printStackTrace();
+                        // Reliability: use logger instead of printStackTrace
+                        pipelineData.connectionLogger.error("Disconnecting, malformed handshake packet", ex);
+                        inboundHandler.terminateInternalError(ctx, pipelineData.handshakeProtocol);
+                } catch (Exception ex) {
+                        // Reliability: catch ALL exceptions to prevent pipeline crashes
+                        pipelineData.connectionLogger.error("Unexpected error during handshake", ex);
                         inboundHandler.terminateInternalError(ctx, pipelineData.handshakeProtocol);
                 }
         }

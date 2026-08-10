@@ -199,8 +199,17 @@ public class BukkitUnsafe {
                         bindCraftPlayer(playerObject);
                 }
                 try {
-                        return (Channel) field_NetworkManager_channel.get(field_PlayerConnection_networkManager
-                                        .get(field_EntityPlayer_playerConnection.get(method_CraftPlayer_getHandle.invoke(playerObject))));
+                        // Reliability: break the chained field access into separate steps
+                        // with null checks. During transient login states, intermediate
+                        // fields can be null, causing NPE that crashes the caller.
+                        Object craftPlayer = method_CraftPlayer_getHandle.invoke(playerObject);
+                        if (craftPlayer == null) return null;
+                        Object playerConnection = field_EntityPlayer_playerConnection.get(craftPlayer);
+                        if (playerConnection == null) return null;
+                        Object networkManager = field_PlayerConnection_networkManager.get(playerConnection);
+                        if (networkManager == null) return null;
+                        Object channel = field_NetworkManager_channel.get(networkManager);
+                        return (Channel) channel;
                 } catch (ReflectiveOperationException e) {
                         throw Util.propagateReflectThrowable(e);
                 }
