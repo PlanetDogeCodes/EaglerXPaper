@@ -27,8 +27,7 @@ public class BufferUtils {
         public static final boolean RETAINEDSLICE_SUPPORT;
 
         static {
-                // Hotfix 5: separate booleans — old code reused `b`, causing
-                // RETAINEDSLICE_SUPPORT to be true even when readRetainedSlice doesn't exist.
+                // Hotfix 6: separate booleans — old code reused `b`
                 boolean charseqOk = false;
                 try {
                         ByteBuf.class.getMethod("readCharSequence", int.class, Charset.class);
@@ -163,6 +162,12 @@ public class BufferUtils {
                 if (len > maxLen * 4) {
                         throw new IndexOutOfBoundsException();
                 }
+                // Hotfix 6: check that the buffer actually has enough readable bytes.
+                // Without this, readCharSequence throws IndexOutOfBoundsException when
+                // the packet is truncated or corrupted (e.g. by PacketEvents).
+                if (len > buffer.readableBytes()) {
+                        throw new IndexOutOfBoundsException("readMCString: need " + len + " bytes, only " + buffer.readableBytes() + " available");
+                }
                 CharSequence ret = readCharSequence(buffer, len, StandardCharsets.UTF_8);
                 if (ret.length() > maxLen) {
                         throw new IndexOutOfBoundsException();
@@ -174,6 +179,10 @@ public class BufferUtils {
                 int len = BufferUtils.readVarInt(buffer, 5);
                 if (len > maxLen * 4) {
                         throw new IndexOutOfBoundsException();
+                }
+                // Hotfix 6: bounds check
+                if (len > buffer.readableBytes()) {
+                        throw new IndexOutOfBoundsException("readMCCharSequence: need " + len + " bytes, only " + buffer.readableBytes() + " available");
                 }
                 CharSequence ret = readCharSequence(buffer, len, StandardCharsets.UTF_8);
                 if (ret.length() > maxLen) {

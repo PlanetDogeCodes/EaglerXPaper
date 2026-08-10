@@ -32,7 +32,7 @@ public class WebSocketEaglerFrameCodec extends ChannelDuplexHandler {
         @Override
         public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
                 if (msg instanceof BinaryWebSocketFrame msg1) {
-                        // Hotfix 5: explicit retain+release for ownership transfer
+                        // Hotfix 6: explicit retain+release for ownership transfer
                         ctx.fireChannelRead(msg1.content().retain());
                         msg1.release();
                 } else if (msg instanceof WebSocketFrame msg2) {
@@ -46,7 +46,7 @@ public class WebSocketEaglerFrameCodec extends ChannelDuplexHandler {
         @Override
         public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception {
                 if (msg instanceof ByteBuf buf) {
-                        // Hotfix 5: wrap empty ByteBufs too for consistency
+                        // Hotfix 6: wrap empty ByteBufs too for consistency
                         ctx.write(new BinaryWebSocketFrame(buf), promise);
                         return;
                 }

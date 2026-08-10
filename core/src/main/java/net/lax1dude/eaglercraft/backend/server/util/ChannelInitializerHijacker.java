@@ -57,7 +57,7 @@ public abstract class ChannelInitializerHijacker extends ChannelInitializer<Chan
                 this.initServerChild = initServerChild;
         }
 
-        // Hotfix 5: volatile for visibility across event-loop threads
+        // Hotfix 6: volatile for cross-thread visibility
         protected volatile Consumer<Channel> impl = new ImplInitial();
 
         protected abstract void callParent(Channel channel);

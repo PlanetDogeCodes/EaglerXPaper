@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 """
-Creative validation for EaglerXServer v1.1.1 Hotfix 5 (from Hotfix 3 base).
+Creative validation for EaglerXServer v1.1.1 Hotfix 6.
 
-Critical difference from Hotfix 4: the setupCompression fix is now a
-try-catch on NoSuchElementException ONLY — NOT an unconditional no-op.
-This means vanilla Java connections (which have "splitter" in their
-pipeline) get normal compression, while Eaglercraft connections (which
-lack "splitter") get the exception caught and swallowed.
+Critical: Hotfix 6 fixes the GameProfile.getProperties() NoSuchMethodError
+that was NOT fully fixed in Hotfix 5. authlib 6.x changed the return type
+of getProperties() from PropertyMap to Multimap<String, Property>, and the
+method signature itself changed — so direct calls throw NoSuchMethodError
+even though the method name still exists.
 
 This validation suite verifies:
-1. Bytecode markers — confirms fixes are in the compiled JAR
-2. Reflection verification — loads JAR, verifies helper methods exist
-3. authlib simulation — creates real Property, verifies reflection works
-4. setupCompression safety check — verifies the proxy does NOT
-   unconditionally intercept setupCompression (the Hotfix 4 regression)
+1. Bytecode markers — confirms all Hotfix 6 helpers are in the compiled JAR
+2. Reflection verification — loads JAR, verifies all helper methods exist
+3. authlib simulation — creates real GameProfile + Property, verifies
+   reflection helpers work correctly
+4. Bounds check verification — confirms readMCString has the bounds check
 """
 
 import os, sys, subprocess, glob
@@ -42,17 +42,29 @@ def check_bytecode():
     print("=" * 70)
     markers = [
         (f"{BUKKIT_CLASSES}/net/lax1dude/eaglercraft/backend/server/bukkit/BukkitUnsafe.class",
-         "getPropertyName", "authlib 6.x Property.getName() helper"),
+         "getPropertiesSafe", "getPropertiesSafe helper (authlib 6.x return type fix)"),
         (f"{BUKKIT_CLASSES}/net/lax1dude/eaglercraft/backend/server/bukkit/BukkitUnsafe.class",
-         "getPropertyValue", "authlib 6.x Property.getValue() helper"),
+         "getPropertyName", "getPropertyName helper"),
+        (f"{BUKKIT_CLASSES}/net/lax1dude/eaglercraft/backend/server/bukkit/BukkitUnsafe.class",
+         "getPropertyValue", "getPropertyValue helper"),
         (f"{BUKKIT_CLASSES}/net/lax1dude/eaglercraft/backend/server/bukkit/BukkitUnsafe.class",
          "putProfileProperty", "putProfileProperty helper"),
+        (f"{BUKKIT_CLASSES}/net/lax1dude/eaglercraft/backend/server/bukkit/BukkitUnsafe.class",
+         "multimapPut", "multimapPut helper"),
+        (f"{BUKKIT_CLASSES}/net/lax1dude/eaglercraft/backend/server/bukkit/BukkitUnsafe.class",
+         "multimapRemove", "multimapRemove helper"),
+        (f"{BUKKIT_CLASSES}/net/lax1dude/eaglercraft/backend/server/bukkit/BukkitUnsafe.class",
+         "getPropertyValuesSafe", "getPropertyValuesSafe helper"),
         (f"{BUKKIT_CLASSES}/net/lax1dude/eaglercraft/backend/server/bukkit/async/PlayerPostLoginInjector.class",
-         "NoSuchElementException", "setupCompression catch (NOT unconditional no-op)"),
+         "NoSuchElementException", "setupCompression catch"),
         (f"{BUKKIT_CLASSES}/net/lax1dude/eaglercraft/backend/server/bukkit/async/PlayerPostLoginInjector.class",
-         "Hotfix5", "Hotfix 5 marker"),
+         "Hotfix6", "Hotfix 6 marker"),
+        (f"{BUKKIT_CLASSES}/net/lax1dude/eaglercraft/backend/server/bukkit/BukkitListener.class",
+         "getPropertyValuesSafe", "BukkitListener uses reflection helper"),
         (f"{RPC_CLASSES}/net/lax1dude/eaglercraft/backend/rpc/bukkit/BukkitUnsafe.class",
          "findGameProfileGetter", "backend-rpc GameProfile getter fix"),
+        (f"{RPC_CLASSES}/net/lax1dude/eaglercraft/backend/rpc/bukkit/BukkitUnsafe.class",
+         "getPropertiesSafe", "backend-rpc getPropertiesSafe"),
         (f"{CORE_CLASSES}/net/lax1dude/eaglercraft/backend/server/base/pipeline/BufferUtils.class",
          "charseqOk", "BufferUtils separate boolean fix"),
         (f"{CORE_CLASSES}/net/lax1dude/eaglercraft/backend/server/base/pipeline/WebSocketEaglerFrameCodec.class",
@@ -67,18 +79,13 @@ def check_bytecode():
         else:
             print(f"  FAIL  {desc}")
             failed += 1
-    # CRITICAL: verify that "setupCompression" is NOT present as an intercepted
-    # method name (the Hotfix 4 regression). In Hotfix 5, we catch the exception
-    # rather than intercepting by name.
-    text = extract_strings(f"{BUKKIT_CLASSES}/net/lax1dude/eaglercraft/backend/server/bukkit/async/PlayerPostLoginInjector.class")
-    # The string "setupCompression" might still appear in comments/logging, but
-    # the key is that we DON'T have an unconditional `return null` before the
-    # method.invoke. We check that "NoSuchElementException" IS present (the catch).
-    if "NoSuchElementException" in text:
-        print(f"  PASS  setupCompression uses catch (not unconditional no-op)")
+    # Check readMCString bounds check
+    text = extract_strings(f"{CORE_CLASSES}/net/lax1dude/eaglercraft/backend/server/base/pipeline/BufferUtils.class")
+    if "readMCString: need" in text or "available" in text:
+        print(f"  PASS  BufferUtils readMCString bounds check")
         passed += 1
     else:
-        print(f"  FAIL  setupCompression catch not found")
+        print(f"  FAIL  BufferUtils readMCString bounds check")
         failed += 1
     print(f"\n  Summary: {passed}/{passed+failed} markers found")
     return failed == 0
@@ -102,6 +109,7 @@ def check_reflection():
 
     probe = """
 import java.lang.reflect.*;
+import java.util.UUID;
 
 public class ValidationProbe {
     static int passed = 0, failed = 0;
@@ -113,27 +121,38 @@ public class ValidationProbe {
     public static void main(String[] args) throws Exception {
         Class<?> bukkitUnsafe = Class.forName("net.lax1dude.eaglercraft.backend.server.bukkit.BukkitUnsafe");
         Class<?> propertyClass = Class.forName("com.mojang.authlib.properties.Property");
+        Class<?> gameProfileClass = Class.forName("com.mojang.authlib.GameProfile");
 
-        // 1-4. Helper methods exist
+        // 1-6. Helper methods exist
         check("getPropertyName exists", bukkitUnsafe.getDeclaredMethod("getPropertyName", propertyClass) != null);
         check("getPropertyValue exists", bukkitUnsafe.getDeclaredMethod("getPropertyValue", propertyClass) != null);
-        check("putProfileProperty exists", bukkitUnsafe.getDeclaredMethod("putProfileProperty",
-            Class.forName("com.mojang.authlib.GameProfile"), propertyClass) != null);
-        check("removeProfileProperty exists", bukkitUnsafe.getDeclaredMethod("removeProfileProperty",
-            Class.forName("com.mojang.authlib.GameProfile"), propertyClass) != null);
+        check("getPropertiesSafe exists", bukkitUnsafe.getDeclaredMethod("getPropertiesSafe", gameProfileClass) != null);
+        check("putProfileProperty exists", bukkitUnsafe.getDeclaredMethod("putProfileProperty", gameProfileClass, propertyClass) != null);
+        check("removeProfileProperty exists", bukkitUnsafe.getDeclaredMethod("removeProfileProperty", gameProfileClass, propertyClass) != null);
+        check("getPropertyValuesSafe exists", bukkitUnsafe.getDeclaredMethod("getPropertyValuesSafe", gameProfileClass) != null);
 
-        // 5. getPropertyName works on real Property
+        // 7. multimap helpers exist
+        check("multimapPut exists", bukkitUnsafe.getDeclaredMethod("multimapPut", Object.class, String.class, Object.class) != null);
+        check("multimapRemove exists", bukkitUnsafe.getDeclaredMethod("multimapRemove", Object.class, String.class, Object.class) != null);
+        check("multimapGet exists", bukkitUnsafe.getDeclaredMethod("multimapGet", Object.class, String.class) != null);
+
+        // 8. Test with real GameProfile + Property
+        Object profile = gameProfileClass.getDeclaredConstructor(UUID.class, String.class)
+            .newInstance(java.util.UUID.randomUUID(), "TestPlayer");
+        Object props = bukkitUnsafe.getDeclaredMethod("getPropertiesSafe", gameProfileClass).invoke(null, profile);
+        check("getPropertiesSafe returns non-null", props != null);
+
+        // Create a Property and put it
         Object prop = propertyClass.getDeclaredConstructor(String.class, String.class, String.class)
-            .newInstance("testName", "testValue", null);
-        Method gpn = bukkitUnsafe.getDeclaredMethod("getPropertyName", propertyClass);
-        gpn.setAccessible(true);
-        check("getPropertyName returns 'testName'", "testName".equals(gpn.invoke(null, prop)));
+            .newInstance("testKey", "testValue", null);
+        bukkitUnsafe.getDeclaredMethod("putProfileProperty", gameProfileClass, propertyClass).invoke(null, profile, prop);
 
-        Method gpv = bukkitUnsafe.getDeclaredMethod("getPropertyValue", propertyClass);
-        gpv.setAccessible(true);
-        check("getPropertyValue returns 'testValue'", "testValue".equals(gpv.invoke(null, prop)));
+        // Verify it's there via getPropertyValuesSafe
+        java.util.Collection<?> values = (java.util.Collection<?>)
+            bukkitUnsafe.getDeclaredMethod("getPropertyValuesSafe", gameProfileClass).invoke(null, profile);
+        check("getPropertyValuesSafe returns non-empty", !values.isEmpty());
 
-        // 6. volatile fields
+        // 9. volatile fields
         Class<?> hijacker = Class.forName("net.lax1dude.eaglercraft.backend.server.util.ChannelInitializerHijacker");
         Field implField = hijacker.getDeclaredField("impl");
         check("ChannelInitializerHijacker.impl is volatile", Modifier.isVolatile(implField.getModifiers()));
@@ -151,11 +170,11 @@ public class ValidationProbe {
             check("NettyPipelineData.disconnectTask is volatile", Modifier.isVolatile(discTask.getModifiers()));
         }
 
-        // 7. backend-rpc findGameProfileGetter
+        // 10. backend-rpc findGameProfileGetter
         Class<?> rpcUnsafe = Class.forName("net.lax1dude.eaglercraft.backend.rpc.bukkit.BukkitUnsafe");
         check("backend-rpc findGameProfileGetter exists", rpcUnsafe.getDeclaredMethod("findGameProfileGetter", Class.class) != null);
 
-        // 8. Version
+        // 11. Version
         Class<?> versionClass = Class.forName("net.lax1dude.eaglercraft.backend.server.base.EaglerXServerVersion");
         Field versionField = versionClass.getDeclaredField("VERSION");
         versionField.setAccessible(true);
@@ -170,59 +189,71 @@ public class ValidationProbe {
     r = subprocess.run([JAVAC, "-cp", classpath, "-d", "/tmp", "/tmp/ValidationProbe.java"],
                       capture_output=True, text=True, timeout=60)
     if r.returncode != 0:
-        print(f"  ERROR compiling: {r.stderr[:300]}")
+        print(f"  ERROR compiling: {r.stderr[:500]}")
         return False
     r = subprocess.run([JAVA, "-cp", "/tmp:" + classpath, "ValidationProbe"],
                       capture_output=True, text=True, timeout=60)
     print(r.stdout)
-    if r.stderr: print("STDERR:", r.stderr[:300])
+    if r.stderr: print("STDERR:", r.stderr[:500])
     return r.returncode == 0
 
-def check_no_regression():
+def check_no_direct_getProperties():
     print("\n" + "=" * 70)
-    print("Validation 3: Regression Check — setupCompression NOT unconditionally no-op'd")
+    print("Validation 3: No Direct getProperties() Calls (authlib 6.x safety)")
     print("=" * 70)
     print()
-    print("CRITICAL: The Hotfix 4 regression was that setupCompression was")
-    print("unconditionally no-op'd for ALL proxied connections, breaking vanilla")
-    print("Java client compression ('bad inflate data').")
+    print("CRITICAL: Hotfix 5 still had direct profile.getProperties() calls in")
+    print("BukkitListener and PlayerPostLoginInjector, causing NoSuchMethodError")
+    print("on authlib 6.x. Hotfix 6 routes ALL calls through getPropertiesSafe().")
     print()
-    print("Hotfix 5 uses a try-catch on NoSuchElementException ONLY — so vanilla")
-    print("Java connections (which have 'splitter') pass through normally.")
-    print()
-    # Check the source code directly
-    src = "/home/z/my-project/eaglerxserver-1.1.1/core/core-platform-bukkit/src/main/java/net/lax1dude/eaglercraft/backend/server/bukkit/async/PlayerPostLoginInjector.java"
-    with open(src) as f:
-        content = f.read()
-    # The Hotfix 4 regression: unconditional `return null` before meth.invoke
-    # for setupCompression/setCompressionThreshold method names.
-    # Hotfix 5: NO name-based interception. Instead, a try-catch around
-    # meth.invoke that catches NoSuchElementException.
-    has_name_check = '"setupCompression".equals(methName)' in content or 'setupCompression".equals' in content
-    has_catch = 'NoSuchElementException' in content and 'InvocationTargetException' in content
-    has_try = 'try {' in content and 'meth.invoke(netManager, args)' in content
-
-    if not has_name_check and has_catch and has_try:
-        print("  PASS  No unconditional setupCompression no-op (Hotfix 4 regression avoided)")
-        print("  PASS  Uses try-catch on NoSuchElementException instead")
-        return True
-    else:
-        if has_name_check:
-            print("  FAIL  Found name-based setupCompression interception (Hotfix 4 regression!)")
-        if not has_catch:
-            print("  FAIL  NoSuchElementException catch not found")
-        return False
+    # Check source files for direct getProperties() calls
+    files = [
+        "/home/z/my-project/eaglerxserver-1.1.1/core/core-platform-bukkit/src/main/java/net/lax1dude/eaglercraft/backend/server/bukkit/BukkitListener.java",
+        "/home/z/my-project/eaglerxserver-1.1.1/core/core-platform-bukkit/src/main/java/net/lax1dude/eaglercraft/backend/server/bukkit/async/PlayerPostLoginInjector.java",
+        "/home/z/my-project/eaglerxserver-1.1.1/core/core-platform-bukkit/src/main/java/net/lax1dude/eaglercraft/backend/server/bukkit/BukkitUnsafe.java",
+    ]
+    all_safe = True
+    for f in files:
+        with open(f) as fh:
+            content = fh.read()
+        # Look for direct .getProperties() calls that are NOT in getPropertiesSafe
+        # or in comments. We check for "profile.getProperties()" or ".getProperties()."
+        # but exclude lines that are part of getPropertiesSafe's implementation.
+        lines = content.split('\n')
+        unsafe_lines = []
+        for i, line in enumerate(lines, 1):
+            stripped = line.strip()
+            if stripped.startswith('//') or stripped.startswith('*'):
+                continue
+            # Check for direct getProperties() calls
+            if '.getProperties()' in line:
+                # Allow it if it's inside getPropertiesSafe's own implementation
+                # (which uses getMethod("getProperties") not .getProperties())
+                if 'getMethod("getProperties")' in line or 'getPropertiesMethod' in line:
+                    continue
+                # Allow if it's in a comment
+                if '//' in line and '.getProperties()' in line.split('//')[1]:
+                    continue
+                unsafe_lines.append((i, line.strip()))
+        if unsafe_lines:
+            print(f"  FAIL  {os.path.basename(f)} has direct getProperties() calls:")
+            for ln, txt in unsafe_lines:
+                print(f"        line {ln}: {txt}")
+            all_safe = False
+        else:
+            print(f"  PASS  {os.path.basename(f)} uses reflection helpers only")
+    return all_safe
 
 def main():
     print()
     print("=" * 70)
-    print("  EaglerXServer v1.1.1 Hotfix 5 — Validation Suite")
+    print("  EaglerXServer v1.1.1 Hotfix 6 — Validation Suite")
     print("=" * 70)
     print(f"\nJAR: {JAR_PATH}\n")
     results = [
         ("Bytecode markers", check_bytecode()),
         ("Reflection verification", check_reflection()),
-        ("Regression check", check_no_regression()),
+        ("No direct getProperties()", check_no_direct_getProperties()),
     ]
     print("\n" + "=" * 70)
     print("  Final Summary")

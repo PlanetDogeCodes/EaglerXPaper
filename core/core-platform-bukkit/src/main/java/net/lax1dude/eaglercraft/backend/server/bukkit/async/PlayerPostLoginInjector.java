@@ -333,31 +333,17 @@ public class PlayerPostLoginInjector {
                                                                 return null;
                                                         }
                                                 }
-                                                // Hotfix 5: Wrap the generic passthrough in a try-catch that catches
-                                                // pipeline-related NoSuchElementException. This happens when the server
-                                                // calls setupCompression() on an Eaglercraft connection — the method
-                                                // tries to addAfter("splitter", ...) but "splitter" was removed from
-                                                // the Eaglercraft pipeline. We catch and no-op ONLY for this specific
-                                                // exception, so vanilla Java connections (which DO have "splitter")
-                                                // pass through normally and get proper compression.
-                                                //
-                                                // This is safe because:
-                                                // - For vanilla Java: "splitter" exists, setupCompression succeeds,
-                                                //   compression works normally. No behavior change.
-                                                // - For Eaglercraft: "splitter" is gone, NoSuchElementException is
-                                                //   thrown, we catch it. Eaglercraft uses WebSocket-level compression
-                                                //   (deflate-frame extension), so Minecraft packet compression is not
-                                                //   needed. The ClientboundLoginCompressionPacket was already
-                                                //   suppressed by the compressionDisable check above.
+                                                // Hotfix 6: wrap generic passthrough in try-catch for NoSuchElementException.
+                                                // This happens when the server calls setupCompression() on an Eaglercraft
+                                                // connection (pipeline lacks "splitter"). Vanilla Java connections have
+                                                // "splitter" so the call succeeds normally — no behavior change for them.
                                                 try {
                                                         return meth.invoke(netManager, args);
                                                 } catch (java.lang.reflect.InvocationTargetException ite) {
                                                         Throwable cause = ite.getCause();
                                                         if (cause instanceof java.util.NoSuchElementException) {
-                                                                // Pipeline handler not found — Eaglercraft connection
-                                                                // without "splitter". Log and swallow.
                                                                 java.util.logging.Logger.getLogger("EaglerXServer").fine(
-                                                                                "[Hotfix5] Swallowed NoSuchElementException in "
+                                                                                "[Hotfix6] Swallowed NoSuchElementException in "
                                                                                 + meth.getName() + ": " + cause.getMessage());
                                                                 return null;
                                                         }
@@ -614,7 +600,8 @@ public class PlayerPostLoginInjector {
                                                                 if (er instanceof EaglerError err) {
                                                                         Player player = null;
                                                                         synchronized (err.gameProfile) {
-                                                                                Iterator<Property> itr = err.gameProfile.getProperties().values().iterator();
+                                                                                // Hotfix 6: use reflection-based getPropertyValuesSafe
+                                                                                java.util.Iterator<Property> itr = BukkitUnsafe.getPropertyValuesSafe(err.gameProfile).iterator();
                                                                                 while (itr.hasNext()) {
                                                                                         Property prop = itr.next();
                                                                                         String propName = BukkitUnsafe.getPropertyName(prop);
@@ -623,7 +610,7 @@ public class PlayerPostLoginInjector {
                                                                                                 if (e != null) {
                                                                                                         player = e;
                                                                                                 }
-                                                                                                itr.remove();
+                                                                                                BukkitUnsafe.removeProfileProperty(err.gameProfile, prop);
                                                                                         }
                                                                                 }
                                                                         }
@@ -812,6 +799,7 @@ public class PlayerPostLoginInjector {
         }
 
         public void handleLoginEvent(PlayerLoginEvent event) {
+                // Hotfix 6: use reflection-based helpers to survive authlib 6.x
                 try {
                         Property marker = new Property("$eaglerMarker_" + ThreadLocalRandom.current().nextLong(Long.MAX_VALUE), "TMP");
                         Object player = BukkitUnsafe.getHandle(event.getPlayer());

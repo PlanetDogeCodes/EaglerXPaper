@@ -65,6 +65,8 @@ public class BukkitUnsafe {
                 }
         }
 
+        // Hotfix 6: find a GameProfile-returning getter (getGameProfile, not getProfile
+        // which returns ResolvableProfile on 1.21+)
         private static Method findGameProfileGetter(Class<?> entityPlayerClass) {
                 try {
                         Method m = entityPlayerClass.getMethod("getGameProfile");
@@ -96,20 +98,20 @@ public class BukkitUnsafe {
                 paperProfileAPISupport = paperProfileAPISupport_;
         }
 
+        // Hotfix 6: authlib 6.x reflection helpers
         private static volatile Method propertyGetValueMethod = null;
+        private static volatile Method getPropertiesMethod = null;
         private static volatile boolean propertyMethodsInit = false;
 
         private static synchronized void initPropertyMethods() {
                 if (propertyMethodsInit) return;
-                try {
-                        propertyGetValueMethod = Property.class.getMethod("getValue");
-                } catch (NoSuchMethodException e) {
-                        try {
-                                propertyGetValueMethod = Property.class.getMethod("value");
-                        } catch (NoSuchMethodException e2) {
-                                propertyGetValueMethod = null;
-                        }
+                try { propertyGetValueMethod = Property.class.getMethod("getValue"); }
+                catch (NoSuchMethodException e) {
+                        try { propertyGetValueMethod = Property.class.getMethod("value"); }
+                        catch (NoSuchMethodException e2) { propertyGetValueMethod = null; }
                 }
+                try { getPropertiesMethod = GameProfile.class.getMethod("getProperties"); }
+                catch (NoSuchMethodException e) { getPropertiesMethod = null; }
                 propertyMethodsInit = true;
         }
 
@@ -117,11 +119,16 @@ public class BukkitUnsafe {
                 if (prop == null) return null;
                 if (!propertyMethodsInit) initPropertyMethods();
                 if (propertyGetValueMethod == null) return null;
-                try {
-                        return (String) propertyGetValueMethod.invoke(prop);
-                } catch (Exception e) {
-                        return null;
-                }
+                try { return (String) propertyGetValueMethod.invoke(prop); }
+                catch (Exception e) { return null; }
+        }
+
+        private static Object getPropertiesSafe(GameProfile profile) {
+                if (profile == null) return null;
+                if (!propertyMethodsInit) initPropertyMethods();
+                if (getPropertiesMethod == null) return null;
+                try { return getPropertiesMethod.invoke(profile); }
+                catch (Exception e) { return null; }
         }
 
         public static boolean isEaglerPlayerProperty(Player player) {
@@ -132,13 +139,20 @@ public class BukkitUnsafe {
                                 bindCraftPlayer(player);
                         }
                         try {
-                                Multimap<String, Property> props = ((GameProfile) method_EntityPlayer_getProfile
-                                                .invoke(method_CraftPlayer_getHandle.invoke(player))).getProperties();
-                                Collection<Property> tex = props.get("isEaglerPlayer");
-                                if (!tex.isEmpty()) {
-                                        return Boolean.parseBoolean(getPropertyValue(tex.iterator().next()));
+                                // Hotfix 6: use reflection for getProperties() — authlib 6.x changed return type
+                                GameProfile profile = (GameProfile) method_EntityPlayer_getProfile
+                                                .invoke(method_CraftPlayer_getHandle.invoke(player));
+                                Object props = getPropertiesSafe(profile);
+                                if (props == null) return false;
+                                Method getMethod = props.getClass().getMethod("get", Object.class);
+                                Object texCollection = getMethod.invoke(props, "isEaglerPlayer");
+                                if (texCollection instanceof Collection<?> tex && !tex.isEmpty()) {
+                                        Object first = tex.iterator().next();
+                                        if (first instanceof Property p) {
+                                                return Boolean.parseBoolean(getPropertyValue(p));
+                                        }
                                 }
-                        } catch (IllegalAccessException | IllegalArgumentException | InvocationTargetException e) {
+                        } catch (Exception e) {
                                 throw new RuntimeException("Reflection failed!", e);
                         }
                         return false;

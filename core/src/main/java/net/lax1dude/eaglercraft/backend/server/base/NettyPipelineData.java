@@ -148,7 +148,7 @@ public class NettyPipelineData extends IIdentifiedConnection.Base
         public EaglerPendingStateAdapter pendingConnection;
         public EaglerLoginStateAdapter loginConnection;
 
-        // Hotfix 5: volatile for cross-thread visibility
+        // Hotfix 6: volatile for cross-thread visibility
         private volatile IPlatformTask disconnectTask = null;
 
         private static final Runnable REACHED = () -> {

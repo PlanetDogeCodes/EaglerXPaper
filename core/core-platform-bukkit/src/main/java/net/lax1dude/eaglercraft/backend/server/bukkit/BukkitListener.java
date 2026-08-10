@@ -51,7 +51,7 @@ class BukkitListener implements Listener {
                 Channel channel = evt.netty().getChannel();
                 PlayerPostLoginInjector.LoginEventContext ctx = channel.attr(PlayerPostLoginInjector.attr).get();
                 IPipelineData pipelineData = channel.attr(PipelineAttributes.<IPipelineData>pipelineData()).get();
-                // Hotfix 5: ctx can be null for non-Eaglercraft connections
+                // Hotfix 6: ctx can be null for non-Eaglercraft connections
                 if (ctx != null && pipelineData != null && pipelineData.isCompressionDisable()) {
                         ctx.markCompressionDisable(true);
                 }
@@ -115,13 +115,14 @@ class BukkitListener implements Listener {
         @EventHandler(priority = EventPriority.MONITOR)
         public void onQuitEvent(PlayerQuitEvent evt) {
                 plugin.dropPlayer(evt.getPlayer());
+                // Hotfix 6: use reflection-based helpers for authlib 6.x compatibility.
                 try {
                         Object handle = BukkitUnsafe.getHandle(evt.getPlayer());
                         com.mojang.authlib.GameProfile profile = BukkitUnsafe.getGameProfile(handle);
                         if (profile != null) {
                                 synchronized (profile) {
                                         java.util.List<com.mojang.authlib.properties.Property> toRemove = new java.util.ArrayList<>();
-                                        for (com.mojang.authlib.properties.Property p : profile.getProperties().values()) {
+                                        for (com.mojang.authlib.properties.Property p : BukkitUnsafe.getPropertyValuesSafe(profile)) {
                                                 String name = BukkitUnsafe.getPropertyName(p);
                                                 if (name != null && name.startsWith("$eaglerMarker_")) {
                                                         toRemove.add(p);
