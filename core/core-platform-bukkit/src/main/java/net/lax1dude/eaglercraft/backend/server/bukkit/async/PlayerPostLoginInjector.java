@@ -333,9 +333,27 @@ public class PlayerPostLoginInjector {
                                                                 return null;
                                                         }
                                                 }
-                                                // Hotfix 6: catch NoSuchElementException from setupCompression.
-                                                // This happens on Eaglercraft connections (pipeline lacks "splitter").
-                                                // Vanilla Java connections have "splitter" so this never triggers for them.
+                                                // Hotfix 6: Intercept setupCompression / setCompressionThreshold.
+                                                //
+                                                // These methods try to addAfter("splitter", ...) to the pipeline.
+                                                // Eaglercraft pipelines don't have "splitter" (they use WebSocket
+                                                // compression instead), so the call throws NoSuchElementException.
+                                                //
+                                                // We check if the pipeline has "splitter":
+                                                // - If YES (vanilla Java): call setupCompression normally → compression works
+                                                // - If NO (Eaglercraft): skip the call → no exception, no crash
+                                                //
+                                                // This is 100% safe for vanilla Java because vanilla Java connections
+                                                // always have "splitter" in their pipeline.
+                                                String methName = meth.getName();
+                                                if ("setupCompression".equals(methName) || "setCompressionThreshold".equals(methName)) {
+                                                        if (ctx.channel != null && ctx.channel.pipeline().get("splitter") == null) {
+                                                                // Eaglercraft connection — pipeline lacks "splitter"
+                                                                return null;
+                                                        }
+                                                }
+                                                // Generic passthrough with try-catch backup for any other
+                                                // pipeline-related exceptions we might have missed.
                                                 try {
                                                         return meth.invoke(netManager, args);
                                                 } catch (java.lang.reflect.InvocationTargetException ite) {
