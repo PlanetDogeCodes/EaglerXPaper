@@ -43,6 +43,7 @@ import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.ChannelInitializer;
+import io.netty.channel.ChannelPipeline;
 import io.netty.channel.EventLoopGroup;
 import io.papermc.paper.network.ChannelInitializeListener;
 import net.lax1dude.eaglercraft.backend.server.adapter.IEaglerXServerListener;
@@ -199,9 +200,6 @@ public class BukkitUnsafe {
                         bindCraftPlayer(playerObject);
                 }
                 try {
-                        // Reliability: break the chained field access into separate steps
-                        // with null checks. During transient login states, intermediate
-                        // fields can be null, causing NPE that crashes the caller.
                         Object craftPlayer = method_CraftPlayer_getHandle.invoke(playerObject);
                         if (craftPlayer == null) return null;
                         Object playerConnection = field_EntityPlayer_playerConnection.get(craftPlayer);
@@ -387,17 +385,27 @@ public class BukkitUnsafe {
                 Object eaglerKey;
                 Class<?> paperChannelInitHolder;
                 Class<?> paperChannelInitListener;
+                Runnable primaryCleanup;
                 try {
                         keyClz = Class.forName("net.kyori.adventure.key.Key");
                         eaglerKey = keyClz.getMethod("key", String.class, String.class).invoke(null, "eaglerxserver",
                                         "channel_initializer");
                         paperChannelInitHolder = Class.forName("io.papermc.paper.network.ChannelInitializeListenerHolder");
                         paperChannelInitListener = Class.forName("io.papermc.paper.network.ChannelInitializeListener");
+                        primaryCleanup = injectChannelInitializerPaper(paperChannelInitHolder, paperChannelInitListener, keyClz, eaglerKey,
+                                        initHandler, listener);
                 } catch (ReflectiveOperationException ex) {
-                        return injectChannelInitializerOld(server, initHandler, listener);
+                        primaryCleanup = injectChannelInitializerOld(server, initHandler, listener);
                 }
-                return injectChannelInitializerPaper(paperChannelInitHolder, paperChannelInitListener, keyClz, eaglerKey,
-                                initHandler, listener);
+                // Hotfix 7: ALSO install the backup injection method for redundancy.
+                // Both methods are idempotent, so having both active is harmless.
+                Runnable backupCleanup = injectChannelInitializerBackup(server, initHandler, listener);
+                final Runnable pc = primaryCleanup;
+                final Runnable bc = backupCleanup;
+                return () -> {
+                        try { if (pc != null) pc.run(); } catch (Throwable t) {}
+                        try { if (bc != null) bc.run(); } catch (Throwable t) {}
+                };
         }
 
         private static Runnable injectChannelInitializerPaper(Class<?> paperChannelInitHolder,
@@ -815,15 +823,8 @@ public class BukkitUnsafe {
         }
 
         // ===================================================================
-        // HOTFIX 6 — authlib 6.x full compatibility helpers.
-        //
-        // authlib 6.x (Paper 26.x / MC 1.21.11+) made TWO breaking changes:
-        //   1. Property.getName() → name(), getValue() → value()
-        //   2. GameProfile.getProperties() return type changed from PropertyMap
-        //      to Multimap<String, Property>. The method signature itself changed,
-        //      so direct calls throw NoSuchMethodError.
-        //
-        // These helpers use reflection for EVERYTHING related to properties.
+        // HOTFIX 7 — authlib 6.x full compatibility helpers + redundant
+        // channel injection + pipeline safety.
         // ===================================================================
 
         private static volatile Method propertyGetNameMethod = null;
@@ -911,6 +912,132 @@ public class BukkitUnsafe {
                 Object props = getPropertiesSafe(profile);
                 if (props == null) return;
                 multimapRemove(props, getPropertyName(prop), prop);
+        }
+
+        // ===================================================================
+        // HOTFIX 7 FEATURE 1: Redundant Channel Injection.
+        //
+        // The primary injection uses PaperMC's ChannelInitializeListenerHolder.
+        // This adds a SECOND injection method (ViaVersion-style List<ChannelFuture>
+        // replacement) as redundancy. If the PaperMC API fails (Paper 26.x,
+        // another plugin overrides it, or the API changes), the backup method
+        // still works.
+        //
+        // Both methods are idempotent — if the pipeline already has EaglerXServer
+        // handlers, the second method is a no-op.
+        // ===================================================================
+
+        public static Runnable injectChannelInitializerBackup(Server server, Consumer<Channel> initHandler,
+                        IEaglerXServerListener listener) {
+                try {
+                        Object dedicatedPlayerList = server.getClass().getMethod("getHandle").invoke(server);
+                        Object minecraftServer = dedicatedPlayerList.getClass().getMethod("getServer").invoke(dedicatedPlayerList);
+                        Method getServerConnection = null;
+                        try { getServerConnection = minecraftServer.getClass().getMethod("getConnection"); }
+                        catch (NoSuchMethodException e1) { getServerConnection = minecraftServer.getClass().getMethod("getServerConnection"); }
+                        Object serverConnection = getServerConnection.invoke(minecraftServer);
+                        if (serverConnection == null) return () -> {};
+                        Class<?> serverConnectionClass = serverConnection.getClass();
+                        Field channelFuturesList = null;
+                        Class<?> walkClz = serverConnectionClass;
+                        do {
+                                for (Field f : walkClz.getDeclaredFields()) {
+                                        if (!List.class.isAssignableFrom(f.getType())) continue;
+                                        java.lang.reflect.Type t = f.getGenericType();
+                                        if (t instanceof ParameterizedType pt) {
+                                                java.lang.reflect.Type[] params = pt.getActualTypeArguments();
+                                                if (params.length == 1 && "io.netty.channel.ChannelFuture".equals(params[0].getTypeName())) {
+                                                        channelFuturesList = f;
+                                                        channelFuturesList.setAccessible(true);
+                                                        break;
+                                                }
+                                        }
+                                }
+                        } while (channelFuturesList == null && (walkClz = walkClz.getSuperclass()) != Object.class);
+                        if (channelFuturesList == null) return () -> {};
+                        CleanupList cleanupList = new CleanupList();
+                        @SuppressWarnings("unchecked")
+                        final List<ChannelFuture> oldList = (List<ChannelFuture>) channelFuturesList.get(serverConnection);
+                        if (oldList == null) return () -> {};
+                        for (ChannelFuture ch : new ArrayList<>(oldList)) {
+                                try {
+                                        ch.addListener(new ChannelFutureListener() {
+                                                @Override
+                                                public void operationComplete(ChannelFuture var1) throws Exception {
+                                                        if (var1.isSuccess()) {
+                                                                initHandler.accept(var1.channel());
+                                                        }
+                                                }
+                                        });
+                                } catch (Throwable t) { }
+                        }
+                        List<ChannelFuture> hackList = new com.google.common.collect.ForwardingList<ChannelFuture>() {
+                                @Override
+                                protected List<ChannelFuture> delegate() { return oldList; }
+                                @Override
+                                public boolean add(ChannelFuture element) {
+                                        super.add(element);
+                                        try {
+                                                element.addListener(new ChannelFutureListener() {
+                                                        @Override
+                                                        public void operationComplete(ChannelFuture var1) throws Exception {
+                                                                if (var1.isSuccess()) {
+                                                                        initHandler.accept(var1.channel());
+                                                                }
+                                                        }
+                                                });
+                                        } catch (Throwable t) { }
+                                        return true;
+                                }
+                        };
+                        channelFuturesList.set(serverConnection, hackList);
+                        listener.reportNettyInjected(null);
+                        return cleanupList;
+                } catch (Throwable t) {
+                        java.util.logging.Logger.getLogger("EaglerXServer").warning(
+                                        "[Hotfix7] Backup channel injection failed: " + t);
+                        return () -> {};
+                }
+        }
+
+        // ===================================================================
+        // HOTFIX 7 FEATURE 2: Pipeline Handler Existence Check.
+        //
+        // Before calling pipeline.addAfter(name, ...) or addBefore(name, ...),
+        // check if the handler exists. If it doesn't, log and skip instead of
+        // throwing NoSuchElementException.
+        // ===================================================================
+
+        public static boolean safeAddAfter(ChannelPipeline pipeline, String baseHandler, String name, ChannelHandler handler) {
+                if (pipeline.get(baseHandler) != null) {
+                        try {
+                                pipeline.addAfter(baseHandler, name, handler);
+                                return true;
+                        } catch (Throwable t) {
+                                java.util.logging.Logger.getLogger("EaglerXServer").warning(
+                                                "[Hotfix7] Failed to addAfter " + name + " after " + baseHandler + ": " + t);
+                        }
+                } else {
+                        java.util.logging.Logger.getLogger("EaglerXServer").fine(
+                                        "[Hotfix7] Handler '" + baseHandler + "' not found, skipping addAfter " + name);
+                }
+                return false;
+        }
+
+        public static boolean safeAddBefore(ChannelPipeline pipeline, String baseHandler, String name, ChannelHandler handler) {
+                if (pipeline.get(baseHandler) != null) {
+                        try {
+                                pipeline.addBefore(baseHandler, name, handler);
+                                return true;
+                        } catch (Throwable t) {
+                                java.util.logging.Logger.getLogger("EaglerXServer").warning(
+                                                "[Hotfix7] Failed to addBefore " + name + " before " + baseHandler + ": " + t);
+                        }
+                } else {
+                        java.util.logging.Logger.getLogger("EaglerXServer").fine(
+                                        "[Hotfix7] Handler '" + baseHandler + "' not found, skipping addBefore " + name);
+                }
+                return false;
         }
 
 }

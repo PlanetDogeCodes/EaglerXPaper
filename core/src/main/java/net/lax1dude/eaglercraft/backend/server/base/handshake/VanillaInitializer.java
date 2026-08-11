@@ -102,6 +102,11 @@ public class VanillaInitializer {
         }
 
         public void handleInbound(ChannelHandlerContext ctx, ByteBuf msg) {
+                // Hotfix 7 Feature 3: State machine hardening.
+                // If login is already complete, ignore any further packets.
+                if (connectionState == STATE_COMPLETE) {
+                        return;
+                }
                 try {
                         msg.markReaderIndex();
                         int pktId = BufferUtils.readVarInt(msg, 3);
@@ -190,11 +195,10 @@ public class VanillaInitializer {
                                 inboundHandler.terminateInternalError(ctx, pipelineData.handshakeProtocol);
                         }
                 } catch (IndexOutOfBoundsException ex) {
-                        // Reliability: use logger instead of printStackTrace
                         pipelineData.connectionLogger.error("Disconnecting, malformed handshake packet", ex);
                         inboundHandler.terminateInternalError(ctx, pipelineData.handshakeProtocol);
                 } catch (Exception ex) {
-                        // Reliability: catch ALL exceptions to prevent pipeline crashes
+                        // Hotfix 7: catch ALL exceptions to prevent pipeline crashes
                         pipelineData.connectionLogger.error("Unexpected error during handshake", ex);
                         inboundHandler.terminateInternalError(ctx, pipelineData.handshakeProtocol);
                 }

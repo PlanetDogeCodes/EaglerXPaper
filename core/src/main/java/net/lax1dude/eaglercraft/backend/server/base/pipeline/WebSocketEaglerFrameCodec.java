@@ -31,9 +31,7 @@ public class WebSocketEaglerFrameCodec extends ChannelDuplexHandler {
 
         @Override
         public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
-                // Reliability: wrap in try-catch to prevent any exception from crashing
-                // the Netty pipeline. If something goes wrong, release the message and
-                // close the connection cleanly.
+                // Hotfix 7: robust channelRead with try-catch
                 try {
                         if (msg instanceof BinaryWebSocketFrame msg1) {
                                 ctx.fireChannelRead(msg1.content());
@@ -44,7 +42,6 @@ public class WebSocketEaglerFrameCodec extends ChannelDuplexHandler {
                                 ctx.fireChannelRead(msg);
                         }
                 } catch (Throwable t) {
-                        // Reliability: ensure the message is released to prevent leaks
                         try {
                                 if (msg instanceof io.netty.util.ReferenceCounted ref && ref.refCnt() > 0) {
                                         ref.release();

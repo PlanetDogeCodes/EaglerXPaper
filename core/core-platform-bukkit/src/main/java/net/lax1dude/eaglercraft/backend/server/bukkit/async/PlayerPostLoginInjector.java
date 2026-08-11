@@ -250,10 +250,6 @@ public class PlayerPostLoginInjector {
                 protected final Object originalNetworkManager;
                 protected final Channel channel;
                 protected volatile Object proxiedNetworkManager;
-                // Reliability: make these volatile — they're written by the Bukkit event thread
-                // and read by the Netty event loop thread. Without volatile, the Netty thread
-                // may see stale values, causing compression to be incorrectly enabled/disabled
-                // or the throwOnLoginSuccess flag to be missed.
                 protected volatile boolean compressionDisable;
                 protected volatile boolean throwOnLoginSuccess;
                 protected volatile boolean clientPlayState;
@@ -337,27 +333,15 @@ public class PlayerPostLoginInjector {
                                                                 return null;
                                                         }
                                                 }
-                                                // Hotfix 6: Intercept setupCompression / setCompressionThreshold.
-                                                //
-                                                // These methods try to addAfter("splitter", ...) to the pipeline.
-                                                // Eaglercraft pipelines don't have "splitter" (they use WebSocket
-                                                // compression instead), so the call throws NoSuchElementException.
-                                                //
-                                                // We check if the pipeline has "splitter":
-                                                // - If YES (vanilla Java): call setupCompression normally → compression works
-                                                // - If NO (Eaglercraft): skip the call → no exception, no crash
-                                                //
-                                                // This is 100% safe for vanilla Java because vanilla Java connections
-                                                // always have "splitter" in their pipeline.
+                                                // Hotfix 7: Intercept setupCompression / setCompressionThreshold.
+                                                // Check if pipeline has 'splitter' before calling.
                                                 String methName = meth.getName();
                                                 if ("setupCompression".equals(methName) || "setCompressionThreshold".equals(methName)) {
                                                         if (ctx.channel != null && ctx.channel.pipeline().get("splitter") == null) {
-                                                                // Eaglercraft connection — pipeline lacks "splitter"
                                                                 return null;
                                                         }
                                                 }
-                                                // Generic passthrough with try-catch backup for any other
-                                                // pipeline-related exceptions we might have missed.
+                                                // Generic passthrough with try-catch backup.
                                                 try {
                                                         return meth.invoke(netManager, args);
                                                 } catch (java.lang.reflect.InvocationTargetException ite) {
@@ -633,67 +617,43 @@ public class PlayerPostLoginInjector {
                                                                         }
                                                                         if (player != null) {
                                                                                 final Player playerFinal = player;
-                                                                                try {
-                                                                                        fireEventLoginPostAsync(playerFinal, ctx, (res) -> {
-                                                                                                // Reliability: wrap pipeline operations on the channel's event loop
-                                                                                                // to prevent threading violations, and catch ALL throwables to
-                                                                                                // prevent server tick crashes.
-                                                                                                io.netty.channel.EventLoop el = ctx.channel.eventLoop();
-                                                                                                Runnable task = () -> {
-                                                                                                        try {
-                                                                                                                if (!res.isCancelled()) {
-                                                                                                                        handlerAdded.set(ctx.originalNetworkManager, false);
-                                                                                                                        ctx.channel.pipeline().replace("packet_handler", "packet_handler",
-                                                                                                                                        (ChannelHandler) ctx.originalNetworkManager);
-                                                                                                                        Object entityPlayer = BukkitUnsafe.getHandle(playerFinal);
-                                                                                                                        loginListenerNetManager.set(loginListener,
-                                                                                                                                        ctx.originalNetworkManager);
-                                                                                                                        loginListenerPlayer.set(loginListener, entityPlayer);
-                                                                                                                        loginListenerState.set(loginListener, protocolStateOnResume);
-                                                                                                                } else {
-                                                                                                                        BaseComponent comp = res.getMessage();
-                                                                                                                        if (comp == null) {
-                                                                                                                                comp = new TextComponent("Connection Closed");
-                                                                                                                        }
-                                                                                                                        String legacyText = comp.toLegacyText();
-                                                                                                                        Object arg = legacyText;
-                                                                                                                        Class<?> paramType = loginListenerDisconnect.getParameterTypes()[0];
-                                                                                                                        if (paramType != String.class) {
-                                                                                                                                arg = convertToComponent(legacyText, paramType);
-                                                                                                                        }
-                                                                                                                        try {
-                                                                                                                                loginListenerDisconnect.invoke(loginListener, arg);
-                                                                                                                        } catch (ReflectiveOperationException roe) {
-                                                                                                                                // Fallback: close channel if disconnect fails
-                                                                                                                                try { ctx.channel.close(); } catch (Throwable t2) {}
-                                                                                                                        }
-                                                                                                                }
-                                                                                                        } catch (Throwable t) {
-                                                                                                                // Reliability: catch ALL throwables to prevent server tick crash.
-                                                                                                                // Log and close the channel cleanly.
-                                                                                                                java.util.logging.Logger.getLogger("EaglerXServer").log(
-                                                                                                                                java.util.logging.Level.SEVERE,
-                                                                                                                                "Error during login post-event callback", t);
-                                                                                                                try { ctx.channel.close(); } catch (Throwable t2) {}
+                                                                                fireEventLoginPostAsync(playerFinal, ctx, (res) -> {
+                                                                                        try {
+                                                                                                if (!res.isCancelled()) {
+                                                                                                        handlerAdded.set(ctx.originalNetworkManager, false);
+                                                                                                        ctx.channel.pipeline().replace("packet_handler", "packet_handler",
+                                                                                                                        (ChannelHandler) ctx.originalNetworkManager);
+                                                                                                        Object entityPlayer = BukkitUnsafe.getHandle(playerFinal);
+                                                                                                        loginListenerNetManager.set(loginListener,
+                                                                                                                        ctx.originalNetworkManager);
+                                                                                                        loginListenerPlayer.set(loginListener, entityPlayer);
+                                                                                                        loginListenerState.set(loginListener, protocolStateOnResume);
+                                                                                                } else {
+                                                                                                        BaseComponent comp = res.getMessage();
+                                                                                                        if (comp == null) {
+                                                                                                                comp = new TextComponent("Connection Closed");
                                                                                                         }
-                                                                                                };
-                                                                                                if (el.inEventLoop()) { task.run(); }
-                                                                                                else { el.execute(task); }
-                                                                                        });
-                                                                                } catch (Throwable fireErr) {
-                                                                                        // Reliability: if fireEventLoginPostAsync itself throws, log and close
-                                                                                        java.util.logging.Logger.getLogger("EaglerXServer").log(
-                                                                                                        java.util.logging.Level.SEVERE,
-                                                                                                        "Failed to fire login post event", fireErr);
-                                                                                        try { ctx.channel.close(); } catch (Throwable t2) {}
-                                                                                }
+                                                                                                        String legacyText = comp.toLegacyText();
+                                                                                                        // The disconnect method may take String (1.12-1.16) or
+                                                                                                        // net.minecraft.network.chat.Component (1.17+) or
+                                                                                                        // net.kyori.adventure.text.Component (Paper adventure).
+                                                                                                        // Convert the legacy text to the correct parameter type.
+                                                                                                        Object arg = legacyText;
+                                                                                                        Class<?> paramType = loginListenerDisconnect.getParameterTypes()[0];
+                                                                                                        if (paramType != String.class) {
+                                                                                                                arg = convertToComponent(legacyText, paramType);
+                                                                                                        }
+                                                                                                        loginListenerDisconnect.invoke(loginListener, arg);
+                                                                                                }
+                                                                                        } catch (ReflectiveOperationException e) {
+                                                                                                throw Util.propagateReflectThrowable(e);
+                                                                                        }
+                                                                                });
                                                                                 return null;
                                                                         } else {
                                                                                 throw new IllegalStateException();
                                                                         }
                                                                 } else {
-                                                                        // Reliability: re-throw Errors as Errors (not wrapped)
-                                                                        if (er instanceof Error ee) throw ee;
                                                                         if (er instanceof RuntimeException ee)
                                                                                 throw ee;
                                                                         throw new RuntimeException(er);
