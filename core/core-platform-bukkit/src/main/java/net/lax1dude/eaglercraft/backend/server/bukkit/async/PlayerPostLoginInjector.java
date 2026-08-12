@@ -333,17 +333,19 @@ public class PlayerPostLoginInjector {
                                                                 return null;
                                                         }
                                                 }
-                                                // Hotfix 10: setupCompression pipeline check + try-catch
+                                                // Hotfix 11: Three-layer compression threshold fix
                                                 String methName = meth.getName();
                                                 if ("setupCompression".equals(methName) || "setCompressionThreshold".equals(methName)) {
-                                                        if (ctx.channel != null && ctx.channel.pipeline().get("splitter") == null) return null;
+                                                        if (ctx.channel != null && ctx.channel.pipeline().get("splitter") == null) {
+                                                                try { if (args.length >= 1 && args[0] instanceof Integer) { args[0] = -1; } return meth.invoke(netManager, args); }
+                                                                catch (java.lang.reflect.InvocationTargetException ite) { Throwable cause = ite.getCause();
+                                                                        if (cause instanceof java.util.NoSuchElementException) { BukkitUnsafe.disableCompressionThreshold(netManager); return null; } throw ite; }
+                                                                catch (Throwable t) { BukkitUnsafe.disableCompressionThreshold(netManager); return null; }
+                                                        }
                                                 }
                                                 try { return meth.invoke(netManager, args); }
-                                                catch (java.lang.reflect.InvocationTargetException ite) {
-                                                        Throwable cause = ite.getCause();
-                                                        if (cause instanceof java.util.NoSuchElementException) return null;
-                                                        throw ite;
-                                                }
+                                                catch (java.lang.reflect.InvocationTargetException ite) { Throwable cause = ite.getCause();
+                                                        if (cause instanceof java.util.NoSuchElementException) { BukkitUnsafe.disableCompressionThreshold(netManager); return null; } throw ite; }
                                         });
                         ctx.proxiedNetworkManager = ret;
                         channel.attr(attr).set(ctx);
@@ -616,6 +618,7 @@ public class PlayerPostLoginInjector {
                                                                                                         handlerAdded.set(ctx.originalNetworkManager, false);
                                                                                                         ctx.channel.pipeline().replace("packet_handler", "packet_handler",
                                                                                                                         (ChannelHandler) ctx.originalNetworkManager);
+                                                                                                        BukkitUnsafe.disableCompressionThreshold(ctx.originalNetworkManager);
                                                                                                         Object entityPlayer = BukkitUnsafe.getHandle(playerFinal);
                                                                                                         loginListenerNetManager.set(loginListener,
                                                                                                                         ctx.originalNetworkManager);
@@ -804,8 +807,7 @@ public class PlayerPostLoginInjector {
                                 entityPlayers.put(marker, event.getPlayer());
                         }
                 } catch (Throwable t) {
-                        java.util.logging.Logger.getLogger("EaglerXServer").warning(
-                                        "Failed to inject Eagler marker property during login: " + t);
+                        java.util.logging.Logger.getLogger("EaglerXServer").warning("Failed to inject Eagler marker: " + t);
                 }
         }
 

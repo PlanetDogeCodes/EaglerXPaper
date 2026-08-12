@@ -227,26 +227,26 @@ public class BukkitUnsafe {
 
         public static class PropertyInjector {
 
-                private final Object props;
+                private final Multimap<String, Property> props;
                 private final Object lock;
 
-                protected PropertyInjector(Object props, Object lock) {
+                protected PropertyInjector(Multimap<String, Property> props, Object lock) {
                         this.props = props;
                         this.lock = lock;
                 }
 
                 public void injectTexturesProperty(String texturesPropertyValue, String texturesPropertySignature) {
                         synchronized (lock) {
-                                multimapRemoveAll(props, "textures");
-                                multimapPut(props, "textures",
+                                props.removeAll("textures");
+                                props.put("textures",
                                                 new Property("textures", texturesPropertyValue, texturesPropertySignature));
                         }
                 }
 
                 public void injectIsEaglerPlayerProperty(boolean val) {
                         synchronized (lock) {
-                                multimapRemoveAll(props, "isEaglerPlayer");
-                                multimapPut(props, "isEaglerPlayer", val ? isEaglerPlayerPropertyT : isEaglerPlayerPropertyF);
+                                props.removeAll("isEaglerPlayer");
+                                props.put("isEaglerPlayer", val ? isEaglerPlayerPropertyT : isEaglerPlayerPropertyF);
                         }
                 }
 
@@ -262,7 +262,7 @@ public class BukkitUnsafe {
                 try {
                         GameProfile profile = (GameProfile) method_EntityPlayer_getProfile
                                         .invoke(method_CraftPlayer_getHandle.invoke(player));
-                        return new PropertyInjector(getPropertiesSafe(profile), profile);
+                        return new PropertyInjector(profile.getProperties(), profile);
                 } catch (ReflectiveOperationException e) {
                         throw Util.propagateReflectThrowable(e);
                 }
@@ -792,7 +792,7 @@ public class BukkitUnsafe {
                 }
         }
 
-        // HOTFIX 10 — authlib 6.x helpers + redundant injection + pipeline safety + idempotency
+        // HOTFIX 11 — authlib 6.x helpers + redundant injection + pipeline safety + idempotency + compression fix
         private static volatile Method propertyGetNameMethod = null;
         private static volatile Method propertyGetValueMethod = null;
         private static volatile Method getPropertiesMethod = null;
@@ -832,12 +832,12 @@ public class BukkitUnsafe {
         public static void putProfileProperty(GameProfile profile, Property prop) { if (profile == null || prop == null) return; Object props = getPropertiesSafe(profile); if (props == null) return; multimapPut(props, getPropertyName(prop), prop); }
         public static void removeProfileProperty(GameProfile profile, Property prop) { if (profile == null || prop == null) return; Object props = getPropertiesSafe(profile); if (props == null) return; multimapRemove(props, getPropertyName(prop), prop); }
 
-        // Hotfix 10: Idempotency
+        // Hotfix 11: Idempotency — prevents double-processing when both injection methods fire
         public static final io.netty.util.AttributeKey<Boolean> EAGLER_INIT_DONE = io.netty.util.AttributeKey.valueOf("eagler_init_done");
         public static boolean isChannelInitialized(Channel channel) { return channel.attr(EAGLER_INIT_DONE).get() != null && channel.attr(EAGLER_INIT_DONE).get(); }
         public static void markChannelInitialized(Channel channel) { channel.attr(EAGLER_INIT_DONE).set(true); }
 
-        // Hotfix 10: Backup channel injection
+        // Hotfix 11: Backup channel injection
         public static Runnable injectChannelInitializerBackup(Server server, Consumer<Channel> initHandler, IEaglerXServerListener listener) {
                 try {
                         Object dpl = server.getClass().getMethod("getHandle").invoke(server);
@@ -859,15 +859,36 @@ public class BukkitUnsafe {
                                 @Override public boolean add(ChannelFuture e) { super.add(e); try { e.addListener((ChannelFutureListener) var1 -> { if (var1.isSuccess()) initHandler.accept(var1.channel()); }); } catch (Throwable t) {} return true; }
                         };
                         cfl.set(sc, hl); listener.reportNettyInjected(null); return cl;
-                } catch (Throwable t) { java.util.logging.Logger.getLogger("EaglerXServer").warning("[Hotfix10] Backup injection failed: " + t); return () -> {}; }
+                } catch (Throwable t) { java.util.logging.Logger.getLogger("EaglerXServer").warning("[H11] Backup injection failed: " + t); return () -> {}; }
         }
 
-        // Hotfix 10: Safe pipeline methods
+        // Hotfix 11: Safe pipeline methods
         public static boolean safeAddAfter(ChannelPipeline p, String base, String name, ChannelHandler h) {
-                if (p.get(base) != null) { try { p.addAfter(base, name, h); return true; } catch (Throwable t) { java.util.logging.Logger.getLogger("EaglerXServer").warning("[Hotfix10] addAfter failed: " + t); } } return false;
+                if (p.get(base) != null) { try { p.addAfter(base, name, h); return true; } catch (Throwable t) {} } return false;
         }
         public static boolean safeAddBefore(ChannelPipeline p, String base, String name, ChannelHandler h) {
-                if (p.get(base) != null) { try { p.addBefore(base, name, h); return true; } catch (Throwable t) { java.util.logging.Logger.getLogger("EaglerXServer").warning("[Hotfix10] addBefore failed: " + t); } } return false;
+                if (p.get(base) != null) { try { p.addBefore(base, name, h); return true; } catch (Throwable t) {} } return false;
+        }
+
+        // Hotfix 11: Compression threshold disable (three-layer fix)
+        private static volatile Field compressionThresholdField = null;
+        private static volatile boolean compressionFieldInit = false;
+        private static synchronized void initCompressionThresholdField(Object networkManager) {
+                if (compressionFieldInit) return;
+                try {
+                        Class<?> clz = networkManager.getClass(); Class<?> wc = clz;
+                        do { for (Field f : wc.getDeclaredFields()) {
+                                if (f.getType() == int.class && ("compressionThreshold".equals(f.getName()) || "compressionthreshold".equalsIgnoreCase(f.getName()))) { f.setAccessible(true); compressionThresholdField = f; break; } }
+                        } while (compressionThresholdField == null && (wc = wc.getSuperclass()) != Object.class);
+                        if (compressionThresholdField == null) { wc = clz;
+                                do { for (Field f : wc.getDeclaredFields()) { if (f.getType() == int.class) { try { f.setAccessible(true); int val = f.getInt(networkManager); if (val >= 0 && val <= 10000) { compressionThresholdField = f; break; } } catch (Exception e) {} } }
+                                } while (compressionThresholdField == null && (wc = wc.getSuperclass()) != Object.class);
+                        }
+                } catch (Throwable t) {} compressionFieldInit = true;
+        }
+        public static void disableCompressionThreshold(Object networkManager) {
+                if (networkManager == null) return; if (!compressionFieldInit) initCompressionThresholdField(networkManager); if (compressionThresholdField == null) return;
+                try { compressionThresholdField.setInt(networkManager, -1); } catch (Exception e) {}
         }
 
 }

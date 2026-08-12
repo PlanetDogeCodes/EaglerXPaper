@@ -84,7 +84,6 @@ public class BukkitUnsafe {
         private static volatile Method propertyGetValueMethod = null;
         private static volatile Method getPropertiesMethod = null;
         private static volatile boolean propertyMethodsInit = false;
-
         private static synchronized void initPropertyMethods() {
                 if (propertyMethodsInit) return;
                 try { propertyGetValueMethod = Property.class.getMethod("getValue"); }
@@ -92,12 +91,10 @@ public class BukkitUnsafe {
                 try { getPropertiesMethod = GameProfile.class.getMethod("getProperties"); } catch (NoSuchMethodException e) { getPropertiesMethod = null; }
                 propertyMethodsInit = true;
         }
-
         private static String getPropertyValue(Property prop) {
                 if (prop == null) return null; if (!propertyMethodsInit) initPropertyMethods(); if (propertyGetValueMethod == null) return null;
                 try { return (String) propertyGetValueMethod.invoke(prop); } catch (Exception e) { return null; }
         }
-
         private static Object getPropertiesSafe(GameProfile profile) {
                 if (profile == null) return null; if (!propertyMethodsInit) initPropertyMethods(); if (getPropertiesMethod == null) return null;
                 try { return getPropertiesMethod.invoke(profile); } catch (Exception e) { return null; }
