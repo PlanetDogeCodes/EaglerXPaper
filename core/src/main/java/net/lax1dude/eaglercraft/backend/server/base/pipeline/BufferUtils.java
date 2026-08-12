@@ -28,18 +28,10 @@ public class BufferUtils {
 
         static {
                 boolean charseqOk = false;
-                try {
-                        ByteBuf.class.getMethod("readCharSequence", int.class, Charset.class);
-                        charseqOk = true;
-                } catch (ReflectiveOperationException ex) {
-                }
+                try { ByteBuf.class.getMethod("readCharSequence", int.class, Charset.class); charseqOk = true; } catch (ReflectiveOperationException ex) {}
                 CHARSEQ_SUPPORT = charseqOk;
                 boolean retainedSliceOk = false;
-                try {
-                        ByteBuf.class.getMethod("readRetainedSlice", int.class);
-                        retainedSliceOk = true;
-                } catch (ReflectiveOperationException ex) {
-                }
+                try { ByteBuf.class.getMethod("readRetainedSlice", int.class); retainedSliceOk = true; } catch (ReflectiveOperationException ex) {}
                 RETAINEDSLICE_SUPPORT = retainedSliceOk;
         }
 

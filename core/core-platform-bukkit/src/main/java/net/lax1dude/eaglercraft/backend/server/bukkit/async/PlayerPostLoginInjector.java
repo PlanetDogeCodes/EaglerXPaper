@@ -333,20 +333,15 @@ public class PlayerPostLoginInjector {
                                                                 return null;
                                                         }
                                                 }
-                                                // Hotfix 8: setupCompression pipeline check + try-catch
+                                                // Hotfix 9: setupCompression pipeline check + try-catch
                                                 String methName = meth.getName();
                                                 if ("setupCompression".equals(methName) || "setCompressionThreshold".equals(methName)) {
-                                                        if (ctx.channel != null && ctx.channel.pipeline().get("splitter") == null) {
-                                                                return null;
-                                                        }
+                                                        if (ctx.channel != null && ctx.channel.pipeline().get("splitter") == null) return null;
                                                 }
-                                                try {
-                                                        return meth.invoke(netManager, args);
-                                                } catch (java.lang.reflect.InvocationTargetException ite) {
+                                                try { return meth.invoke(netManager, args); }
+                                                catch (java.lang.reflect.InvocationTargetException ite) {
                                                         Throwable cause = ite.getCause();
-                                                        if (cause instanceof java.util.NoSuchElementException) {
-                                                                return null;
-                                                        }
+                                                        if (cause instanceof java.util.NoSuchElementException) return null;
                                                         throw ite;
                                                 }
                                         });
@@ -797,17 +792,13 @@ public class PlayerPostLoginInjector {
         }
 
         public void handleLoginEvent(PlayerLoginEvent event) {
-                try {
-                        Property marker = new Property("$eaglerMarker_" + ThreadLocalRandom.current().nextLong(Long.MAX_VALUE), "TMP");
-                        Object player = BukkitUnsafe.getHandle(event.getPlayer());
-                        GameProfile profile = BukkitUnsafe.getGameProfile(player);
-                        if (profile != null) {
-                                synchronized (profile) { BukkitUnsafe.putProfileProperty(profile, marker); }
-                                entityPlayers.put(marker, event.getPlayer());
-                        }
-                } catch (Throwable t) {
-                        java.util.logging.Logger.getLogger("EaglerXServer").warning("Failed to inject Eagler marker: " + t);
+                Property marker = new Property("$eaglerMarker_" + ThreadLocalRandom.current().nextLong(Long.MAX_VALUE), "TMP");
+                Object player = BukkitUnsafe.getHandle(event.getPlayer());
+                GameProfile profile = BukkitUnsafe.getGameProfile(player);
+                synchronized (profile) {
+                        profile.getProperties().put(marker.getName(), marker);
                 }
+                entityPlayers.put(marker, event.getPlayer());
         }
 
         private void fireEventLoginInit(Channel channel) {

@@ -128,9 +128,7 @@ class BukkitListener implements Listener {
                                                 String name = BukkitUnsafe.getPropertyName(p);
                                                 if (name != null && name.startsWith("$eaglerMarker_")) toRemove.add(p);
                                         }
-                                        for (com.mojang.authlib.properties.Property p : toRemove) {
-                                                BukkitUnsafe.removeProfileProperty(profile, p);
-                                        }
+                                        for (com.mojang.authlib.properties.Property p : toRemove) { BukkitUnsafe.removeProfileProperty(profile, p); }
                                 }
                         }
                 } catch (Exception e) {
