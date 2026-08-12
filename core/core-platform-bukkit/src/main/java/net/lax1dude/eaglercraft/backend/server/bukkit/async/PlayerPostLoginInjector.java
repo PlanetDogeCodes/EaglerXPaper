@@ -333,15 +333,13 @@ public class PlayerPostLoginInjector {
                                                                 return null;
                                                         }
                                                 }
-                                                // Hotfix 7: Intercept setupCompression / setCompressionThreshold.
-                                                // Check if pipeline has 'splitter' before calling.
+                                                // Hotfix 8: setupCompression pipeline check + try-catch
                                                 String methName = meth.getName();
                                                 if ("setupCompression".equals(methName) || "setCompressionThreshold".equals(methName)) {
                                                         if (ctx.channel != null && ctx.channel.pipeline().get("splitter") == null) {
                                                                 return null;
                                                         }
                                                 }
-                                                // Generic passthrough with try-catch backup.
                                                 try {
                                                         return meth.invoke(netManager, args);
                                                 } catch (java.lang.reflect.InvocationTargetException ite) {
@@ -602,16 +600,15 @@ public class PlayerPostLoginInjector {
                                                                 if (er instanceof EaglerError err) {
                                                                         Player player = null;
                                                                         synchronized (err.gameProfile) {
-                                                                                java.util.Iterator<Property> itr = BukkitUnsafe.getPropertyValuesSafe(err.gameProfile).iterator();
+                                                                                Iterator<Property> itr = err.gameProfile.getProperties().values().iterator();
                                                                                 while (itr.hasNext()) {
                                                                                         Property prop = itr.next();
-                                                                                        String propName = BukkitUnsafe.getPropertyName(prop);
-                                                                                        if (propName != null && propName.startsWith("$eaglerMarker_")) {
+                                                                                        if (prop.getName().startsWith("$eaglerMarker_")) {
                                                                                                 Player e = entityPlayers.remove(prop);
                                                                                                 if (e != null) {
                                                                                                         player = e;
                                                                                                 }
-                                                                                                BukkitUnsafe.removeProfileProperty(err.gameProfile, prop);
+                                                                                                itr.remove();
                                                                                         }
                                                                                 }
                                                                         }
@@ -654,8 +651,8 @@ public class PlayerPostLoginInjector {
                                                                                 throw new IllegalStateException();
                                                                         }
                                                                 } else {
-                                                                        if (er instanceof RuntimeException ee)
-                                                                                throw ee;
+                                                                        if (er instanceof Error ee) throw ee;
+                                                                        if (er instanceof RuntimeException ee) throw ee;
                                                                         throw new RuntimeException(er);
                                                                 }
                                                         }
@@ -805,14 +802,11 @@ public class PlayerPostLoginInjector {
                         Object player = BukkitUnsafe.getHandle(event.getPlayer());
                         GameProfile profile = BukkitUnsafe.getGameProfile(player);
                         if (profile != null) {
-                                synchronized (profile) {
-                                        BukkitUnsafe.putProfileProperty(profile, marker);
-                                }
+                                synchronized (profile) { BukkitUnsafe.putProfileProperty(profile, marker); }
                                 entityPlayers.put(marker, event.getPlayer());
                         }
                 } catch (Throwable t) {
-                        java.util.logging.Logger.getLogger("EaglerXServer").warning(
-                                        "Failed to inject Eagler marker property during login: " + t);
+                        java.util.logging.Logger.getLogger("EaglerXServer").warning("Failed to inject Eagler marker: " + t);
                 }
         }
 

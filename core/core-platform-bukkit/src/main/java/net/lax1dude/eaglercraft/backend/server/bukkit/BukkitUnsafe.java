@@ -42,8 +42,8 @@ import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelInboundHandlerAdapter;
-import io.netty.channel.ChannelInitializer;
 import io.netty.channel.ChannelPipeline;
+import io.netty.channel.ChannelInitializer;
 import io.netty.channel.EventLoopGroup;
 import io.papermc.paper.network.ChannelInitializeListener;
 import net.lax1dude.eaglercraft.backend.server.adapter.IEaglerXServerListener;
@@ -397,8 +397,6 @@ public class BukkitUnsafe {
                 } catch (ReflectiveOperationException ex) {
                         primaryCleanup = injectChannelInitializerOld(server, initHandler, listener);
                 }
-                // Hotfix 7: ALSO install the backup injection method for redundancy.
-                // Both methods are idempotent, so having both active is harmless.
                 Runnable backupCleanup = injectChannelInitializerBackup(server, initHandler, listener);
                 final Runnable pc = primaryCleanup;
                 final Runnable bc = backupCleanup;
@@ -713,8 +711,7 @@ public class BukkitUnsafe {
                                                         for (Method m : clz.getMethods()) {
                                                                 if (m.getGenericReturnType() != m.getReturnType()) {
                                                                         try {
-                                                                                field.setAccessible(true);
-                                                                                return (EventLoopGroup) m.invoke(field.get(null));
+                                                                                field.setAccessible(true); return (EventLoopGroup) m.invoke(field.get(null));
                                                                         } catch (ReflectiveOperationException e) {
                                                                                 throw Util.propagateReflectThrowable(e);
                                                                         }
@@ -735,8 +732,7 @@ public class BukkitUnsafe {
                                                 for (Method m : clz.getMethods()) {
                                                         if (m.getGenericReturnType() != m.getReturnType()) {
                                                                 try {
-                                                                        field.setAccessible(true);
-                                                                        return (EventLoopGroup) m.invoke(field.get(null));
+                                                                        field.setAccessible(true); return (EventLoopGroup) m.invoke(field.get(null));
                                                                 } catch (ReflectiveOperationException e) {
                                                                         throw Util.propagateReflectThrowable(e);
                                                                 }
@@ -762,8 +758,7 @@ public class BukkitUnsafe {
                         for (Field field : fields) {
                                 if (epollType.isAssignableFrom(field.getType())) {
                                         try {
-                                                field.setAccessible(true);
-                                                Object val = field.get(null);
+                                                field.setAccessible(true); Object val = field.get(null);
                                                 if (val instanceof EventLoopGroup) {
                                                         return (EventLoopGroup) val;
                                                 }
@@ -777,8 +772,7 @@ public class BukkitUnsafe {
                         for (Field field : fields) {
                                 if (nioType.isAssignableFrom(field.getType())) {
                                         try {
-                                                field.setAccessible(true);
-                                                Object val = field.get(null);
+                                                field.setAccessible(true); Object val = field.get(null);
                                                 if (val instanceof EventLoopGroup) {
                                                         return (EventLoopGroup) val;
                                                 }
@@ -823,15 +817,12 @@ public class BukkitUnsafe {
         }
 
         // ===================================================================
-        // HOTFIX 7 — authlib 6.x full compatibility helpers + redundant
-        // channel injection + pipeline safety.
+        // HOTFIX 8 — authlib 6.x helpers + redundant injection + pipeline safety
         // ===================================================================
-
         private static volatile Method propertyGetNameMethod = null;
         private static volatile Method propertyGetValueMethod = null;
         private static volatile Method getPropertiesMethod = null;
         private static volatile boolean propertyMethodsInit = false;
-
         private static synchronized void initPropertyMethods() {
                 if (propertyMethodsInit) return;
                 try { propertyGetNameMethod = Property.class.getMethod("getName"); }
@@ -842,48 +833,40 @@ public class BukkitUnsafe {
                 catch (NoSuchMethodException e) { getPropertiesMethod = null; }
                 propertyMethodsInit = true;
         }
-
         public static String getPropertyName(Property prop) {
                 if (prop == null) return null;
                 if (!propertyMethodsInit) initPropertyMethods();
                 if (propertyGetNameMethod == null) return null;
                 try { return (String) propertyGetNameMethod.invoke(prop); } catch (Exception e) { return null; }
         }
-
         public static String getPropertyValue(Property prop) {
                 if (prop == null) return null;
                 if (!propertyMethodsInit) initPropertyMethods();
                 if (propertyGetValueMethod == null) return null;
                 try { return (String) propertyGetValueMethod.invoke(prop); } catch (Exception e) { return null; }
         }
-
         public static Object getPropertiesSafe(GameProfile profile) {
                 if (profile == null) return null;
                 if (!propertyMethodsInit) initPropertyMethods();
                 if (getPropertiesMethod == null) return null;
                 try { return getPropertiesMethod.invoke(profile); } catch (Exception e) { return null; }
         }
-
         public static Object multimapGet(Object mm, String key) {
                 if (mm == null) return null;
                 try { return mm.getClass().getMethod("get", Object.class).invoke(mm, key); } catch (Exception e) { return null; }
         }
-
         public static void multimapPut(Object mm, String key, Object value) {
                 if (mm == null || key == null) return;
                 try { mm.getClass().getMethod("put", Object.class, Object.class).invoke(mm, key, value); } catch (Exception e) { }
         }
-
         public static void multimapRemove(Object mm, String key, Object value) {
                 if (mm == null || key == null) return;
                 try { mm.getClass().getMethod("remove", Object.class, Object.class).invoke(mm, key, value); } catch (Exception e) { }
         }
-
         public static void multimapRemoveAll(Object mm, String key) {
                 if (mm == null || key == null) return;
                 try { mm.getClass().getMethod("removeAll", Object.class).invoke(mm, key); } catch (Exception e) { }
         }
-
         @SuppressWarnings("unchecked")
         public static java.util.Collection<Property> getPropertyValuesSafe(GameProfile profile) {
                 if (profile == null) return java.util.Collections.emptyList();
@@ -899,34 +882,18 @@ public class BukkitUnsafe {
                 } catch (Exception e) { }
                 return java.util.Collections.emptyList();
         }
-
         public static void putProfileProperty(GameProfile profile, Property prop) {
                 if (profile == null || prop == null) return;
                 Object props = getPropertiesSafe(profile);
                 if (props == null) return;
                 multimapPut(props, getPropertyName(prop), prop);
         }
-
         public static void removeProfileProperty(GameProfile profile, Property prop) {
                 if (profile == null || prop == null) return;
                 Object props = getPropertiesSafe(profile);
                 if (props == null) return;
                 multimapRemove(props, getPropertyName(prop), prop);
         }
-
-        // ===================================================================
-        // HOTFIX 7 FEATURE 1: Redundant Channel Injection.
-        //
-        // The primary injection uses PaperMC's ChannelInitializeListenerHolder.
-        // This adds a SECOND injection method (ViaVersion-style List<ChannelFuture>
-        // replacement) as redundancy. If the PaperMC API fails (Paper 26.x,
-        // another plugin overrides it, or the API changes), the backup method
-        // still works.
-        //
-        // Both methods are idempotent — if the pipeline already has EaglerXServer
-        // handlers, the second method is a no-op.
-        // ===================================================================
-
         public static Runnable injectChannelInitializerBackup(Server server, Consumer<Channel> initHandler,
                         IEaglerXServerListener listener) {
                 try {
@@ -960,33 +927,21 @@ public class BukkitUnsafe {
                         final List<ChannelFuture> oldList = (List<ChannelFuture>) channelFuturesList.get(serverConnection);
                         if (oldList == null) return () -> {};
                         for (ChannelFuture ch : new ArrayList<>(oldList)) {
-                                try {
-                                        ch.addListener(new ChannelFutureListener() {
-                                                @Override
-                                                public void operationComplete(ChannelFuture var1) throws Exception {
-                                                        if (var1.isSuccess()) {
-                                                                initHandler.accept(var1.channel());
-                                                        }
-                                                }
-                                        });
-                                } catch (Throwable t) { }
+                                try { ch.addListener(new ChannelFutureListener() {
+                                        @Override public void operationComplete(ChannelFuture var1) throws Exception {
+                                                if (var1.isSuccess()) { initHandler.accept(var1.channel()); }
+                                        }
+                                }); } catch (Throwable t) { }
                         }
                         List<ChannelFuture> hackList = new com.google.common.collect.ForwardingList<ChannelFuture>() {
-                                @Override
-                                protected List<ChannelFuture> delegate() { return oldList; }
-                                @Override
-                                public boolean add(ChannelFuture element) {
+                                @Override protected List<ChannelFuture> delegate() { return oldList; }
+                                @Override public boolean add(ChannelFuture element) {
                                         super.add(element);
-                                        try {
-                                                element.addListener(new ChannelFutureListener() {
-                                                        @Override
-                                                        public void operationComplete(ChannelFuture var1) throws Exception {
-                                                                if (var1.isSuccess()) {
-                                                                        initHandler.accept(var1.channel());
-                                                                }
-                                                        }
-                                                });
-                                        } catch (Throwable t) { }
+                                        try { element.addListener(new ChannelFutureListener() {
+                                                @Override public void operationComplete(ChannelFuture var1) throws Exception {
+                                                        if (var1.isSuccess()) { initHandler.accept(var1.channel()); }
+                                                }
+                                        }); } catch (Throwable t) { }
                                         return true;
                                 }
                         };
@@ -994,48 +949,21 @@ public class BukkitUnsafe {
                         listener.reportNettyInjected(null);
                         return cleanupList;
                 } catch (Throwable t) {
-                        java.util.logging.Logger.getLogger("EaglerXServer").warning(
-                                        "[Hotfix7] Backup channel injection failed: " + t);
+                        java.util.logging.Logger.getLogger("EaglerXServer").warning("[Hotfix8] Backup channel injection failed: " + t);
                         return () -> {};
                 }
         }
-
-        // ===================================================================
-        // HOTFIX 7 FEATURE 2: Pipeline Handler Existence Check.
-        //
-        // Before calling pipeline.addAfter(name, ...) or addBefore(name, ...),
-        // check if the handler exists. If it doesn't, log and skip instead of
-        // throwing NoSuchElementException.
-        // ===================================================================
-
         public static boolean safeAddAfter(ChannelPipeline pipeline, String baseHandler, String name, ChannelHandler handler) {
                 if (pipeline.get(baseHandler) != null) {
-                        try {
-                                pipeline.addAfter(baseHandler, name, handler);
-                                return true;
-                        } catch (Throwable t) {
-                                java.util.logging.Logger.getLogger("EaglerXServer").warning(
-                                                "[Hotfix7] Failed to addAfter " + name + " after " + baseHandler + ": " + t);
-                        }
-                } else {
-                        java.util.logging.Logger.getLogger("EaglerXServer").fine(
-                                        "[Hotfix7] Handler '" + baseHandler + "' not found, skipping addAfter " + name);
+                        try { pipeline.addAfter(baseHandler, name, handler); return true; }
+                        catch (Throwable t) { java.util.logging.Logger.getLogger("EaglerXServer").warning("[Hotfix8] addAfter failed: " + t); }
                 }
                 return false;
         }
-
         public static boolean safeAddBefore(ChannelPipeline pipeline, String baseHandler, String name, ChannelHandler handler) {
                 if (pipeline.get(baseHandler) != null) {
-                        try {
-                                pipeline.addBefore(baseHandler, name, handler);
-                                return true;
-                        } catch (Throwable t) {
-                                java.util.logging.Logger.getLogger("EaglerXServer").warning(
-                                                "[Hotfix7] Failed to addBefore " + name + " before " + baseHandler + ": " + t);
-                        }
-                } else {
-                        java.util.logging.Logger.getLogger("EaglerXServer").fine(
-                                        "[Hotfix7] Handler '" + baseHandler + "' not found, skipping addBefore " + name);
+                        try { pipeline.addBefore(baseHandler, name, handler); return true; }
+                        catch (Throwable t) { java.util.logging.Logger.getLogger("EaglerXServer").warning("[Hotfix8] addBefore failed: " + t); }
                 }
                 return false;
         }

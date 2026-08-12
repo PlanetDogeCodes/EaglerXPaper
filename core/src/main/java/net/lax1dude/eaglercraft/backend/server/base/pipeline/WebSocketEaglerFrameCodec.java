@@ -27,40 +27,30 @@ import io.netty.handler.codec.http.websocketx.WebSocketFrame;
 @ChannelHandler.Sharable
 public class WebSocketEaglerFrameCodec extends ChannelDuplexHandler {
 
-        public static final WebSocketEaglerFrameCodec INSTANCE = new WebSocketEaglerFrameCodec();
+	public static final WebSocketEaglerFrameCodec INSTANCE = new WebSocketEaglerFrameCodec();
 
-        @Override
-        public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
-                // Hotfix 7: robust channelRead with try-catch
-                try {
-                        if (msg instanceof BinaryWebSocketFrame msg1) {
-                                ctx.fireChannelRead(msg1.content());
-                        } else if (msg instanceof WebSocketFrame msg2) {
-                                msg2.release();
-                                ctx.close();
-                        } else {
-                                ctx.fireChannelRead(msg);
-                        }
-                } catch (Throwable t) {
-                        try {
-                                if (msg instanceof io.netty.util.ReferenceCounted ref && ref.refCnt() > 0) {
-                                        ref.release();
-                                }
-                        } catch (Throwable t2) {}
-                        try { ctx.close(); } catch (Throwable t2) {}
-                        throw t;
-                }
-        }
+	@Override
+	public void channelRead(ChannelHandlerContext ctx, Object msg) throws Exception {
+		if (msg instanceof BinaryWebSocketFrame msg1) {
+			ctx.fireChannelRead(msg1.content());
+		} else if (msg instanceof WebSocketFrame msg2) {
+			// Text or close frames
+			msg2.release();
+			ctx.close();
+		} else {
+			ctx.fireChannelRead(msg);
+		}
+	}
 
-        @Override
-        public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception {
-                if (msg instanceof ByteBuf buf) {
-                        if (buf.readableBytes() > 0) {
-                                ctx.write(new BinaryWebSocketFrame(buf), promise);
-                                return;
-                        }
-                }
-                ctx.write(msg, promise);
-        }
+	@Override
+	public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception {
+		if (msg instanceof ByteBuf buf) {
+			if (buf.readableBytes() > 0) {
+				ctx.write(new BinaryWebSocketFrame(buf), promise);
+				return;
+			}
+		}
+		ctx.write(msg, promise);
+	}
 
 }

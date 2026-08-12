@@ -23,58 +23,58 @@ import io.netty.channel.ChannelInitializer;
 
 public abstract class ChannelInitializerHijacker extends ChannelInitializer<Channel> {
 
-        private class ImplInitial implements Consumer<Channel> {
+	private class ImplInitial implements Consumer<Channel> {
 
-                @Override
-                public void accept(Channel channel) {
-                        Consumer<Channel> run;
-                        eagler: {
-                                synchronized (ChannelInitializerHijacker.this) {
-                                        run = impl;
-                                        if (run != this) {
-                                                break eagler;
-                                        }
-                                        if (reInject()) {
-                                                impl = ChannelInitializerHijacker.this::callParent;
-                                                run = (c) -> c.close(channel.voidPromise());
-                                                break eagler;
-                                        }
-                                        run = impl = ChannelInitializerHijacker.this::callParentAndInit;
-                                }
-                                run.accept(channel);
-                                return;
-                        }
-                        if (run != null) {
-                                run.accept(channel);
-                        }
-                }
+		@Override
+		public void accept(Channel channel) {
+			Consumer<Channel> run;
+			eagler: {
+				synchronized (ChannelInitializerHijacker.this) {
+					run = impl;
+					if (run != this) {
+						break eagler;
+					}
+					if (reInject()) {
+						impl = ChannelInitializerHijacker.this::callParent;
+						run = (c) -> c.close(channel.voidPromise());
+						break eagler;
+					}
+					run = impl = ChannelInitializerHijacker.this::callParentAndInit;
+				}
+				run.accept(channel);
+				return;
+			}
+			if (run != null) {
+				run.accept(channel);
+			}
+		}
 
-        }
+	}
 
-        protected final Consumer<Channel> initServerChild;
+	protected final Consumer<Channel> initServerChild;
 
-        public ChannelInitializerHijacker(Consumer<Channel> initServerChild) {
-                this.initServerChild = initServerChild;
-        }
+	public ChannelInitializerHijacker(Consumer<Channel> initServerChild) {
+		this.initServerChild = initServerChild;
+	}
 
-        protected volatile Consumer<Channel> impl = new ImplInitial();
+	protected volatile Consumer<Channel> impl = new ImplInitial();
 
-        protected abstract void callParent(Channel channel);
+	protected abstract void callParent(Channel channel);
 
-        protected void callParentAndInit(Channel channel) {
-                callParent(channel);
-                initServerChild.accept(channel);
-        }
+	protected void callParentAndInit(Channel channel) {
+		callParent(channel);
+		initServerChild.accept(channel);
+	}
 
-        protected abstract boolean reInject();
+	protected abstract boolean reInject();
 
-        @Override
-        protected void initChannel(Channel var1) throws Exception {
-                impl.accept(var1);
-        }
+	@Override
+	protected void initChannel(Channel var1) throws Exception {
+		impl.accept(var1);
+	}
 
-        public void deactivate() {
-                impl = ChannelInitializerHijacker.this::callParent;
-        }
+	public void deactivate() {
+		impl = ChannelInitializerHijacker.this::callParent;
+	}
 
 }

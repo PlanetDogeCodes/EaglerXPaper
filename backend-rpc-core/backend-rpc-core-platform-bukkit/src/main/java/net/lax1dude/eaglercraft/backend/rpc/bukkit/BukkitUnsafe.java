@@ -49,7 +49,9 @@ public class BukkitUnsafe {
         private static Method method_EntityPlayer_getProfile = null;
 
         private static synchronized void bindCraftPlayer(Player playerObject) {
-                if (CLASS_CRAFTPLAYER_HANDLE.getAcquire() != null) { return; }
+                if (CLASS_CRAFTPLAYER_HANDLE.getAcquire() != null) {
+                        return;
+                }
                 Class<?> clz = playerObject.getClass();
                 try {
                         method_CraftPlayer_getHandle = clz.getMethod("getHandle");
@@ -58,7 +60,9 @@ public class BukkitUnsafe {
                         method_EntityPlayer_getProfile = findGameProfileGetter(clz2);
                         class_EntityPlayer = clz2;
                         CLASS_CRAFTPLAYER_HANDLE.setRelease(clz);
-                } catch (Exception ex) { throw new RuntimeException("Reflection failed!", ex); }
+                } catch (Exception ex) {
+                        throw new RuntimeException("Reflection failed!", ex);
+                }
         }
 
         private static Method findGameProfileGetter(Class<?> entityPlayerClass) {
@@ -72,8 +76,12 @@ public class BukkitUnsafe {
 
         static {
                 boolean paperProfileAPISupport_ = false;
-                try { Class.forName("com.destroystokyo.paper.profile.PlayerProfile"); paperProfileAPISupport_ = true; }
-                catch (ClassNotFoundException e) { try { Class.forName("io.papermc.paper.profile.PlayerProfile"); paperProfileAPISupport_ = true; } catch (ClassNotFoundException e2) {} }
+                try {
+                        Class.forName("com.destroystokyo.paper.profile.PlayerProfile");
+                        paperProfileAPISupport_ = true;
+                } catch (ClassNotFoundException e) {
+                        try { Class.forName("io.papermc.paper.profile.PlayerProfile"); paperProfileAPISupport_ = true; } catch (ClassNotFoundException e2) {}
+                }
                 paperProfileAPISupport = paperProfileAPISupport_;
         }
 

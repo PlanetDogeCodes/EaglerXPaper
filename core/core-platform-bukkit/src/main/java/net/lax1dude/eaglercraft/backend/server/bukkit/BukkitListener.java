@@ -114,6 +114,10 @@ class BukkitListener implements Listener {
         @EventHandler(priority = EventPriority.MONITOR)
         public void onQuitEvent(PlayerQuitEvent evt) {
                 plugin.dropPlayer(evt.getPlayer());
+                // Clean up any orphaned eaglerMarker properties from the player's GameProfile.
+                // These are inserted by PlayerPostLoginInjector.handleLoginEvent and are
+                // normally removed when PacketLoginOutSuccess is sent. But if login fails
+                // before that (kick, timeout, disconnect), the marker stays forever.
                 try {
                         Object handle = BukkitUnsafe.getHandle(evt.getPlayer());
                         com.mojang.authlib.GameProfile profile = BukkitUnsafe.getGameProfile(handle);
@@ -122,9 +126,7 @@ class BukkitListener implements Listener {
                                         java.util.List<com.mojang.authlib.properties.Property> toRemove = new java.util.ArrayList<>();
                                         for (com.mojang.authlib.properties.Property p : BukkitUnsafe.getPropertyValuesSafe(profile)) {
                                                 String name = BukkitUnsafe.getPropertyName(p);
-                                                if (name != null && name.startsWith("$eaglerMarker_")) {
-                                                        toRemove.add(p);
-                                                }
+                                                if (name != null && name.startsWith("$eaglerMarker_")) toRemove.add(p);
                                         }
                                         for (com.mojang.authlib.properties.Property p : toRemove) {
                                                 BukkitUnsafe.removeProfileProperty(profile, p);
@@ -132,7 +134,7 @@ class BukkitListener implements Listener {
                                 }
                         }
                 } catch (Exception e) {
-                        // Best effort
+                        // Best effort — don't crash on quit
                 }
         }
 
