@@ -307,17 +307,9 @@ public class PlatformPluginBukkit extends JavaPlugin implements IPlatform<Player
                         }
                 }
                 cleanupListeners = BukkitUnsafe.injectChannelInitializer(getServer(), (channel) -> {
-                        // Hotfix 9: Idempotency check — if this channel was already initialized
-                        // (by the primary PaperMC listener or the backup injection), skip it.
-                        // This prevents double-wrapping the NetworkManager, which caused ~50%
-                        // of Eaglercraft connections to be rejected instantly.
-                        if (BukkitUnsafe.isChannelInitialized(channel)) {
-                                return;
-                        }
+                        if (BukkitUnsafe.isChannelInitialized(channel)) { return; }
                         BukkitUnsafe.markChannelInitialized(channel);
-                        if (!channel.isActive()) {
-                                return;
-                        }
+                        if (!channel.isActive()) { return; }
 
                         List<IPipelineComponent> pipelineList = new ArrayList<>();
 

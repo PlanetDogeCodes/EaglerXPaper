@@ -333,7 +333,7 @@ public class PlayerPostLoginInjector {
                                                                 return null;
                                                         }
                                                 }
-                                                // Hotfix 9: setupCompression pipeline check + try-catch
+                                                // Hotfix 10: setupCompression pipeline check + try-catch
                                                 String methName = meth.getName();
                                                 if ("setupCompression".equals(methName) || "setCompressionThreshold".equals(methName)) {
                                                         if (ctx.channel != null && ctx.channel.pipeline().get("splitter") == null) return null;
@@ -595,15 +595,16 @@ public class PlayerPostLoginInjector {
                                                                 if (er instanceof EaglerError err) {
                                                                         Player player = null;
                                                                         synchronized (err.gameProfile) {
-                                                                                Iterator<Property> itr = err.gameProfile.getProperties().values().iterator();
+                                                                                java.util.Iterator<Property> itr = BukkitUnsafe.getPropertyValuesSafe(err.gameProfile).iterator();
                                                                                 while (itr.hasNext()) {
                                                                                         Property prop = itr.next();
-                                                                                        if (prop.getName().startsWith("$eaglerMarker_")) {
+                                                                                        String propName = BukkitUnsafe.getPropertyName(prop);
+                                                                                        if (propName != null && propName.startsWith("$eaglerMarker_")) {
                                                                                                 Player e = entityPlayers.remove(prop);
                                                                                                 if (e != null) {
                                                                                                         player = e;
                                                                                                 }
-                                                                                                itr.remove();
+                                                                                                BukkitUnsafe.removeProfileProperty(err.gameProfile, prop);
                                                                                         }
                                                                                 }
                                                                         }
@@ -792,13 +793,20 @@ public class PlayerPostLoginInjector {
         }
 
         public void handleLoginEvent(PlayerLoginEvent event) {
-                Property marker = new Property("$eaglerMarker_" + ThreadLocalRandom.current().nextLong(Long.MAX_VALUE), "TMP");
-                Object player = BukkitUnsafe.getHandle(event.getPlayer());
-                GameProfile profile = BukkitUnsafe.getGameProfile(player);
-                synchronized (profile) {
-                        profile.getProperties().put(marker.getName(), marker);
+                try {
+                        Property marker = new Property("$eaglerMarker_" + ThreadLocalRandom.current().nextLong(Long.MAX_VALUE), "TMP");
+                        Object player = BukkitUnsafe.getHandle(event.getPlayer());
+                        GameProfile profile = BukkitUnsafe.getGameProfile(player);
+                        if (profile != null) {
+                                synchronized (profile) {
+                                        BukkitUnsafe.putProfileProperty(profile, marker);
+                                }
+                                entityPlayers.put(marker, event.getPlayer());
+                        }
+                } catch (Throwable t) {
+                        java.util.logging.Logger.getLogger("EaglerXServer").warning(
+                                        "Failed to inject Eagler marker property during login: " + t);
                 }
-                entityPlayers.put(marker, event.getPlayer());
         }
 
         private void fireEventLoginInit(Channel channel) {
