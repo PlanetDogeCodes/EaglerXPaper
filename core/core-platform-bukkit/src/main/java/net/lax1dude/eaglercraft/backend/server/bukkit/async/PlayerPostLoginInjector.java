@@ -333,19 +333,29 @@ public class PlayerPostLoginInjector {
                                                                 return null;
                                                         }
                                                 }
-                                                // Hotfix 12: Three-layer compression threshold fix
-                                                String methName = meth.getName();
-                                                if ("setupCompression".equals(methName) || "setCompressionThreshold".equals(methName)) {
-                                                        if (ctx.channel != null && ctx.channel.pipeline().get("splitter") == null) {
-                                                                try { if (args.length >= 1 && args[0] instanceof Integer) { args[0] = -1; } return meth.invoke(netManager, args); }
-                                                                catch (java.lang.reflect.InvocationTargetException ite) { Throwable cause = ite.getCause();
-                                                                        if (cause instanceof java.util.NoSuchElementException) { BukkitUnsafe.disableCompressionThreshold(netManager); return null; } throw ite; }
-                                                                catch (Throwable t) { BukkitUnsafe.disableCompressionThreshold(netManager); return null; }
-                                                        }
-                                                }
+                                                // Hotfix 13: COMPLETELY DIFFERENT compression approach.
+                                                // Previous hotfixes intercepted setupCompression by name, modified
+                                                // threshold args, and set compressionThreshold = -1 via reflection.
+                                                // These aggressive interventions were CAUSING the disconnect.
+                                                //
+                                                // New approach: MINIMAL INTERVENTION.
+                                                // - DON'T intercept setupCompression by name
+                                                // - DON'T modify args
+                                                // - DON'T set compressionThreshold via reflection
+                                                // - JUST catch NoSuchElementException in the generic passthrough
+                                                // - Let the server's internal state be whatever it is
+                                                //
+                                                // The server calls setupCompression which tries addAfter("splitter", ...).
+                                                // "splitter" is missing from Eaglercraft pipeline -> NoSuchElementException.
+                                                // We catch it, return null, login flow continues.
+                                                // The compressionThreshold might stay at default but without compression
+                                                // handlers in the pipeline, packets are sent raw which is correct for Eaglercraft.
                                                 try { return meth.invoke(netManager, args); }
-                                                catch (java.lang.reflect.InvocationTargetException ite) { Throwable cause = ite.getCause();
-                                                        if (cause instanceof java.util.NoSuchElementException) { BukkitUnsafe.disableCompressionThreshold(netManager); return null; } throw ite; }
+                                                catch (java.lang.reflect.InvocationTargetException ite) {
+                                                        Throwable cause = ite.getCause();
+                                                        if (cause instanceof java.util.NoSuchElementException) return null;
+                                                        throw ite;
+                                                }
                                         });
                         ctx.proxiedNetworkManager = ret;
                         channel.attr(attr).set(ctx);
@@ -618,7 +628,6 @@ public class PlayerPostLoginInjector {
                                                                                                         handlerAdded.set(ctx.originalNetworkManager, false);
                                                                                                         ctx.channel.pipeline().replace("packet_handler", "packet_handler",
                                                                                                                         (ChannelHandler) ctx.originalNetworkManager);
-                                                                                                        BukkitUnsafe.disableCompressionThreshold(ctx.originalNetworkManager);
                                                                                                         Object entityPlayer = BukkitUnsafe.getHandle(playerFinal);
                                                                                                         loginListenerNetManager.set(loginListener,
                                                                                                                         ctx.originalNetworkManager);
