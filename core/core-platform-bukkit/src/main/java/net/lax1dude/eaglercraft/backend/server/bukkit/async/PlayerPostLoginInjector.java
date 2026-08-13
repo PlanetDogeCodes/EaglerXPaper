@@ -333,7 +333,7 @@ public class PlayerPostLoginInjector {
                                                                 return null;
                                                         }
                                                 }
-                                                // Hotfix 11: Three-layer compression threshold fix
+                                                // Hotfix 12: Three-layer compression threshold fix
                                                 String methName = meth.getName();
                                                 if ("setupCompression".equals(methName) || "setCompressionThreshold".equals(methName)) {
                                                         if (ctx.channel != null && ctx.channel.pipeline().get("splitter") == null) {

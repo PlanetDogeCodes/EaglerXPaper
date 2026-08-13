@@ -211,8 +211,7 @@ public class BukkitUnsafe {
                 if (CLASS_CRAFTPLAYER_HANDLE.getAcquire() == null) { bindCraftPlayer(player); }
                 try {
                         GameProfile profile = (GameProfile) method_EntityPlayer_getProfile.invoke(method_CraftPlayer_getHandle.invoke(player));
-                        Object props = getPropertiesSafe(profile);
-                        if (props == null) return null;
+                        Object props = getPropertiesSafe(profile); if (props == null) return null;
                         Object texCollection = multimapGet(props, "textures");
                         if (texCollection instanceof Collection<?> tex && !tex.isEmpty()) {
                                 Object first = tex.iterator().next();
@@ -792,7 +791,7 @@ public class BukkitUnsafe {
                 }
         }
 
-        // HOTFIX 11 — authlib 6.x helpers + redundant injection + pipeline safety + idempotency + compression fix
+        // HOTFIX 12 — All previous fixes + new reliability/stability/versatility features
         private static volatile Method propertyGetNameMethod = null;
         private static volatile Method propertyGetValueMethod = null;
         private static volatile Method getPropertiesMethod = null;
@@ -832,12 +831,12 @@ public class BukkitUnsafe {
         public static void putProfileProperty(GameProfile profile, Property prop) { if (profile == null || prop == null) return; Object props = getPropertiesSafe(profile); if (props == null) return; multimapPut(props, getPropertyName(prop), prop); }
         public static void removeProfileProperty(GameProfile profile, Property prop) { if (profile == null || prop == null) return; Object props = getPropertiesSafe(profile); if (props == null) return; multimapRemove(props, getPropertyName(prop), prop); }
 
-        // Hotfix 11: Idempotency — prevents double-processing when both injection methods fire
+        // Hotfix 12: Idempotency
         public static final io.netty.util.AttributeKey<Boolean> EAGLER_INIT_DONE = io.netty.util.AttributeKey.valueOf("eagler_init_done");
         public static boolean isChannelInitialized(Channel channel) { return channel.attr(EAGLER_INIT_DONE).get() != null && channel.attr(EAGLER_INIT_DONE).get(); }
         public static void markChannelInitialized(Channel channel) { channel.attr(EAGLER_INIT_DONE).set(true); }
 
-        // Hotfix 11: Backup channel injection
+        // Hotfix 12: Backup channel injection
         public static Runnable injectChannelInitializerBackup(Server server, Consumer<Channel> initHandler, IEaglerXServerListener listener) {
                 try {
                         Object dpl = server.getClass().getMethod("getHandle").invoke(server);
@@ -859,10 +858,10 @@ public class BukkitUnsafe {
                                 @Override public boolean add(ChannelFuture e) { super.add(e); try { e.addListener((ChannelFutureListener) var1 -> { if (var1.isSuccess()) initHandler.accept(var1.channel()); }); } catch (Throwable t) {} return true; }
                         };
                         cfl.set(sc, hl); listener.reportNettyInjected(null); return cl;
-                } catch (Throwable t) { java.util.logging.Logger.getLogger("EaglerXServer").warning("[H11] Backup injection failed: " + t); return () -> {}; }
+                } catch (Throwable t) { java.util.logging.Logger.getLogger("EaglerXServer").warning("[H12] Backup injection failed: " + t); return () -> {}; }
         }
 
-        // Hotfix 11: Safe pipeline methods
+        // Hotfix 12: Safe pipeline methods
         public static boolean safeAddAfter(ChannelPipeline p, String base, String name, ChannelHandler h) {
                 if (p.get(base) != null) { try { p.addAfter(base, name, h); return true; } catch (Throwable t) {} } return false;
         }
@@ -870,13 +869,12 @@ public class BukkitUnsafe {
                 if (p.get(base) != null) { try { p.addBefore(base, name, h); return true; } catch (Throwable t) {} } return false;
         }
 
-        // Hotfix 11: Compression threshold disable (three-layer fix)
+        // Hotfix 12: Compression threshold disable (three-layer fix)
         private static volatile Field compressionThresholdField = null;
         private static volatile boolean compressionFieldInit = false;
         private static synchronized void initCompressionThresholdField(Object networkManager) {
                 if (compressionFieldInit) return;
-                try {
-                        Class<?> clz = networkManager.getClass(); Class<?> wc = clz;
+                try { Class<?> clz = networkManager.getClass(); Class<?> wc = clz;
                         do { for (Field f : wc.getDeclaredFields()) {
                                 if (f.getType() == int.class && ("compressionThreshold".equals(f.getName()) || "compressionthreshold".equalsIgnoreCase(f.getName()))) { f.setAccessible(true); compressionThresholdField = f; break; } }
                         } while (compressionThresholdField == null && (wc = wc.getSuperclass()) != Object.class);
@@ -889,6 +887,103 @@ public class BukkitUnsafe {
         public static void disableCompressionThreshold(Object networkManager) {
                 if (networkManager == null) return; if (!compressionFieldInit) initCompressionThresholdField(networkManager); if (compressionThresholdField == null) return;
                 try { compressionThresholdField.setInt(networkManager, -1); } catch (Exception e) {}
+        }
+
+        // ===================================================================
+        // HOTFIX 12 NEW FEATURES — Reliability, Stability, Versatility
+        // ===================================================================
+
+        // RELIABILITY 1: Increased login timeout — default is 10s, increase to 30s
+        // for slow connections (mobile, high-latency, cross-continent).
+        // This is a hint that the platform plugin can read.
+        public static final int RECOMMENDED_LOGIN_TIMEOUT_MS = 30000;
+
+        // RELIABILITY 2: Auto-retry wrapper for channel initialization
+        // If the first injection attempt fails, retry after 1 second.
+        public static Runnable injectChannelInitializerWithRetry(Server server, Consumer<Channel> initHandler,
+                        IEaglerXServerListener listener, int maxRetries) {
+                Runnable[] cleanupHolder = new Runnable[1];
+                for (int i = 0; i <= maxRetries; i++) {
+                        try {
+                                cleanupHolder[0] = injectChannelInitializer(server, initHandler, listener);
+                                if (cleanupHolder[0] != null) break;
+                        } catch (Throwable t) {
+                                java.util.logging.Logger.getLogger("EaglerXServer").warning("[H12] Injection attempt " + (i+1) + " failed: " + t);
+                                if (i < maxRetries) { try { Thread.sleep(1000); } catch (InterruptedException ie) { Thread.currentThread().interrupt(); break; } }
+                        }
+                }
+                return () -> { if (cleanupHolder[0] != null) { try { cleanupHolder[0].run(); } catch (Throwable t) {} } };
+        }
+
+        // RELIABILITY 3: Check if a channel is an Eaglercraft connection
+        // by looking for EaglerXServer pipeline handlers.
+        public static boolean isEaglerChannel(Channel channel) {
+                if (channel == null) return false;
+                try {
+                        ChannelPipeline p = channel.pipeline();
+                        // Check for EaglerXServer-specific handlers
+                        for (String name : p.names()) {
+                                if (name != null && (name.contains("eagler") || name.contains("Eagler") || name.contains("ws_"))) {
+                                        return true;
+                                }
+                        }
+                        // Also check the EAGLER_INIT_DONE attribute
+                        return isChannelInitialized(channel);
+                } catch (Throwable t) { return false; }
+        }
+
+        // STABILITY 1: Safe channel close that never throws
+        public static void safeClose(Channel channel) {
+                if (channel == null) return;
+                try { channel.close().await(1000); } catch (Throwable t) { try { channel.close(); } catch (Throwable t2) {} }
+        }
+
+        // STABILITY 2: Safe pipeline operation executor — runs on event loop
+        public static void executeOnEventLoop(Channel channel, Runnable task) {
+                if (channel == null || task == null) return;
+                try {
+                        io.netty.channel.EventLoop loop = channel.eventLoop();
+                        if (loop.inEventLoop()) { task.run(); }
+                        else { loop.execute(task); }
+                } catch (Throwable t) {
+                        java.util.logging.Logger.getLogger("EaglerXServer").warning("[H12] Event loop execution failed: " + t);
+                        try { task.run(); } catch (Throwable t2) {}
+                }
+        }
+
+        // STABILITY 3: Get the server's actual listening port for diagnostics
+        public static int getServerPort(Server server) {
+                try { return server.getPort(); }
+                catch (Throwable t) { return 25565; }
+        }
+
+        // VERSATILITY 1: Check if a specific pipeline handler exists
+        public static boolean hasPipelineHandler(Channel channel, String handlerName) {
+                if (channel == null || handlerName == null) return false;
+                try { return channel.pipeline().get(handlerName) != null; }
+                catch (Throwable t) { return false; }
+        }
+
+        // VERSATILITY 2: Safe pipeline remove — removes a handler if it exists
+        public static boolean safeRemoveHandler(ChannelPipeline pipeline, String name) {
+                if (pipeline == null || name == null) return false;
+                if (pipeline.get(name) != null) {
+                        try { pipeline.remove(name); return true; } catch (Throwable t) { return false; }
+                }
+                return false;
+        }
+
+        // VERSATILITY 3: Get pipeline state as a string for diagnostics
+        public static String getPipelineState(Channel channel) {
+                if (channel == null) return "null";
+                try {
+                        StringBuilder sb = new StringBuilder();
+                        for (String name : channel.pipeline().names()) {
+                                if (sb.length() > 0) sb.append(", ");
+                                sb.append(name);
+                        }
+                        return sb.toString();
+                } catch (Throwable t) { return "error: " + t.getMessage(); }
         }
 
 }
