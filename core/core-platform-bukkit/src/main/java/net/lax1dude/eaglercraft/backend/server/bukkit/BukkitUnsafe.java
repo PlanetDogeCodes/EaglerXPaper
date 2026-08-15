@@ -791,8 +791,7 @@ public class BukkitUnsafe {
                 }
         }
 
-        // HOTFIX 13 — authlib 6.x helpers + redundant injection + pipeline safety + idempotency
-        // COMPLETELY DIFFERENT compression approach: minimal intervention, just catch NoSuchElementException
+        // HOTFIX 14 — authlib 6.x helpers + redundant injection + pipeline safety + idempotency
         private static volatile Method propertyGetNameMethod = null;
         private static volatile Method propertyGetValueMethod = null;
         private static volatile Method getPropertiesMethod = null;
@@ -832,12 +831,12 @@ public class BukkitUnsafe {
         public static void putProfileProperty(GameProfile profile, Property prop) { if (profile == null || prop == null) return; Object props = getPropertiesSafe(profile); if (props == null) return; multimapPut(props, getPropertyName(prop), prop); }
         public static void removeProfileProperty(GameProfile profile, Property prop) { if (profile == null || prop == null) return; Object props = getPropertiesSafe(profile); if (props == null) return; multimapRemove(props, getPropertyName(prop), prop); }
 
-        // Hotfix 13: Idempotency — prevents double-processing
+        // Hotfix 14: Idempotency
         public static final io.netty.util.AttributeKey<Boolean> EAGLER_INIT_DONE = io.netty.util.AttributeKey.valueOf("eagler_init_done");
         public static boolean isChannelInitialized(Channel channel) { return channel.attr(EAGLER_INIT_DONE).get() != null && channel.attr(EAGLER_INIT_DONE).get(); }
         public static void markChannelInitialized(Channel channel) { channel.attr(EAGLER_INIT_DONE).set(true); }
 
-        // Hotfix 13: Backup channel injection
+        // Hotfix 14: Backup channel injection
         public static Runnable injectChannelInitializerBackup(Server server, Consumer<Channel> initHandler, IEaglerXServerListener listener) {
                 try {
                         Object dpl = server.getClass().getMethod("getHandle").invoke(server);
@@ -859,10 +858,10 @@ public class BukkitUnsafe {
                                 @Override public boolean add(ChannelFuture e) { super.add(e); try { e.addListener((ChannelFutureListener) var1 -> { if (var1.isSuccess()) initHandler.accept(var1.channel()); }); } catch (Throwable t) {} return true; }
                         };
                         cfl.set(sc, hl); listener.reportNettyInjected(null); return cl;
-                } catch (Throwable t) { java.util.logging.Logger.getLogger("EaglerXServer").warning("[H13] Backup injection failed: " + t); return () -> {}; }
+                } catch (Throwable t) { java.util.logging.Logger.getLogger("EaglerXServer").warning("[H14] Backup injection failed: " + t); return () -> {}; }
         }
 
-        // Hotfix 13: Safe pipeline methods
+        // Hotfix 14: Safe pipeline methods
         public static boolean safeAddAfter(ChannelPipeline p, String base, String name, ChannelHandler h) {
                 if (p.get(base) != null) { try { p.addAfter(base, name, h); return true; } catch (Throwable t) {} } return false;
         }
