@@ -42,7 +42,6 @@ import io.netty.channel.ChannelFuture;
 import io.netty.channel.ChannelFutureListener;
 import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelInboundHandlerAdapter;
-import io.netty.channel.ChannelPipeline;
 import io.netty.channel.ChannelInitializer;
 import io.netty.channel.EventLoopGroup;
 import io.papermc.paper.network.ChannelInitializeListener;
@@ -208,16 +207,22 @@ public class BukkitUnsafe {
         }
 
         public static String getTexturesProperty(Player player) {
-                if (CLASS_CRAFTPLAYER_HANDLE.getAcquire() == null) { bindCraftPlayer(player); }
+                if (CLASS_CRAFTPLAYER_HANDLE.getAcquire() == null) {
+                        bindCraftPlayer(player);
+                }
                 try {
-                        GameProfile profile = (GameProfile) method_EntityPlayer_getProfile.invoke(method_CraftPlayer_getHandle.invoke(player));
-                        Object props = getPropertiesSafe(profile); if (props == null) return null;
+                        GameProfile profile = (GameProfile) method_EntityPlayer_getProfile
+                                        .invoke(method_CraftPlayer_getHandle.invoke(player));
+                        Object props = getPropertiesSafe(profile);
+                        if (props == null) return null;
                         Object texCollection = multimapGet(props, "textures");
                         if (texCollection instanceof Collection<?> tex && !tex.isEmpty()) {
                                 Object first = tex.iterator().next();
                                 if (first instanceof Property p) return getPropertyValue(p);
                         }
-                } catch (ReflectiveOperationException e) { throw Util.propagateReflectThrowable(e); }
+                } catch (ReflectiveOperationException e) {
+                        throw Util.propagateReflectThrowable(e);
+                }
                 return null;
         }
 
@@ -226,26 +231,26 @@ public class BukkitUnsafe {
 
         public static class PropertyInjector {
 
-                private final Multimap<String, Property> props;
+                private final Object props;
                 private final Object lock;
 
-                protected PropertyInjector(Multimap<String, Property> props, Object lock) {
+                protected PropertyInjector(Object props, Object lock) {
                         this.props = props;
                         this.lock = lock;
                 }
 
                 public void injectTexturesProperty(String texturesPropertyValue, String texturesPropertySignature) {
                         synchronized (lock) {
-                                props.removeAll("textures");
-                                props.put("textures",
+                                multimapRemoveAll(props, "textures");
+                                multimapPut(props, "textures",
                                                 new Property("textures", texturesPropertyValue, texturesPropertySignature));
                         }
                 }
 
                 public void injectIsEaglerPlayerProperty(boolean val) {
                         synchronized (lock) {
-                                props.removeAll("isEaglerPlayer");
-                                props.put("isEaglerPlayer", val ? isEaglerPlayerPropertyT : isEaglerPlayerPropertyF);
+                                multimapRemoveAll(props, "isEaglerPlayer");
+                                multimapPut(props, "isEaglerPlayer", val ? isEaglerPlayerPropertyT : isEaglerPlayerPropertyF);
                         }
                 }
 
@@ -261,7 +266,7 @@ public class BukkitUnsafe {
                 try {
                         GameProfile profile = (GameProfile) method_EntityPlayer_getProfile
                                         .invoke(method_CraftPlayer_getHandle.invoke(player));
-                        return new PropertyInjector(profile.getProperties(), profile);
+                        return new PropertyInjector(getPropertiesSafe(profile), profile);
                 } catch (ReflectiveOperationException e) {
                         throw Util.propagateReflectThrowable(e);
                 }
@@ -673,7 +678,7 @@ public class BukkitUnsafe {
         }
 
         public static EventLoopGroup getEventLoopGroup(Class<?> serverConnection, boolean enableNativeTransport) {
-                List<Field> fields = new ArrayList<>(); Class<?> walkClz = serverConnection; do { for (Field f : walkClz.getDeclaredFields()) fields.add(f); } while ((walkClz = walkClz.getSuperclass()) != Object.class);
+                Field[] fields = serverConnection.getFields();
                 if (enableNativeTransport) {
                         for (Field field : fields) {
                                 Class<?> clz = field.getType();
@@ -686,7 +691,7 @@ public class BukkitUnsafe {
                                                         for (Method m : clz.getMethods()) {
                                                                 if (m.getGenericReturnType() != m.getReturnType()) {
                                                                         try {
-                                                                                field.setAccessible(true); return (EventLoopGroup) m.invoke(field.get(null));
+                                                                                return (EventLoopGroup) m.invoke(field.get(null));
                                                                         } catch (ReflectiveOperationException e) {
                                                                                 throw Util.propagateReflectThrowable(e);
                                                                         }
@@ -707,7 +712,7 @@ public class BukkitUnsafe {
                                                 for (Method m : clz.getMethods()) {
                                                         if (m.getGenericReturnType() != m.getReturnType()) {
                                                                 try {
-                                                                        field.setAccessible(true); return (EventLoopGroup) m.invoke(field.get(null));
+                                                                        return (EventLoopGroup) m.invoke(field.get(null));
                                                                 } catch (ReflectiveOperationException e) {
                                                                         throw Util.propagateReflectThrowable(e);
                                                                 }
@@ -733,7 +738,7 @@ public class BukkitUnsafe {
                         for (Field field : fields) {
                                 if (epollType.isAssignableFrom(field.getType())) {
                                         try {
-                                                field.setAccessible(true); Object val = field.get(null);
+                                                Object val = field.get(null);
                                                 if (val instanceof EventLoopGroup) {
                                                         return (EventLoopGroup) val;
                                                 }
@@ -747,7 +752,7 @@ public class BukkitUnsafe {
                         for (Field field : fields) {
                                 if (nioType.isAssignableFrom(field.getType())) {
                                         try {
-                                                field.setAccessible(true); Object val = field.get(null);
+                                                Object val = field.get(null);
                                                 if (val instanceof EventLoopGroup) {
                                                         return (EventLoopGroup) val;
                                                 }
@@ -791,11 +796,22 @@ public class BukkitUnsafe {
                 }
         }
 
-        // HOTFIX 14 — authlib 6.x helpers + redundant injection + pipeline safety + idempotency
+        // ===================================================================
+        // HOTFIX 15 — authlib 6.x full compatibility helpers
+        //
+        // authlib 6.x (Paper 26.x / MC 1.21.11+) changed:
+        //   1. Property.getName() → name(), getValue() → value()
+        //   2. GameProfile.getProperties() return type changed
+        //   3. Direct calls throw NoSuchMethodError
+        //
+        // These helpers use reflection for EVERYTHING related to properties.
+        // ===================================================================
+
         private static volatile Method propertyGetNameMethod = null;
         private static volatile Method propertyGetValueMethod = null;
         private static volatile Method getPropertiesMethod = null;
         private static volatile boolean propertyMethodsInit = false;
+
         private static synchronized void initPropertyMethods() {
                 if (propertyMethodsInit) return;
                 try { propertyGetNameMethod = Property.class.getMethod("getName"); }
@@ -805,68 +821,79 @@ public class BukkitUnsafe {
                 try { getPropertiesMethod = GameProfile.class.getMethod("getProperties"); } catch (NoSuchMethodException e) { getPropertiesMethod = null; }
                 propertyMethodsInit = true;
         }
+
         public static String getPropertyName(Property prop) {
-                if (prop == null) return null; if (!propertyMethodsInit) initPropertyMethods(); if (propertyGetNameMethod == null) return null;
+                if (prop == null) return null;
+                if (!propertyMethodsInit) initPropertyMethods();
+                if (propertyGetNameMethod == null) return null;
                 try { return (String) propertyGetNameMethod.invoke(prop); } catch (Exception e) { return null; }
         }
+
         public static String getPropertyValue(Property prop) {
-                if (prop == null) return null; if (!propertyMethodsInit) initPropertyMethods(); if (propertyGetValueMethod == null) return null;
+                if (prop == null) return null;
+                if (!propertyMethodsInit) initPropertyMethods();
+                if (propertyGetValueMethod == null) return null;
                 try { return (String) propertyGetValueMethod.invoke(prop); } catch (Exception e) { return null; }
         }
+
+        @SuppressWarnings("unchecked")
         public static Object getPropertiesSafe(GameProfile profile) {
-                if (profile == null) return null; if (!propertyMethodsInit) initPropertyMethods(); if (getPropertiesMethod == null) return null;
+                if (profile == null) return null;
+                if (!propertyMethodsInit) initPropertyMethods();
+                if (getPropertiesMethod == null) return null;
                 try { return getPropertiesMethod.invoke(profile); } catch (Exception e) { return null; }
         }
-        public static Object multimapGet(Object mm, String key) { if (mm == null) return null; try { return mm.getClass().getMethod("get", Object.class).invoke(mm, key); } catch (Exception e) { return null; } }
-        public static void multimapPut(Object mm, String key, Object value) { if (mm == null || key == null) return; try { mm.getClass().getMethod("put", Object.class, Object.class).invoke(mm, key, value); } catch (Exception e) {} }
-        public static void multimapRemove(Object mm, String key, Object value) { if (mm == null || key == null) return; try { mm.getClass().getMethod("remove", Object.class, Object.class).invoke(mm, key, value); } catch (Exception e) {} }
-        public static void multimapRemoveAll(Object mm, String key) { if (mm == null || key == null) return; try { mm.getClass().getMethod("removeAll", Object.class).invoke(mm, key); } catch (Exception e) {} }
+
+        public static Object multimapGet(Object mm, String key) {
+                if (mm == null) return null;
+                try { return mm.getClass().getMethod("get", Object.class).invoke(mm, key); } catch (Exception e) { return null; }
+        }
+
+        public static void multimapPut(Object mm, String key, Object value) {
+                if (mm == null || key == null) return;
+                try { mm.getClass().getMethod("put", Object.class, Object.class).invoke(mm, key, value); } catch (Exception e) {}
+        }
+
+        public static void multimapRemove(Object mm, String key, Object value) {
+                if (mm == null || key == null) return;
+                try { mm.getClass().getMethod("remove", Object.class, Object.class).invoke(mm, key, value); } catch (Exception e) {}
+        }
+
+        public static void multimapRemoveAll(Object mm, String key) {
+                if (mm == null || key == null) return;
+                try { mm.getClass().getMethod("removeAll", Object.class).invoke(mm, key); } catch (Exception e) {}
+        }
+
         @SuppressWarnings("unchecked")
         public static java.util.Collection<Property> getPropertyValuesSafe(GameProfile profile) {
-                if (profile == null) return java.util.Collections.emptyList(); Object props = getPropertiesSafe(profile); if (props == null) return java.util.Collections.emptyList();
-                try { Object result = props.getClass().getMethod("values").invoke(props);
-                        if (result instanceof java.util.Collection<?> coll) { java.util.List<Property> list = new java.util.ArrayList<>(); for (Object o : coll) if (o instanceof Property p) list.add(p); return list; }
-                } catch (Exception e) {} return java.util.Collections.emptyList();
-        }
-        public static void putProfileProperty(GameProfile profile, Property prop) { if (profile == null || prop == null) return; Object props = getPropertiesSafe(profile); if (props == null) return; multimapPut(props, getPropertyName(prop), prop); }
-        public static void removeProfileProperty(GameProfile profile, Property prop) { if (profile == null || prop == null) return; Object props = getPropertiesSafe(profile); if (props == null) return; multimapRemove(props, getPropertyName(prop), prop); }
-
-        // Hotfix 14: Idempotency
-        public static final io.netty.util.AttributeKey<Boolean> EAGLER_INIT_DONE = io.netty.util.AttributeKey.valueOf("eagler_init_done");
-        public static boolean isChannelInitialized(Channel channel) { return channel.attr(EAGLER_INIT_DONE).get() != null && channel.attr(EAGLER_INIT_DONE).get(); }
-        public static void markChannelInitialized(Channel channel) { channel.attr(EAGLER_INIT_DONE).set(true); }
-
-        // Hotfix 14: Backup channel injection
-        public static Runnable injectChannelInitializerBackup(Server server, Consumer<Channel> initHandler, IEaglerXServerListener listener) {
+                if (profile == null) return java.util.Collections.emptyList();
+                Object props = getPropertiesSafe(profile);
+                if (props == null) return java.util.Collections.emptyList();
                 try {
-                        Object dpl = server.getClass().getMethod("getHandle").invoke(server);
-                        Object ms = dpl.getClass().getMethod("getServer").invoke(dpl);
-                        Method gsc = null; try { gsc = ms.getClass().getMethod("getConnection"); } catch (NoSuchMethodException e1) { gsc = ms.getClass().getMethod("getServerConnection"); }
-                        Object sc = gsc.invoke(ms); if (sc == null) return () -> {};
-                        Field cfl = null; Class<?> wc = sc.getClass();
-                        do { for (Field f : wc.getDeclaredFields()) { if (!List.class.isAssignableFrom(f.getType())) continue;
-                                java.lang.reflect.Type t = f.getGenericType();
-                                if (t instanceof ParameterizedType pt) { java.lang.reflect.Type[] pa = pt.getActualTypeArguments();
-                                        if (pa.length == 1 && "io.netty.channel.ChannelFuture".equals(pa[0].getTypeName())) { cfl = f; cfl.setAccessible(true); break; } } }
-                        } while (cfl == null && (wc = wc.getSuperclass()) != Object.class);
-                        if (cfl == null) return () -> {};
-                        CleanupList cl = new CleanupList();
-                        @SuppressWarnings("unchecked") final List<ChannelFuture> ol = (List<ChannelFuture>) cfl.get(sc); if (ol == null) return () -> {};
-                        for (ChannelFuture ch : new ArrayList<>(ol)) { try { ch.addListener((ChannelFutureListener) var1 -> { if (var1.isSuccess()) initHandler.accept(var1.channel()); }); } catch (Throwable t) {} }
-                        List<ChannelFuture> hl = new com.google.common.collect.ForwardingList<ChannelFuture>() {
-                                @Override protected List<ChannelFuture> delegate() { return ol; }
-                                @Override public boolean add(ChannelFuture e) { super.add(e); try { e.addListener((ChannelFutureListener) var1 -> { if (var1.isSuccess()) initHandler.accept(var1.channel()); }); } catch (Throwable t) {} return true; }
-                        };
-                        cfl.set(sc, hl); listener.reportNettyInjected(null); return cl;
-                } catch (Throwable t) { java.util.logging.Logger.getLogger("EaglerXServer").warning("[H14] Backup injection failed: " + t); return () -> {}; }
+                        Object result = props.getClass().getMethod("values").invoke(props);
+                        if (result instanceof java.util.Collection<?> coll) {
+                                java.util.List<Property> list = new java.util.ArrayList<>();
+                                for (Object o : coll) {
+                                        if (o instanceof Property p) list.add(p);
+                                }
+                                return list;
+                        }
+                } catch (Exception e) {}
+                return java.util.Collections.emptyList();
         }
 
-        // Hotfix 14: Safe pipeline methods
-        public static boolean safeAddAfter(ChannelPipeline p, String base, String name, ChannelHandler h) {
-                if (p.get(base) != null) { try { p.addAfter(base, name, h); return true; } catch (Throwable t) {} } return false;
+        public static void putProfileProperty(GameProfile profile, Property prop) {
+                if (profile == null || prop == null) return;
+                Object props = getPropertiesSafe(profile);
+                if (props == null) return;
+                multimapPut(props, getPropertyName(prop), prop);
         }
-        public static boolean safeAddBefore(ChannelPipeline p, String base, String name, ChannelHandler h) {
-                if (p.get(base) != null) { try { p.addBefore(base, name, h); return true; } catch (Throwable t) {} } return false;
+
+        public static void removeProfileProperty(GameProfile profile, Property prop) {
+                if (profile == null || prop == null) return;
+                Object props = getPropertiesSafe(profile);
+                if (props == null) return;
+                multimapRemove(props, getPropertyName(prop), prop);
         }
 
 }

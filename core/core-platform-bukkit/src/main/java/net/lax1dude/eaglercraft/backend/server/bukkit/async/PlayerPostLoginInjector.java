@@ -249,9 +249,9 @@ public class PlayerPostLoginInjector {
 
                 protected final Object originalNetworkManager;
                 protected final Channel channel;
-                protected volatile Object proxiedNetworkManager;
-                protected volatile boolean compressionDisable;
-                protected volatile boolean throwOnLoginSuccess;
+                protected Object proxiedNetworkManager;
+                protected boolean compressionDisable;
+                protected boolean throwOnLoginSuccess;
                 protected volatile boolean clientPlayState;
 
                 protected LoginEventContext(Object originalNetworkManager, Channel channel) {
@@ -333,9 +333,10 @@ public class PlayerPostLoginInjector {
                                                                 return null;
                                                         }
                                                 }
-                                                // Hotfix 14: Minimal compression handling — just catch NoSuchElementException
-                                                try { return meth.invoke(netManager, args); }
-                                                catch (java.lang.reflect.InvocationTargetException ite) {
+                                                // Hotfix 15: catch NoSuchElementException from setupCompression
+                                                try {
+                                                        return meth.invoke(netManager, args);
+                                                } catch (java.lang.reflect.InvocationTargetException ite) {
                                                         Throwable cause = ite.getCause();
                                                         if (cause instanceof java.util.NoSuchElementException) return null;
                                                         throw ite;
@@ -608,13 +609,7 @@ public class PlayerPostLoginInjector {
                                                                                 final Player playerFinal = player;
                                                                                 try {
                                                                                         fireEventLoginPostAsync(playerFinal, ctx, (res) -> {
-                                                                                                // Hotfix 14: THE KEY FIX — run pipeline operations on the
-                                                                                                // channel's event loop thread. The previous code ran pipeline.replace()
-                                                                                                // on the Bukkit main thread, which is a Netty threading violation that
-                                                                                                // corrupts the pipeline and disconnects the player.
-                                                                                                //
-                                                                                                // Also catch ALL Throwable (not just ReflectiveOperationException)
-                                                                                                // to prevent any exception from crashing the server tick.
+                                                                                                // Hotfix 15: run pipeline operations on the channel's event loop
                                                                                                 io.netty.channel.EventLoop el = ctx.channel.eventLoop();
                                                                                                 Runnable task = () -> {
                                                                                                         try {
@@ -641,17 +636,13 @@ public class PlayerPostLoginInjector {
                                                                                                                         try {
                                                                                                                                 loginListenerDisconnect.invoke(loginListener, arg);
                                                                                                                         } catch (ReflectiveOperationException roe) {
-                                                                                                                                java.util.logging.Logger.getLogger("EaglerXServer").warning(
-                                                                                                                                                "[H14] Disconnect invoke failed, closing channel: " + roe);
                                                                                                                                 try { ctx.channel.close(); } catch (Throwable t2) {}
                                                                                                                         }
                                                                                                                 }
                                                                                                         } catch (Throwable t) {
-                                                                                                                // Hotfix 14: Catch ALL Throwable to prevent server tick crash.
-                                                                                                                // Log the error and close the channel cleanly.
                                                                                                                 java.util.logging.Logger.getLogger("EaglerXServer").log(
                                                                                                                                 java.util.logging.Level.SEVERE,
-                                                                                                                                "[H14] Error in post-login callback", t);
+                                                                                                                                "[H15] Error in post-login callback", t);
                                                                                                                 try { ctx.channel.close(); } catch (Throwable t2) {}
                                                                                                         }
                                                                                                 };
@@ -661,7 +652,7 @@ public class PlayerPostLoginInjector {
                                                                                 } catch (Throwable fireErr) {
                                                                                         java.util.logging.Logger.getLogger("EaglerXServer").log(
                                                                                                         java.util.logging.Level.SEVERE,
-                                                                                                        "[H14] Failed to fire login post event", fireErr);
+                                                                                                        "[H15] Failed to fire login post event", fireErr);
                                                                                         try { ctx.channel.close(); } catch (Throwable t2) {}
                                                                                 }
                                                                                 return null;
@@ -670,7 +661,8 @@ public class PlayerPostLoginInjector {
                                                                         }
                                                                 } else {
                                                                         if (er instanceof Error ee) throw ee;
-                                                                        if (er instanceof RuntimeException ee) throw ee;
+                                                                        if (er instanceof RuntimeException ee)
+                                                                                throw ee;
                                                                         throw new RuntimeException(er);
                                                                 }
                                                         }

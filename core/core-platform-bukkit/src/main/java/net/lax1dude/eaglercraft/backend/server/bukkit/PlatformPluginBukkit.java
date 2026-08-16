@@ -307,9 +307,9 @@ public class PlatformPluginBukkit extends JavaPlugin implements IPlatform<Player
                         }
                 }
                 cleanupListeners = BukkitUnsafe.injectChannelInitializer(getServer(), (channel) -> {
-                        if (BukkitUnsafe.isChannelInitialized(channel)) { return; }
-                        BukkitUnsafe.markChannelInitialized(channel);
-                        if (!channel.isActive()) { return; }
+                        if (!channel.isActive()) {
+                                return;
+                        }
 
                         List<IPipelineComponent> pipelineList = new ArrayList<>();
 
