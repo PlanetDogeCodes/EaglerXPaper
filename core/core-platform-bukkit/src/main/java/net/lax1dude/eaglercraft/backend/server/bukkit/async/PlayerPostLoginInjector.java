@@ -24,6 +24,7 @@ import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.Iterator;
+import java.util.NoSuchElementException;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.Consumer;
@@ -41,6 +42,7 @@ import io.netty.channel.ChannelHandlerAdapter;
 import io.netty.util.AttributeKey;
 import io.netty.util.concurrent.GenericFutureListener;
 import net.lax1dude.eaglercraft.backend.server.api.bukkit.event.PlayerLoginPostEvent;
+import net.lax1dude.eaglercraft.backend.server.api.bukkit.compat.AuthlibCompat;
 import net.lax1dude.eaglercraft.backend.server.bukkit.BukkitUnsafe;
 import net.lax1dude.eaglercraft.backend.server.bukkit.NmsNames;
 import net.lax1dude.eaglercraft.backend.server.bukkit.PlatformPluginBukkit;
@@ -117,6 +119,21 @@ public class PlayerPostLoginInjector {
         public PlayerPostLoginInjector(PlatformPluginBukkit plugin) {
                 this.plugin = plugin;
                 this.entityPlayers = (new MapMaker()).concurrencyLevel(8).weakKeys().weakValues().makeMap();
+        }
+
+        /**
+         * Removes the (marker, player) entry from the entityPlayers weak map. Called by
+         * {@link BukkitListener#onQuitEvent} after the marker Property is removed from
+         * the GameProfile. Without this, the entry stays alive until GC reclaims both
+         * the Property and the Player — which can take seconds to minutes. During that
+         * window a fast reconnect could match a stale marker.
+         */
+        public void removeMarker(Property marker) {
+                if (marker == null) return;
+                try {
+                        entityPlayers.remove(marker);
+                } catch (Throwable ignored) {
+                }
         }
 
         private synchronized void bind(Object netManager) {
@@ -249,9 +266,9 @@ public class PlayerPostLoginInjector {
 
                 protected final Object originalNetworkManager;
                 protected final Channel channel;
-                protected Object proxiedNetworkManager;
-                protected boolean compressionDisable;
-                protected boolean throwOnLoginSuccess;
+                protected volatile Object proxiedNetworkManager;
+                protected volatile boolean compressionDisable;
+                protected volatile boolean throwOnLoginSuccess;
                 protected volatile boolean clientPlayState;
 
                 protected LoginEventContext(Object originalNetworkManager, Channel channel) {
@@ -333,22 +350,28 @@ public class PlayerPostLoginInjector {
                                                                 return null;
                                                         }
                                                 }
-                                                // Hotfix 15: catch NoSuchElementException from setupCompression
-                                                try {
-                                                        return meth.invoke(netManager, args);
-                                                } catch (java.lang.reflect.InvocationTargetException ite) {
-                                                        Throwable cause = ite.getCause();
-                                                        if (cause instanceof java.util.NoSuchElementException) return null;
-                                                        throw ite;
-                                                }
+                                                return meth.invoke(netManager, args);
                                         });
                         ctx.proxiedNetworkManager = ret;
                         channel.attr(attr).set(ctx);
                         handshakeListenerNetManager.set(getHandlerMethod.invoke(netManager), ret);
                         netManagerChannel.set(ret, channel);
                         return ret;
-                } catch (ReflectiveOperationException e) {
-                        throw Util.propagateReflectThrowable(e);
+                } catch (Throwable e) {
+                        // Widened from ReflectiveOperationException: channel.attr(attr).set(ctx)
+                        // can throw IllegalArgumentException (key conflict); netManagerDir.get()
+                        // can NPE if bind() ran on a different NM class; ctx.originalNetworkManager
+                        // cast can ClassCastException. None are reflective — let them through cleanly.
+                        if (e instanceof ReflectiveOperationException) {
+                                throw Util.propagateReflectThrowable((ReflectiveOperationException) e);
+                        }
+                        if (e instanceof RuntimeException) {
+                                throw (RuntimeException) e;
+                        }
+                        if (e instanceof Error) {
+                                throw (Error) e;
+                        }
+                        throw new RuntimeException("wrapNetworkManager failed", e);
                 }
         }
 
@@ -592,75 +615,135 @@ public class PlayerPostLoginInjector {
                                                                 if (er instanceof EaglerError err) {
                                                                         Player player = null;
                                                                         synchronized (err.gameProfile) {
-                                                                                java.util.Iterator<Property> itr = BukkitUnsafe.getPropertyValuesSafe(err.gameProfile).iterator();
+                                                                                Iterator<Property> itr = AuthlibCompat
+                                                                                                .getProperties(err.gameProfile)
+                                                                                                .values().iterator();
                                                                                 while (itr.hasNext()) {
                                                                                         Property prop = itr.next();
-                                                                                        String propName = BukkitUnsafe.getPropertyName(prop);
-                                                                                        if (propName != null && propName.startsWith("$eaglerMarker_")) {
-                                                                                                Player e = entityPlayers.remove(prop);
+                                                                                        String propName = AuthlibCompat
+                                                                                                        .getName(prop);
+                                                                                        if (propName != null && propName
+                                                                                                        .startsWith("$eaglerMarker_")) {
+                                                                                                Player e = entityPlayers
+                                                                                                                .remove(prop);
                                                                                                 if (e != null) {
                                                                                                         player = e;
                                                                                                 }
-                                                                                                BukkitUnsafe.removeProfileProperty(err.gameProfile, prop);
+                                                                                                itr.remove();
                                                                                         }
                                                                                 }
                                                                         }
                                                                         if (player != null) {
                                                                                 final Player playerFinal = player;
-                                                                                try {
-                                                                                        fireEventLoginPostAsync(playerFinal, ctx, (res) -> {
-                                                                                                // Hotfix 15: run pipeline operations on the channel's event loop
-                                                                                                io.netty.channel.EventLoop el = ctx.channel.eventLoop();
-                                                                                                Runnable task = () -> {
-                                                                                                        try {
-                                                                                                                if (!res.isCancelled()) {
-                                                                                                                        handlerAdded.set(ctx.originalNetworkManager, false);
-                                                                                                                        ctx.channel.pipeline().replace("packet_handler", "packet_handler",
-                                                                                                                                        (ChannelHandler) ctx.originalNetworkManager);
-                                                                                                                        Object entityPlayer = BukkitUnsafe.getHandle(playerFinal);
-                                                                                                                        loginListenerNetManager.set(loginListener,
-                                                                                                                                        ctx.originalNetworkManager);
-                                                                                                                        loginListenerPlayer.set(loginListener, entityPlayer);
-                                                                                                                        loginListenerState.set(loginListener, protocolStateOnResume);
-                                                                                                                } else {
-                                                                                                                        BaseComponent comp = res.getMessage();
-                                                                                                                        if (comp == null) {
-                                                                                                                                comp = new TextComponent("Connection Closed");
+                                                                                fireEventLoginPostAsync(playerFinal, ctx,
+                                                                                                (res) -> {
+                                                                                                        // CRITICAL: pipeline.replace MUST be invoked on the channel's EventLoop.
+                                                                                                        // The login-listener tick runs on the Bukkit main thread. Without this
+                                                                                                        // wrap, pipeline mutation is deferred by Netty but our subsequent
+                                                                                                        // setLoginListenerState/Player runs BEFORE the swap actually applies,
+                                                                                                        // causing the next tick to re-enter the wrapped LoginListener and
+                                                                                                        // throw EaglerError again -> infinite loop / immediate disconnect.
+                                                                                                        Runnable task = () -> {
+                                                                                                                try {
+                                                                                                                        if (!res.isCancelled()) {
+                                                                                                                                handlerAdded.set(ctx.originalNetworkManager,
+                                                                                                                                                false);
+                                                                                                                                try {
+                                                                                                                                        ctx.channel.pipeline()
+                                                                                                                                                        .replace("packet_handler",
+                                                                                                                                                                        "packet_handler",
+                                                                                                                                                                        (ChannelHandler) ctx.originalNetworkManager);
+                                                                                                                                } catch (NoSuchElementException nse) {
+                                                                                                                                        // "packet_handler" was removed/renamed by another plugin (ProtocolLib, ViaVersion, PacketEvents).
+                                                                                                                                        // Try the original NetworkManager by direct lookup; fall back to closing the channel.
+                                                                                                                                        try {
+                                                                                                                                                ctx.channel.pipeline()
+                                                                                                                                                                .addFirst("eagler-restored-handler",
+                                                                                                                                                                                (ChannelHandler) ctx.originalNetworkManager);
+                                                                                                                                        } catch (Throwable t2) {
+                                                                                                                                                plugin.logger().error(
+                                                                                                                                                                "EaglerXServer: could not restore NetworkManager after packet_handler was missing",
+                                                                                                                                                                t2);
+                                                                                                                                                try {
+                                                                                                                                                        ctx.channel.close();
+                                                                                                                                                } catch (Throwable ignored) {
+                                                                                                                                                }
+                                                                                                                                                return;
+                                                                                                                                        }
+                                                                                                                                }
+                                                                                                                                Object entityPlayer = BukkitUnsafe
+                                                                                                                                                .getHandle(playerFinal);
+                                                                                                                                loginListenerNetManager.set(
+                                                                                                                                                loginListener,
+                                                                                                                                                ctx.originalNetworkManager);
+                                                                                                                                loginListenerPlayer.set(loginListener,
+                                                                                                                                                entityPlayer);
+                                                                                                                                loginListenerState.set(loginListener,
+                                                                                                                                                protocolStateOnResume);
+                                                                                                                        } else {
+                                                                                                                                BaseComponent comp = res.getMessage();
+                                                                                                                                if (comp == null) {
+                                                                                                                                        comp = new TextComponent(
+                                                                                                                                                        "Connection Closed");
+                                                                                                                                }
+                                                                                                                                String legacyText = comp.toLegacyText();
+                                                                                                                                Object arg = legacyText;
+                                                                                                                                Class<?> paramType = loginListenerDisconnect
+                                                                                                                                                .getParameterTypes()[0];
+                                                                                                                                if (paramType != String.class) {
+                                                                                                                                        arg = convertToComponent(legacyText,
+                                                                                                                                                        paramType);
+                                                                                                                                }
+                                                                                                                                loginListenerDisconnect.invoke(loginListener,
+                                                                                                                                                arg);
                                                                                                                         }
-                                                                                                                        String legacyText = comp.toLegacyText();
-                                                                                                                        Object arg = legacyText;
-                                                                                                                        Class<?> paramType = loginListenerDisconnect.getParameterTypes()[0];
-                                                                                                                        if (paramType != String.class) {
-                                                                                                                                arg = convertToComponent(legacyText, paramType);
-                                                                                                                        }
+                                                                                                                } catch (Throwable e) {
+                                                                                                                        // Widened from ReflectiveOperationException:
+                                                                                                                        // NoSuchElementException (packet_handler missing),
+                                                                                                                        // NPE (handlerAdded null), ClassCastException (param type),
+                                                                                                                        // InvocationTargetException (disconnect invoke) — none are
+                                                                                                                        // ReflectiveOperationException but all crash the tick if they
+                                                                                                                        // escape. Log + close channel cleanly instead of throwing.
+                                                                                                                        plugin.logger().error(
+                                                                                                                                        "EaglerXServer: post-login finalize failed, closing channel",
+                                                                                                                                        e);
                                                                                                                         try {
-                                                                                                                                loginListenerDisconnect.invoke(loginListener, arg);
-                                                                                                                        } catch (ReflectiveOperationException roe) {
-                                                                                                                                try { ctx.channel.close(); } catch (Throwable t2) {}
+                                                                                                                                ctx.channel.close();
+                                                                                                                        } catch (Throwable ignored) {
                                                                                                                         }
                                                                                                                 }
-                                                                                                        } catch (Throwable t) {
-                                                                                                                java.util.logging.Logger.getLogger("EaglerXServer").log(
-                                                                                                                                java.util.logging.Level.SEVERE,
-                                                                                                                                "[H15] Error in post-login callback", t);
-                                                                                                                try { ctx.channel.close(); } catch (Throwable t2) {}
+                                                                                                        };
+                                                                                                        if (ctx.channel.eventLoop().inEventLoop()) {
+                                                                                                                task.run();
+                                                                                                        } else {
+                                                                                                                try {
+                                                                                                                        ctx.channel.eventLoop().submit(task);
+                                                                                                                } catch (Throwable t) {
+                                                                                                                        plugin.logger().error(
+                                                                                                                                        "EaglerXServer: failed to schedule post-login finalize on event loop",
+                                                                                                                                        t);
+                                                                                                                        try {
+                                                                                                                                ctx.channel.close();
+                                                                                                                        } catch (Throwable ignored) {
+                                                                                                                        }
+                                                                                                                }
                                                                                                         }
-                                                                                                };
-                                                                                                if (el.inEventLoop()) { task.run(); }
-                                                                                                else { el.execute(task); }
-                                                                                        });
-                                                                                } catch (Throwable fireErr) {
-                                                                                        java.util.logging.Logger.getLogger("EaglerXServer").log(
-                                                                                                        java.util.logging.Level.SEVERE,
-                                                                                                        "[H15] Failed to fire login post event", fireErr);
-                                                                                        try { ctx.channel.close(); } catch (Throwable t2) {}
-                                                                                }
+                                                                                                });
                                                                                 return null;
                                                                         } else {
-                                                                                throw new IllegalStateException();
+                                                                                // EaglerError fired but the $eaglerMarker_ property was already
+                                                                                // removed (e.g. by PlayerQuitEvent cleanup, or the player disconnected
+                                                                                // mid-login). Don't throw IllegalStateException — that would crash the
+                                                                                // server tick. Close the channel cleanly and bail out.
+                                                                                plugin.logger().warn(
+                                                                                                "EaglerXServer: EaglerError fired for a player whose marker was already cleaned up; closing channel");
+                                                                                try {
+                                                                                        ctx.channel.close();
+                                                                                } catch (Throwable ignored) {
+                                                                                }
+                                                                                return null;
                                                                         }
                                                                 } else {
-                                                                        if (er instanceof Error ee) throw ee;
                                                                         if (er instanceof RuntimeException ee)
                                                                                 throw ee;
                                                                         throw new RuntimeException(er);
@@ -669,8 +752,20 @@ public class PlayerPostLoginInjector {
                                                 }
                                                 return meth.invoke(loginListener, args);
                                         });
-                } catch (ReflectiveOperationException e) {
-                        throw Util.propagateReflectThrowable(e);
+                } catch (Throwable e) {
+                        // Widened from ReflectiveOperationException: EaglerError may surface here
+                        // if the inner try threw it without being wrapped in InvocationTargetException
+                        // (defensive — should not normally happen).
+                        if (e instanceof ReflectiveOperationException) {
+                                throw Util.propagateReflectThrowable((ReflectiveOperationException) e);
+                        }
+                        if (e instanceof RuntimeException) {
+                                throw (RuntimeException) e;
+                        }
+                        if (e instanceof Error) {
+                                throw (Error) e;
+                        }
+                        throw new RuntimeException("wrapLoginListener failed", e);
                 }
         }
 
@@ -807,18 +902,35 @@ public class PlayerPostLoginInjector {
         }
 
         public void handleLoginEvent(PlayerLoginEvent event) {
+                // Capture the marker name as a local String before constructing the Property,
+                // so we never invoke Property.getName() reflectively (which throws NoSuchMethodError
+                // on authlib 6.x — Paper 26.x / MC 1.21.11). Also use the 3-arg canonical ctor
+                // (name, value, null) which is guaranteed to exist on all authlib versions;
+                // the 2-arg convenience ctor may be stripped by some shaded/relocated authlib builds.
+                String markerName = "$eaglerMarker_" + ThreadLocalRandom.current().nextLong(Long.MAX_VALUE);
                 try {
-                        Property marker = new Property("$eaglerMarker_" + ThreadLocalRandom.current().nextLong(Long.MAX_VALUE), "TMP");
+                        Property marker = AuthlibCompat.createProperty(markerName, "TMP");
                         Object player = BukkitUnsafe.getHandle(event.getPlayer());
                         GameProfile profile = BukkitUnsafe.getGameProfile(player);
-                        if (profile != null) {
-                                synchronized (profile) {
-                                        BukkitUnsafe.putProfileProperty(profile, marker);
-                                }
-                                entityPlayers.put(marker, event.getPlayer());
+                        // Skip Bedrock-via-Geyser/Floodgate players — they don't go through Eagler's
+                        // post-login swap flow, so inserting the marker would just leak into their
+                        // PacketLoginOutSuccess and confuse Geyser's profile translation.
+                        if (AuthlibCompat.containsKey(AuthlibCompat.getProperties(profile), "floodgate:is_bedrock")) {
+                                return;
                         }
+                        synchronized (profile) {
+                                AuthlibCompat.put(AuthlibCompat.getProperties(profile), markerName, marker);
+                        }
+                        entityPlayers.put(marker, event.getPlayer());
                 } catch (Throwable t) {
-                        java.util.logging.Logger.getLogger("EaglerXServer").warning("Failed to inject Eagler marker: " + t);
+                        // If anything goes wrong (e.g. GameProfile lookup fails for some custom server,
+                        // or authlib removes the 3-arg ctor in a future version), log and bail — don't
+                        // kick the player. The post-login flow will gracefully short-circuit because
+                        // no matching marker will be found in entityPlayers.
+                        plugin.logger().warn(
+                                        "EaglerXServer: handleLoginEvent failed for player " + event.getPlayer().getName()
+                                                        + " — post-login Eagler features will be unavailable",
+                                        t);
                 }
         }
 

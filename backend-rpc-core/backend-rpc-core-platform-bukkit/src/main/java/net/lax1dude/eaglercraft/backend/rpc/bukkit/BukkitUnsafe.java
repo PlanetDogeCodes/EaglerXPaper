@@ -57,7 +57,7 @@ public class BukkitUnsafe {
                         method_CraftPlayer_getHandle = clz.getMethod("getHandle");
                         Object entityPlayer = method_CraftPlayer_getHandle.invoke(playerObject);
                         Class<?> clz2 = entityPlayer.getClass();
-                        method_EntityPlayer_getProfile = findGameProfileGetter(clz2);
+                        method_EntityPlayer_getProfile = clz2.getMethod("getProfile");
                         class_EntityPlayer = clz2;
                         CLASS_CRAFTPLAYER_HANDLE.setRelease(clz);
                 } catch (Exception ex) {
@@ -65,55 +65,49 @@ public class BukkitUnsafe {
                 }
         }
 
-        private static Method findGameProfileGetter(Class<?> entityPlayerClass) {
-                try { Method m = entityPlayerClass.getMethod("getGameProfile"); if (GameProfile.class.isAssignableFrom(m.getReturnType())) return m; } catch (NoSuchMethodException ex) {}
-                try { Method m = entityPlayerClass.getMethod("getProfile"); if (GameProfile.class.isAssignableFrom(m.getReturnType())) return m; } catch (NoSuchMethodException ex) {}
-                for (Method m : entityPlayerClass.getMethods()) { if (m.getParameterCount() == 0 && GameProfile.class.isAssignableFrom(m.getReturnType())) return m; }
-                throw new RuntimeException("Could not locate GameProfile getter on " + entityPlayerClass.getName());
-        }
-
         private static final boolean paperProfileAPISupport;
 
         static {
                 boolean paperProfileAPISupport_ = false;
-                try { Class.forName("com.destroystokyo.paper.profile.PlayerProfile"); paperProfileAPISupport_ = true; }
-                catch (ClassNotFoundException e) { try { Class.forName("io.papermc.paper.profile.PlayerProfile"); paperProfileAPISupport_ = true; } catch (ClassNotFoundException e2) {} }
+                try {
+                        Class.forName("com.destroystokyo.paper.profile.PlayerProfile");
+                        paperProfileAPISupport_ = true;
+                } catch (ClassNotFoundException e) {
+                        // Paper profile API is unsupported
+                }
                 paperProfileAPISupport = paperProfileAPISupport_;
         }
 
-        private static volatile Method propertyGetValueMethod = null;
-        private static volatile Method getPropertiesMethod = null;
-        private static volatile boolean propertyMethodsInit = false;
-        private static synchronized void initPropertyMethods() {
-                if (propertyMethodsInit) return;
-                try { propertyGetValueMethod = Property.class.getMethod("getValue"); }
-                catch (NoSuchMethodException e) { try { propertyGetValueMethod = Property.class.getMethod("value"); } catch (NoSuchMethodException e2) { propertyGetValueMethod = null; } }
-                try { getPropertiesMethod = GameProfile.class.getMethod("getProperties"); } catch (NoSuchMethodException e) { getPropertiesMethod = null; }
-                propertyMethodsInit = true;
-        }
-        private static String getPropertyValue(Property prop) {
-                if (prop == null) return null; if (!propertyMethodsInit) initPropertyMethods(); if (propertyGetValueMethod == null) return null;
-                try { return (String) propertyGetValueMethod.invoke(prop); } catch (Exception e) { return null; }
-        }
-        private static Object getPropertiesSafe(GameProfile profile) {
-                if (profile == null) return null; if (!propertyMethodsInit) initPropertyMethods(); if (getPropertiesMethod == null) return null;
-                try { return getPropertiesMethod.invoke(profile); } catch (Exception e) { return null; }
-        }
-
         public static boolean isEaglerPlayerProperty(Player player) {
-                if (paperProfileAPISupport) { return isEaglerPlayerPropertyPaper(player); }
-                else {
-                        if (CLASS_CRAFTPLAYER_HANDLE.getAcquire() == null) { bindCraftPlayer(player); }
+                if (paperProfileAPISupport) {
+                        return isEaglerPlayerPropertyPaper(player);
+                } else {
                         try {
-                                GameProfile profile = (GameProfile) method_EntityPlayer_getProfile.invoke(method_CraftPlayer_getHandle.invoke(player));
-                                Object props = getPropertiesSafe(profile); if (props == null) return false;
-                                Method getMethod = props.getClass().getMethod("get", Object.class);
-                                Object texCollection = getMethod.invoke(props, "isEaglerPlayer");
-                                if (texCollection instanceof Collection<?> tex && !tex.isEmpty()) {
-                                        Object first = tex.iterator().next();
-                                        if (first instanceof Property p) { return Boolean.parseBoolean(getPropertyValue(p)); }
+                                if (CLASS_CRAFTPLAYER_HANDLE.getAcquire() == null) {
+                                        bindCraftPlayer(player);
                                 }
-                        } catch (Exception e) { throw new RuntimeException("Reflection failed!", e); }
+                                // CRITICAL: Use AuthlibCompat.getValue() instead of Property.getValue()
+                                // directly — authlib 6.x (Paper 26.x / MC 1.21.11) renamed getValue() to value(),
+                                // so a direct bytecode call throws NoSuchMethodError at runtime.
+                                // Note: getProperties() return type widened to Multimap is safe because
+                                // authlib 6.x PropertyMap still implements Multimap<String, Property>.
+                                Multimap<String, Property> props = ((GameProfile) method_EntityPlayer_getProfile
+                                                .invoke(method_CraftPlayer_getHandle.invoke(player))).getProperties();
+                                Collection<Property> tex = props.get("isEaglerPlayer");
+                                if (!tex.isEmpty()) {
+                                        return Boolean.parseBoolean(
+                                                        net.lax1dude.eaglercraft.backend.server.api.bukkit.compat.AuthlibCompat
+                                                                        .getValue(tex.iterator().next()));
+                                }
+                        } catch (IllegalAccessException | IllegalArgumentException | InvocationTargetException e) {
+                                throw new RuntimeException("Reflection failed!", e);
+                        } catch (Throwable t) {
+                                // NoSuchMethodError (authlib 6.x), ClassCastException, NoClassDefFoundError, or
+                                // any exception from bindCraftPlayer (which uses Class.getMethod("getHandle"))
+                                // — log and return false so we don't kick the player on a property lookup.
+                                System.err.println("[EaglerXServer] isEaglerPlayerProperty failed: " + t);
+                                return false;
+                        }
                         return false;
                 }
         }

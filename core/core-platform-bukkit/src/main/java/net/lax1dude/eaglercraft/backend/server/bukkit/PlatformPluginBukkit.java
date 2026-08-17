@@ -269,6 +269,31 @@ public class PlatformPluginBukkit extends JavaPlugin implements IPlatform<Player
                         return;
                 }
                 aborted = true; // Will set to false if onEnable completes normally
+
+                // AuthlibCompat smoke test — verify that the Property.name/value/signature
+                // accessors resolve correctly at startup, so future authlib bumps produce
+                // a clear failure in the log rather than a runtime NoSuchMethodError buried
+                // deep in an event handler. This is defensive: if the smoke test fails,
+                // we log a clear error and disable the isEaglerPlayer property feature
+                // (which depends on authlib reflection) but still allow Eagler logins.
+                String authlibErr = net.lax1dude.eaglercraft.backend.server.api.bukkit.compat.AuthlibCompat
+                                .smokeTest();
+                if (authlibErr != null) {
+                        loggerImpl.error("***********************************************");
+                        loggerImpl.error("* AUTHLIB COMPAT WARNING:");
+                        loggerImpl.error("* " + authlibErr);
+                        loggerImpl.error("* EaglerXServer will continue to load, but Eagler");
+                        loggerImpl.error("* player detection, skin injection, and the post-");
+                        loggerImpl.error("* login swap flow may fail at runtime.");
+                        loggerImpl.error("***********************************************");
+                } else {
+                        loggerImpl.info("AuthlibCompat smoke test passed (authlib "
+                                        + (net.lax1dude.eaglercraft.backend.server.api.bukkit.compat.AuthlibCompat.AUTHLIB_6_PLUS
+                                                        ? "6.x record API"
+                                                        : "1.x-4.x legacy API")
+                                        + " detected).");
+                }
+
                 Server server = getServer();
                 server.getPluginManager().registerEvents(new BukkitListener(this), this);
                 CommandMap cmdMap = BukkitUnsafe.getCommandMap(server);

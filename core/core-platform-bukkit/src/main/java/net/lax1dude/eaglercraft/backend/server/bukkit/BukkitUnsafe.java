@@ -195,33 +195,49 @@ public class BukkitUnsafe {
         }
 
         public static Channel getPlayerChannel(Player playerObject) {
-                if (CLASS_CRAFTPLAYER_HANDLE.getAcquire() == null) {
-                        bindCraftPlayer(playerObject);
-                }
                 try {
+                        if (CLASS_CRAFTPLAYER_HANDLE.getAcquire() == null) {
+                                bindCraftPlayer(playerObject);
+                        }
                         return (Channel) field_NetworkManager_channel.get(field_PlayerConnection_networkManager
                                         .get(field_EntityPlayer_playerConnection.get(method_CraftPlayer_getHandle.invoke(playerObject))));
-                } catch (ReflectiveOperationException e) {
-                        throw Util.propagateReflectThrowable(e);
+                } catch (Throwable e) {
+                        // bindCraftPlayer can throw RuntimeException if a future Paper refactor
+                        // moves CraftPlayer.getHandle() — let it through cleanly with a clear message.
+                        if (e instanceof ReflectiveOperationException) {
+                                throw Util.propagateReflectThrowable((ReflectiveOperationException) e);
+                        }
+                        if (e instanceof RuntimeException) {
+                                throw (RuntimeException) e;
+                        }
+                        throw new RuntimeException("getPlayerChannel failed", e);
                 }
         }
 
         public static String getTexturesProperty(Player player) {
-                if (CLASS_CRAFTPLAYER_HANDLE.getAcquire() == null) {
-                        bindCraftPlayer(player);
-                }
                 try {
-                        GameProfile profile = (GameProfile) method_EntityPlayer_getProfile
-                                        .invoke(method_CraftPlayer_getHandle.invoke(player));
-                        Object props = getPropertiesSafe(profile);
-                        if (props == null) return null;
-                        Object texCollection = multimapGet(props, "textures");
-                        if (texCollection instanceof Collection<?> tex && !tex.isEmpty()) {
-                                Object first = tex.iterator().next();
-                                if (first instanceof Property p) return getPropertyValue(p);
+                        if (CLASS_CRAFTPLAYER_HANDLE.getAcquire() == null) {
+                                bindCraftPlayer(player);
+                        }
+                        // CRITICAL: Use AuthlibCompat.getValue() instead of Property.getValue()
+                        // directly — authlib 6.x (Paper 26.x / MC 1.21.11) renamed getValue() to value(),
+                        // so a direct bytecode call throws NoSuchMethodError at runtime.
+                        // Note: getProperties() return type widened to Multimap is safe because
+                        // authlib 6.x PropertyMap still implements Multimap<String, Property>.
+                        Multimap<String, Property> props = ((GameProfile) method_EntityPlayer_getProfile
+                                        .invoke(method_CraftPlayer_getHandle.invoke(player))).getProperties();
+                        Collection<Property> tex = props.get("textures");
+                        if (!tex.isEmpty()) {
+                                return net.lax1dude.eaglercraft.backend.server.api.bukkit.compat.AuthlibCompat
+                                                .getValue(tex.iterator().next());
                         }
                 } catch (ReflectiveOperationException e) {
                         throw Util.propagateReflectThrowable(e);
+                } catch (Throwable t) {
+                        // NoSuchMethodError, ClassCastException, etc. — log and return null so skins
+                        // subsystem degrades gracefully instead of kicking the player.
+                        System.err.println("[EaglerXServer] getTexturesProperty failed: " + t);
+                        return null;
                 }
                 return null;
         }
@@ -231,26 +247,26 @@ public class BukkitUnsafe {
 
         public static class PropertyInjector {
 
-                private final Object props;
+                private final Multimap<String, Property> props;
                 private final Object lock;
 
-                protected PropertyInjector(Object props, Object lock) {
+                protected PropertyInjector(Multimap<String, Property> props, Object lock) {
                         this.props = props;
                         this.lock = lock;
                 }
 
                 public void injectTexturesProperty(String texturesPropertyValue, String texturesPropertySignature) {
                         synchronized (lock) {
-                                multimapRemoveAll(props, "textures");
-                                multimapPut(props, "textures",
+                                props.removeAll("textures");
+                                props.put("textures",
                                                 new Property("textures", texturesPropertyValue, texturesPropertySignature));
                         }
                 }
 
                 public void injectIsEaglerPlayerProperty(boolean val) {
                         synchronized (lock) {
-                                multimapRemoveAll(props, "isEaglerPlayer");
-                                multimapPut(props, "isEaglerPlayer", val ? isEaglerPlayerPropertyT : isEaglerPlayerPropertyF);
+                                props.removeAll("isEaglerPlayer");
+                                props.put("isEaglerPlayer", val ? isEaglerPlayerPropertyT : isEaglerPlayerPropertyF);
                         }
                 }
 
@@ -260,26 +276,38 @@ public class BukkitUnsafe {
         }
 
         public static BukkitUnsafe.PropertyInjector propertyInjector(Player player) {
-                if (CLASS_CRAFTPLAYER_HANDLE.getAcquire() == null) {
-                        bindCraftPlayer(player);
-                }
                 try {
+                        if (CLASS_CRAFTPLAYER_HANDLE.getAcquire() == null) {
+                                bindCraftPlayer(player);
+                        }
                         GameProfile profile = (GameProfile) method_EntityPlayer_getProfile
                                         .invoke(method_CraftPlayer_getHandle.invoke(player));
-                        return new PropertyInjector(getPropertiesSafe(profile), profile);
-                } catch (ReflectiveOperationException e) {
-                        throw Util.propagateReflectThrowable(e);
+                        return new PropertyInjector(profile.getProperties(), profile);
+                } catch (Throwable e) {
+                        if (e instanceof ReflectiveOperationException) {
+                                throw Util.propagateReflectThrowable((ReflectiveOperationException) e);
+                        }
+                        if (e instanceof RuntimeException) {
+                                throw (RuntimeException) e;
+                        }
+                        throw new RuntimeException("propertyInjector failed", e);
                 }
         }
 
         public static Object getHandle(Player player) {
-                if (CLASS_CRAFTPLAYER_HANDLE.getAcquire() == null) {
-                        bindCraftPlayer(player);
-                }
                 try {
+                        if (CLASS_CRAFTPLAYER_HANDLE.getAcquire() == null) {
+                                bindCraftPlayer(player);
+                        }
                         return method_CraftPlayer_getHandle.invoke(player);
-                } catch (ReflectiveOperationException e) {
-                        throw Util.propagateReflectThrowable(e);
+                } catch (Throwable e) {
+                        if (e instanceof ReflectiveOperationException) {
+                                throw Util.propagateReflectThrowable((ReflectiveOperationException) e);
+                        }
+                        if (e instanceof RuntimeException) {
+                                throw (RuntimeException) e;
+                        }
+                        throw new RuntimeException("getHandle failed", e);
                 }
         }
 
@@ -328,23 +356,41 @@ public class BukkitUnsafe {
         }
 
         public static void addPlayerChannel(Player player, String ch) {
-                if (CLASS_CRAFTPLAYER_HANDLE.getAcquire() == null) {
-                        bindCraftPlayer(player);
-                }
-                if (method_CraftPlayer_addChannel == null) {
-                        // addChannel was removed from CraftPlayer in 1.20+ — no-op
-                        return;
-                }
                 try {
+                        if (CLASS_CRAFTPLAYER_HANDLE.getAcquire() == null) {
+                                bindCraftPlayer(player);
+                        }
+                        if (method_CraftPlayer_addChannel == null) {
+                                // addChannel was removed from CraftPlayer in 1.20+ — no-op
+                                return;
+                        }
                         method_CraftPlayer_addChannel.invoke(player, ch);
-                } catch (ReflectiveOperationException e) {
-                        throw Util.propagateReflectThrowable(e);
+                } catch (Throwable e) {
+                        if (e instanceof ReflectiveOperationException) {
+                                throw Util.propagateReflectThrowable((ReflectiveOperationException) e);
+                        }
+                        if (e instanceof RuntimeException) {
+                                throw (RuntimeException) e;
+                        }
+                        throw new RuntimeException("addPlayerChannel failed", e);
                 }
         }
 
         private static class CleanupList implements Consumer<ChannelInitializerHijacker>, Runnable {
 
                 protected List<ChannelInitializerHijacker> cleanup = new ArrayList<>();
+
+                /**
+                 * Captured on construction so that {@code run()} can restore the original
+                 * {@code List<ChannelFuture>} back into the ServerConnection field when
+                 * the plugin is disabled. Without this, every PlugMan {@code /reload}
+                 * stacks a new ForwardingList on top of the previous one, and the field
+                 * never gets back its original list. After N reloads the field holds N
+                 * nested ForwardingLists and {@code add()} becomes O(N).
+                 */
+                protected Field restoreField;
+                protected Object restoreTarget;
+                protected List<ChannelFuture> restoreOriginalList;
 
                 @Override
                 public void accept(ChannelInitializerHijacker c) {
@@ -366,6 +412,41 @@ public class BukkitUnsafe {
                         }
                         for (ChannelInitializerHijacker c : cc) {
                                 c.deactivate();
+                        }
+                        // Restore the original List<ChannelFuture> back into the ServerConnection
+                        // field. This unwinds the ForwardingList wrapper we installed, so a
+                        // subsequent reload starts from a clean state instead of stacking another
+                        // wrapper. If restore fails (e.g. field was already mutated by another
+                        // plugin), we silently leave it — better than throwing on disable.
+                        //
+                        // CRITICAL: Only restore if the field still contains OUR wrapper. If another
+                        // plugin (Geyser, Floodgate) wrapped our ForwardingList with their own, blindly
+                        // restoring would clobber their wrapper and break their channel init flow.
+                        if (restoreField != null && restoreTarget != null && restoreOriginalList != null) {
+                                try {
+                                        Object current = restoreField.get(restoreTarget);
+                                        // Only restore if the current value is the ForwardingList we installed.
+                                        // We can't compare by reference because the ForwardingList is an
+                                        // anonymous class created in injectChannelInitializerOld; compare by
+                                        // class name + delegate identity instead. If anything looks different,
+                                        // leave the field alone — the new plugin's wrapper stays in place.
+                                        if (current != null && current.getClass().getName().contains("ForwardingList")
+                                                        && current != restoreOriginalList) {
+                                                // Looks like our wrapper — safe to restore.
+                                                restoreField.set(restoreTarget, restoreOriginalList);
+                                        } else if (current == restoreOriginalList) {
+                                                // Already restored — nothing to do.
+                                        } else {
+                                                // Some other plugin replaced the list — leave it alone.
+                                                System.err.println(
+                                                                "[EaglerXServer] ServerConnection channel futures list was replaced by another plugin; not restoring original to avoid clobbering their wrapper.");
+                                        }
+                                } catch (Throwable t) {
+                                        System.err.println("[EaglerXServer] Could not restore original channel futures list: " + t);
+                                }
+                                restoreField = null;
+                                restoreTarget = null;
+                                restoreOriginalList = null;
                         }
                 }
 
@@ -461,6 +542,12 @@ public class BukkitUnsafe {
                         }
                         CleanupList cleanupList = new CleanupList();
                         final List<ChannelFuture> oldList = (List<ChannelFuture>) channelFuturesList.get(serverConnection);
+                        // Capture the field+target+originalList so the cleanup Runnable can restore
+                        // the original (non-wrapped) list on disable. Without this, PlugMan reload
+                        // stacks a new ForwardingList on every plugin reload.
+                        cleanupList.restoreField = channelFuturesList;
+                        cleanupList.restoreTarget = serverConnection;
+                        cleanupList.restoreOriginalList = oldList;
                         for (ChannelFuture ch : oldList) {
                                 injectChannelInitializer(ch, listener, initHandler, cleanupList);
                         }
@@ -539,8 +626,20 @@ public class BukkitUnsafe {
                         parent = (ChannelInitializer<Channel>) foundField.get(foundHandler);
                         initChannel = Util.findDeclaredMethod(parent.getClass(), "initChannel", Channel.class);
                         initChannel.setAccessible(true);
-                } catch (ReflectiveOperationException e) {
-                        throw Util.propagateReflectThrowable(e);
+                } catch (Throwable e) {
+                        // Widened from ReflectiveOperationException: a ClassCastException if Paper
+                        // refactored the field type, an NPE if foundField is null, or any other
+                        // Throwable must not abort plugin startup with a misleading message.
+                        if (e instanceof ReflectiveOperationException) {
+                                throw Util.propagateReflectThrowable((ReflectiveOperationException) e);
+                        }
+                        if (e instanceof RuntimeException) {
+                                throw (RuntimeException) e;
+                        }
+                        if (e instanceof Error) {
+                                throw (Error) e;
+                        }
+                        throw new RuntimeException("injectInto failed to bind parent initializer", e);
                 }
                 ChannelInitializerHijacker newInit = new ChannelInitializerHijacker(init) {
 
@@ -548,8 +647,17 @@ public class BukkitUnsafe {
                         protected void callParent(Channel channel) {
                                 try {
                                         initChannel.invoke(parent, channel);
-                                } catch (ReflectiveOperationException e) {
-                                        throw Util.propagateReflectThrowable(e);
+                                } catch (Throwable e) {
+                                        if (e instanceof ReflectiveOperationException) {
+                                                throw Util.propagateReflectThrowable((ReflectiveOperationException) e);
+                                        }
+                                        if (e instanceof RuntimeException) {
+                                                throw (RuntimeException) e;
+                                        }
+                                        if (e instanceof Error) {
+                                                throw (Error) e;
+                                        }
+                                        throw new RuntimeException("callParent failed", e);
                                 }
                         }
 
@@ -558,8 +666,14 @@ public class BukkitUnsafe {
                                 Object newInitializer;
                                 try {
                                         newInitializer = foundField.get(foundHandler);
-                                } catch (IllegalArgumentException | IllegalAccessException e) {
-                                        throw Util.propagateReflectThrowable(e);
+                                } catch (Throwable e) {
+                                        if (e instanceof RuntimeException) {
+                                                throw (RuntimeException) e;
+                                        }
+                                        if (e instanceof Error) {
+                                                throw (Error) e;
+                                        }
+                                        throw new RuntimeException("reInject failed to read foundField", e);
                                 }
                                 if (this != newInitializer) {
                                         System.err.println("Detected another plugin's channel initializer ("
@@ -576,8 +690,17 @@ public class BukkitUnsafe {
                 };
                 try {
                         foundField.set(foundHandler, newInit);
-                } catch (ReflectiveOperationException e) {
-                        throw Util.propagateReflectThrowable(e);
+                } catch (Throwable e) {
+                        if (e instanceof ReflectiveOperationException) {
+                                throw Util.propagateReflectThrowable((ReflectiveOperationException) e);
+                        }
+                        if (e instanceof RuntimeException) {
+                                throw (RuntimeException) e;
+                        }
+                        if (e instanceof Error) {
+                                throw (Error) e;
+                        }
+                        throw new RuntimeException("injectInto failed to set newInit", e);
                 }
                 cleanupCallback.accept(newInit);
         }
@@ -794,106 +917,6 @@ public class BukkitUnsafe {
                 } catch (ReflectiveOperationException e) {
                         return java.util.concurrent.Executors.defaultThreadFactory();
                 }
-        }
-
-        // ===================================================================
-        // HOTFIX 15 — authlib 6.x full compatibility helpers
-        //
-        // authlib 6.x (Paper 26.x / MC 1.21.11+) changed:
-        //   1. Property.getName() → name(), getValue() → value()
-        //   2. GameProfile.getProperties() return type changed
-        //   3. Direct calls throw NoSuchMethodError
-        //
-        // These helpers use reflection for EVERYTHING related to properties.
-        // ===================================================================
-
-        private static volatile Method propertyGetNameMethod = null;
-        private static volatile Method propertyGetValueMethod = null;
-        private static volatile Method getPropertiesMethod = null;
-        private static volatile boolean propertyMethodsInit = false;
-
-        private static synchronized void initPropertyMethods() {
-                if (propertyMethodsInit) return;
-                try { propertyGetNameMethod = Property.class.getMethod("getName"); }
-                catch (NoSuchMethodException e) { try { propertyGetNameMethod = Property.class.getMethod("name"); } catch (NoSuchMethodException e2) { propertyGetNameMethod = null; } }
-                try { propertyGetValueMethod = Property.class.getMethod("getValue"); }
-                catch (NoSuchMethodException e) { try { propertyGetValueMethod = Property.class.getMethod("value"); } catch (NoSuchMethodException e2) { propertyGetValueMethod = null; } }
-                try { getPropertiesMethod = GameProfile.class.getMethod("getProperties"); } catch (NoSuchMethodException e) { getPropertiesMethod = null; }
-                propertyMethodsInit = true;
-        }
-
-        public static String getPropertyName(Property prop) {
-                if (prop == null) return null;
-                if (!propertyMethodsInit) initPropertyMethods();
-                if (propertyGetNameMethod == null) return null;
-                try { return (String) propertyGetNameMethod.invoke(prop); } catch (Exception e) { return null; }
-        }
-
-        public static String getPropertyValue(Property prop) {
-                if (prop == null) return null;
-                if (!propertyMethodsInit) initPropertyMethods();
-                if (propertyGetValueMethod == null) return null;
-                try { return (String) propertyGetValueMethod.invoke(prop); } catch (Exception e) { return null; }
-        }
-
-        @SuppressWarnings("unchecked")
-        public static Object getPropertiesSafe(GameProfile profile) {
-                if (profile == null) return null;
-                if (!propertyMethodsInit) initPropertyMethods();
-                if (getPropertiesMethod == null) return null;
-                try { return getPropertiesMethod.invoke(profile); } catch (Exception e) { return null; }
-        }
-
-        public static Object multimapGet(Object mm, String key) {
-                if (mm == null) return null;
-                try { return mm.getClass().getMethod("get", Object.class).invoke(mm, key); } catch (Exception e) { return null; }
-        }
-
-        public static void multimapPut(Object mm, String key, Object value) {
-                if (mm == null || key == null) return;
-                try { mm.getClass().getMethod("put", Object.class, Object.class).invoke(mm, key, value); } catch (Exception e) {}
-        }
-
-        public static void multimapRemove(Object mm, String key, Object value) {
-                if (mm == null || key == null) return;
-                try { mm.getClass().getMethod("remove", Object.class, Object.class).invoke(mm, key, value); } catch (Exception e) {}
-        }
-
-        public static void multimapRemoveAll(Object mm, String key) {
-                if (mm == null || key == null) return;
-                try { mm.getClass().getMethod("removeAll", Object.class).invoke(mm, key); } catch (Exception e) {}
-        }
-
-        @SuppressWarnings("unchecked")
-        public static java.util.Collection<Property> getPropertyValuesSafe(GameProfile profile) {
-                if (profile == null) return java.util.Collections.emptyList();
-                Object props = getPropertiesSafe(profile);
-                if (props == null) return java.util.Collections.emptyList();
-                try {
-                        Object result = props.getClass().getMethod("values").invoke(props);
-                        if (result instanceof java.util.Collection<?> coll) {
-                                java.util.List<Property> list = new java.util.ArrayList<>();
-                                for (Object o : coll) {
-                                        if (o instanceof Property p) list.add(p);
-                                }
-                                return list;
-                        }
-                } catch (Exception e) {}
-                return java.util.Collections.emptyList();
-        }
-
-        public static void putProfileProperty(GameProfile profile, Property prop) {
-                if (profile == null || prop == null) return;
-                Object props = getPropertiesSafe(profile);
-                if (props == null) return;
-                multimapPut(props, getPropertyName(prop), prop);
-        }
-
-        public static void removeProfileProperty(GameProfile profile, Property prop) {
-                if (profile == null || prop == null) return;
-                Object props = getPropertiesSafe(profile);
-                if (props == null) return;
-                multimapRemove(props, getPropertyName(prop), prop);
         }
 
 }

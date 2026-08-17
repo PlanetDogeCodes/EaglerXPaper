@@ -49,9 +49,16 @@ class BukkitListener implements Listener {
         @EventHandler(priority = EventPriority.LOW)
         public void onPlayerLoginInitEvent(PlayerLoginInitEvent evt) {
                 Channel channel = evt.netty().getChannel();
+                // CRITICAL: ctx may be null if the channel was not wrapped by EaglerXServer
+                // (e.g. a Bedrock-via-Geyser connection that bypassed our wrapNetworkManager,
+                // or a vanilla player whose connection didn't go through the PaperMC listener).
+                // Don't NPE — bail out cleanly.
                 PlayerPostLoginInjector.LoginEventContext ctx = channel.attr(PlayerPostLoginInjector.attr).get();
+                if (ctx == null) {
+                        return;
+                }
                 IPipelineData pipelineData = channel.attr(PipelineAttributes.<IPipelineData>pipelineData()).get();
-                if (ctx != null && pipelineData != null && pipelineData.isCompressionDisable()) {
+                if (pipelineData != null && pipelineData.isCompressionDisable()) {
                         ctx.markCompressionDisable(true);
                 }
         }
@@ -114,25 +121,47 @@ class BukkitListener implements Listener {
         @EventHandler(priority = EventPriority.MONITOR)
         public void onQuitEvent(PlayerQuitEvent evt) {
                 plugin.dropPlayer(evt.getPlayer());
+                // Clean up any orphaned eaglerMarker properties from the player's GameProfile.
+                // These are inserted by PlayerPostLoginInjector.handleLoginEvent and are
+                // normally removed when PacketLoginOutSuccess is sent. But if login fails
+                // before that (kick, timeout, disconnect), the marker stays forever.
+                //
+                // CRITICAL: must use AuthlibCompat (not Property.getName() directly) because
+                // authlib 6.x (Paper 26.x / MC 1.21.11) renamed Property.getName() to name().
+                // A direct call throws NoSuchMethodError which is an Error, NOT an Exception,
+                // so the old `catch (Exception e)` didn't catch it.
                 try {
                         Object handle = BukkitUnsafe.getHandle(evt.getPlayer());
                         com.mojang.authlib.GameProfile profile = BukkitUnsafe.getGameProfile(handle);
                         if (profile != null) {
                                 synchronized (profile) {
-                                        java.util.List<com.mojang.authlib.properties.Property> toRemove = new java.util.ArrayList<>();
-                                        for (com.mojang.authlib.properties.Property p : BukkitUnsafe.getPropertyValuesSafe(profile)) {
-                                                String name = BukkitUnsafe.getPropertyName(p);
-                                                if (name != null && name.startsWith("$eaglerMarker_")) {
-                                                        toRemove.add(p);
-                                                }
-                                        }
+                                        com.google.common.collect.Multimap<String, com.mojang.authlib.properties.Property> props = net.lax1dude.eaglercraft.backend.server.api.bukkit.compat.AuthlibCompat
+                                                        .getProperties(profile);
+                                        com.mojang.authlib.properties.Property[] toRemove = props.values().stream()
+                                                        .filter(net.lax1dude.eaglercraft.backend.server.api.bukkit.compat.AuthlibCompat
+                                                                        .nameStartsWith("$eaglerMarker_"))
+                                                        .toArray(com.mojang.authlib.properties.Property[]::new);
                                         for (com.mojang.authlib.properties.Property p : toRemove) {
-                                                BukkitUnsafe.removeProfileProperty(profile, p);
+                                                String name = net.lax1dude.eaglercraft.backend.server.api.bukkit.compat.AuthlibCompat
+                                                                .getName(p);
+                                                net.lax1dude.eaglercraft.backend.server.api.bukkit.compat.AuthlibCompat
+                                                                .remove(props, name, p);
+                                                // CRITICAL: also remove the (Property, Player) entry from the
+                                                // PlayerPostLoginInjector.entityPlayers weak map. Without this,
+                                                // the entry stays alive until GC reclaims both the Property and
+                                                // the Player — which can take seconds to minutes. During that
+                                                // window a fast reconnect could match a stale marker.
+                                                try {
+                                                        plugin.postLoginInjector.removeMarker(p);
+                                                } catch (Throwable ignored) {
+                                                }
                                         }
                                 }
                         }
-                } catch (Exception e) {
-                        // Best effort
+                } catch (Throwable e) {
+                        // Widened from Exception to Throwable: NoSuchMethodError, NoClassDefFoundError,
+                        // and other Errors must not propagate to Bukkit's event dispatcher.
+                        // Best effort — don't crash on quit.
                 }
         }
 
