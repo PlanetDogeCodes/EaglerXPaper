@@ -313,6 +313,19 @@ public class PlayerPostLoginInjector {
                 protected volatile boolean compressionDisable;
                 protected volatile boolean throwOnLoginSuccess;
                 protected volatile boolean clientPlayState;
+                /**
+                 * Set to true when EaglerError fires but no marker was found (MC 1.20.2+ where
+                 * LoginSuccess is sent BEFORE PlayerLoginEvent). The post-login flow is deferred
+                 * to handleLoginEvent which fires during PlayerLoginEvent (after the player
+                 * has been created).
+                 */
+                protected volatile boolean pendingPostLogin;
+                /**
+                 * The original (unwrapped) LoginListener, captured when wrapLoginListener is
+                 * called. Used by the deferred post-login flow to set the LoginListener state
+                 * and NM field.
+                 */
+                protected volatile Object loginListener;
 
                 protected LoginEventContext(Object originalNetworkManager, Channel channel) {
                         this.originalNetworkManager = originalNetworkManager;
@@ -669,6 +682,9 @@ public class PlayerPostLoginInjector {
                 if (!loginListenerClass.isAssignableFrom(loginListener.getClass())) {
                         throw new IllegalStateException("Unknown LoginListener type: " + loginListener.getClass().getName());
                 }
+                // Store the original LoginListener on the ctx so the deferred post-login flow
+                // (handleLoginEvent) can access it for state/NM field manipulation.
+                ctx.loginListener = loginListener;
                 try {
                         Object[] ctorArgs;
                         if (loginListenerCtorArgCount == 3) {
@@ -831,14 +847,22 @@ public class PlayerPostLoginInjector {
                                                                                                 });
                                                                                 return null;
                                                                         } else {
-                                                                                // EaglerError fired but the $eaglerMarker_ property was already
-                                                                                // removed (e.g. by PlayerQuitEvent cleanup, or the player disconnected
-                                                                                // mid-login). Don't throw IllegalStateException — that would crash the
-                                                                                // server tick. Close the channel cleanly and bail out.
-                                                                                plugin.logger().warn(
-                                                                                                "EaglerXServer: EaglerError fired for a player whose marker was already cleaned up; closing channel");
+                                                                                // EaglerError fired but no marker was found. This happens on MC 1.20.2+
+                                                                                // where LoginSuccess (ClientboundLoginFinishedPacket) is sent BEFORE
+                                                                                // PlayerLoginEvent fires (which is where the marker gets injected).
+                                                                                //
+                                                                                // Instead of closing the channel (which kills every Eagler connection on
+                                                                                // 1.20.2+), we DEFER the post-login flow to handleLoginEvent, which fires
+                                                                                // during PlayerLoginEvent (after the player has been created).
+                                                                                //
+                                                                                // We also set the LoginListener state to protocolStateOnResume to prevent
+                                                                                // the LoginListener from re-sending LoginSuccess on the next tick (which
+                                                                                // would cause an infinite EaglerError loop).
+                                                                                ctx.pendingPostLogin = true;
                                                                                 try {
-                                                                                        ctx.channel.close();
+                                                                                        if (loginListenerState != null && protocolStateOnResume != null) {
+                                                                                                loginListenerState.set(loginListener, protocolStateOnResume);
+                                                                                        }
                                                                                 } catch (Throwable ignored) {
                                                                                 }
                                                                                 return null;
@@ -1037,6 +1061,94 @@ public class PlayerPostLoginInjector {
                                 return;
                         }
                         entityPlayers.put(marker, event.getPlayer());
+
+                        // CRITICAL (MC 1.20.2+): On MC 1.20.2+, the EaglerError fires when
+                        // LoginSuccess is sent (BEFORE PlayerLoginEvent). At that point, the
+                        // marker hasn't been injected yet, so the EaglerError handler sets
+                        // ctx.pendingPostLogin = true and defers. Now that handleLoginEvent
+                        // has fired (PlayerLoginEvent) and the marker is injected, we check
+                        // if there's a pending post-login and fire PlayerLoginPostEvent.
+                        Channel playerChannel = BukkitUnsafe.getPlayerChannel(event.getPlayer());
+                        if (playerChannel != null) {
+                                LoginEventContext ctx = playerChannel.attr(attr).get();
+                                if (ctx != null && ctx.pendingPostLogin) {
+                                        ctx.pendingPostLogin = false;
+                                        // Fire PlayerLoginPostEvent with the same callback that the
+                                        // EaglerError handler uses (pipeline swap + state set).
+                                        // The loginListener was stored on ctx by wrapLoginListener.
+                                        final Object loginListenerObj = ctx.loginListener;
+                                        fireEventLoginPostAsync(event.getPlayer(), ctx, (res) -> {
+                                                Channel ch = ctx.channel;
+                                                Runnable task = () -> {
+                                                        try {
+                                                                if (!res.isCancelled()) {
+                                                                        handlerAdded.set(ctx.originalNetworkManager,
+                                                                                        false);
+                                                                        try {
+                                                                                ch.pipeline().replace("packet_handler",
+                                                                                                "packet_handler",
+                                                                                                (ChannelHandler) ctx.originalNetworkManager);
+                                                                        } catch (NoSuchElementException nse) {
+                                                                                try {
+                                                                                        ch.pipeline().addFirst(
+                                                                                                        "eagler-restored-handler",
+                                                                                                        (ChannelHandler) ctx.originalNetworkManager);
+                                                                                } catch (Throwable t2) {
+                                                                                        plugin.logger().error(
+                                                                                                        "EaglerXServer: could not restore NetworkManager",
+                                                                                                        t2);
+                                                                                        try { ch.close(); } catch (Throwable ignored) {}
+                                                                                        return;
+                                                                                }
+                                                                        }
+                                                                        Object entityPlayer = BukkitUnsafe.getHandle(event.getPlayer());
+                                                                        if (loginListenerObj != null) {
+                                                                                loginListenerNetManager.set(loginListenerObj,
+                                                                                                ctx.originalNetworkManager);
+                                                                                if (loginListenerPlayer != null) {
+                                                                                        loginListenerPlayer.set(loginListenerObj,
+                                                                                                        entityPlayer);
+                                                                                }
+                                                                                loginListenerState.set(loginListenerObj,
+                                                                                                protocolStateOnResume);
+                                                                        }
+                                                                } else {
+                                                                        BaseComponent comp = res.getMessage();
+                                                                        if (comp == null) {
+                                                                                comp = new TextComponent("Connection Closed");
+                                                                        }
+                                                                        String legacyText = comp.toLegacyText();
+                                                                        Object arg = legacyText;
+                                                                        Class<?> paramType = loginListenerDisconnect.getParameterTypes()[0];
+                                                                        if (paramType != String.class) {
+                                                                                arg = convertToComponent(legacyText, paramType);
+                                                                        }
+                                                                        if (loginListenerObj != null) {
+                                                                                loginListenerDisconnect.invoke(loginListenerObj, arg);
+                                                                        }
+                                                                }
+                                                        } catch (Throwable e) {
+                                                                plugin.logger().error(
+                                                                                "EaglerXServer: deferred post-login finalize failed",
+                                                                                e);
+                                                                try { ch.close(); } catch (Throwable ignored) {}
+                                                        }
+                                                };
+                                                if (ch.eventLoop().inEventLoop()) {
+                                                        task.run();
+                                                } else {
+                                                        try {
+                                                                ch.eventLoop().submit(task);
+                                                        } catch (Throwable t) {
+                                                                plugin.logger().error(
+                                                                                "EaglerXServer: failed to schedule deferred post-login finalize",
+                                                                                t);
+                                                                try { ch.close(); } catch (Throwable ignored) {}
+                                                        }
+                                                }
+                                        });
+                                }
+                        }
                 } catch (Throwable t) {
                         // If anything goes wrong (e.g. GameProfile lookup fails for some custom server,
                         // or authlib removes the 3-arg ctor in a future version), log and bail — don't
