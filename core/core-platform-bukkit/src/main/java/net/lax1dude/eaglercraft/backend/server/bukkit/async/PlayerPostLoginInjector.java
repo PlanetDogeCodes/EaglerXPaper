@@ -79,7 +79,6 @@ public class PlayerPostLoginInjector {
         protected ClassProxy<Object> netManagerProxy;
         protected Field netManagerDir;
         protected Field netManagerChannel;
-        protected Method setHandlerMethod;
         protected Method sendPacketMethod1;
         protected Method sendPacketMethod2;
         protected Method sendPacketMethod3;
@@ -99,7 +98,26 @@ public class PlayerPostLoginInjector {
         protected Field loginListenerState;
         protected Method loginListenerTick;
         protected Method loginListenerDisconnect;
+        /**
+         * The EntityPlayer/ServerPlayer field on the LoginListener. On MC 1.12-1.20.1
+         * this is a real field (set during login). On MC 1.20.2+ (configuration phase
+         * introduced) the LoginListener no longer holds an EntityPlayer reference —
+         * the player is created later in PlayerList.placeNewPlayer. Nullable on 1.20.2+.
+         */
         protected Field loginListenerPlayer;
+        /**
+         * The 1-arg setListener(PacketListener) method on Connection/NetworkManager.
+         * Used on MC 1.12-1.20.1 to install the LoginListener. On MC 1.20.2+ this
+         * method was renamed to {@code setListenerForServerboundHandshake} and only
+         * fires for the HandshakeListener — see {@link #setupInboundMethod}.
+         */
+        protected Method setHandlerMethod;
+        /**
+         * The 2-arg setupInboundProtocol(ProtocolInfo, PacketListener) method on
+         * Connection/NetworkManager. Used on MC 1.20.2+ to install any listener
+         * including the LoginListener and ConfigurationListener. Null on 1.12-1.20.1.
+         */
+        protected Method setupInboundMethod;
 
         /**
          * The 'transferred' boolean field on ServerLoginPacketListenerImpl (1.20.5+).
@@ -177,6 +195,7 @@ public class PlayerPostLoginInjector {
                                 throw new IllegalStateException("Could not locate channel field of " + netManagerClass.getName());
                         }
                         Method setHandlerMethod = null;
+                        Method setupInboundMethod = null;
                         Method sendPacketMethod1 = null;
                         Method sendPacketMethod2 = null;
                         Method sendPacketMethod3 = null;
@@ -186,7 +205,18 @@ public class PlayerPostLoginInjector {
                                 Class<?>[] params = m.getParameterTypes();
                                 if (setHandlerMethod == null && params.length == 1
                                                 && params[0].getSimpleName().equals("PacketListener")) {
+                                        // MC 1.12-1.20.1: setListener(PacketListener) — used to install LoginListener.
+                                        // MC 1.20.2+: renamed to setListenerForServerboundHandshake — only fires for HandshakeListener.
+                                        // On 1.20.2+ we ALSO bind setupInboundProtocol below; the proxy handler checks the
+                                        // listener type at runtime to decide which path to take.
                                         setHandlerMethod = m;
+                                } else if (setupInboundMethod == null && params.length == 2
+                                                && params[0].getSimpleName().equals("ProtocolInfo")
+                                                && params[1].getSimpleName().equals("PacketListener")) {
+                                        // MC 1.20.2+: setupInboundProtocol(ProtocolInfo, PacketListener) — used to
+                                        // install any listener including LoginListener and ConfigurationListener.
+                                        // This is the primary path on 1.20.2+; setListener is the HandshakeListener-only path.
+                                        setupInboundMethod = m;
                                 } else if (sendPacketMethod1 == null && params.length == 1
                                                 && params[0].getSimpleName().equals("Packet")) {
                                         sendPacketMethod1 = m;
@@ -207,9 +237,16 @@ public class PlayerPostLoginInjector {
                                         break;
                                 }
                         }
-                        if (setHandlerMethod == null) {
+                        // CRITICAL: on MC 1.20.2+ setHandlerMethod (1-arg) only fires for the HandshakeListener,
+                        // NOT the LoginListener. The LoginListener is installed via setupInboundProtocol (2-arg).
+                        // If we don't find setupInboundProtocol AND setHandlerMethod is missing or only fires
+                        // for HandshakeListener, the wrapLoginListener proxy never runs and EaglerXServer's
+                        // post-login flow (skins, voice, RPC, pause menu) silently fails to activate.
+                        // We accept either path — the proxy handler tries both at runtime.
+                        if (setHandlerMethod == null && setupInboundMethod == null) {
                                 throw new IllegalStateException(
-                                                "Could not locate set handler function of " + netManagerClass.getName());
+                                                "Could not locate set handler function of " + netManagerClass.getName()
+                                                                + " — neither setListener(PacketListener) nor setupInboundProtocol(ProtocolInfo, PacketListener) found");
                         }
                         if (sendPacketMethod1 == null) {
                                 throw new IllegalStateException(
@@ -248,6 +285,7 @@ public class PlayerPostLoginInjector {
                         this.netManagerDir = protocolDirField;
                         this.netManagerChannel = channelField;
                         this.setHandlerMethod = setHandlerMethod;
+                        this.setupInboundMethod = setupInboundMethod;
                         this.sendPacketMethod1 = sendPacketMethod1;
                         this.sendPacketMethod2 = sendPacketMethod2;
                         this.sendPacketMethod3 = sendPacketMethod3;
@@ -257,6 +295,11 @@ public class PlayerPostLoginInjector {
                         this.handlerAdded = ChannelHandlerAdapter.class.getDeclaredField("added");
                         this.handlerAdded.setAccessible(true);
                         NETMANAGERCLASS_HANDLE.setRelease(this, netManagerClass);
+                        if (setupInboundMethod != null) {
+                                plugin.logger().info("EaglerXServer: detected MC 1.20.2+ setupInboundProtocol(ProtocolInfo, PacketListener) — using 2-arg listener install path");
+                        } else {
+                                plugin.logger().info("EaglerXServer: detected MC 1.12-1.20.1 setListener(PacketListener) — using 1-arg listener install path");
+                        }
                 } catch (ReflectiveOperationException e) {
                         throw Util.propagateReflectThrowable(e);
                 }
@@ -317,15 +360,39 @@ public class PlayerPostLoginInjector {
                         final LoginEventContext ctx = new LoginEventContext(netManager, channel);
                         Object ret = netManagerProxy.createProxy(netManagerCtor, new Object[] { netManagerDir.get(netManager) },
                                         (obj, meth, args) -> {
-                                                if (setHandlerMethod.equals(meth)) {
-                                                        if (NmsNames.matches(args[0], NmsNames.LOGIN_LISTENER)) {
+                                                // CRITICAL: On MC 1.12-1.20.1, the LoginListener is installed via
+                                                // setListener(PacketListener) — 1-arg. On MC 1.20.2+, it's installed via
+                                                // setupInboundProtocol(ProtocolInfo, PacketListener) — 2-arg. We must
+                                                // intercept BOTH paths, otherwise wrapLoginListener is never called
+                                                // on 1.20.2+ and EaglerXServer's post-login features silently fail.
+                                                if (setHandlerMethod != null && setHandlerMethod.equals(meth)) {
+                                                        // 1-arg setListener path (MC 1.12-1.20.1)
+                                                        if (args != null && args.length >= 1 && args[0] != null
+                                                                        && NmsNames.matches(args[0], NmsNames.LOGIN_LISTENER)) {
                                                                 meth.invoke(netManager, args);
                                                                 fireEventLoginInit(channel);
                                                                 args[0] = wrapLoginListener(getHandlerMethod.invoke(netManager), ctx);
                                                                 meth.invoke(netManager, args);
                                                                 return null;
                                                         }
-                                                } else if (sendPacketMethod1.equals(meth)) {
+                                                        // On MC 1.20.2+, setListener is for HandshakeListener only — fall through
+                                                        // to the default `meth.invoke(netManager, args)` at the bottom.
+                                                } else if (setupInboundMethod != null && setupInboundMethod.equals(meth)) {
+                                                        // 2-arg setupInboundProtocol path (MC 1.20.2+)
+                                                        // args[0] is ProtocolInfo, args[1] is PacketListener
+                                                        if (args != null && args.length >= 2 && args[1] != null
+                                                                        && NmsNames.matches(args[1], NmsNames.LOGIN_LISTENER)) {
+                                                                fireEventLoginInit(channel);
+                                                                // Wrap BEFORE calling setupInboundProtocol so the wrapped listener
+                                                                // gets installed. On 1.20.2+ we can't call getHandlerMethod.invoke()
+                                                                // before the listener is installed (it would return the previous
+                                                                // listener, not the new one), so we wrap the args[1] directly.
+                                                                args[1] = wrapLoginListener(args[1], ctx);
+                                                                return meth.invoke(netManager, args);
+                                                        }
+                                                        // ConfigurationListener and others pass through unchanged.
+                                                }
+                                                if (sendPacketMethod1 != null && sendPacketMethod1.equals(meth)) {
                                                         String nm = args[0].getClass().getSimpleName();
                                                         if (NmsNames.PACKET_LOGIN_DISCONNECT.contains(nm) && ctx.clientPlayState) {
                                                                 Class<?> clz2;
@@ -484,8 +551,14 @@ public class PlayerPostLoginInjector {
                         if (loginListenerState == null) {
                                 throw new IllegalStateException("Could not locate state field of " + loginListenerClass.getName());
                         }
+                        // CRITICAL: On MC 1.20.2+ (configuration phase introduced), the LoginListener
+                        // no longer holds an EntityPlayer reference — the player is created later in
+                        // PlayerList.placeNewPlayer during the configuration→play transition. We allow
+                        // loginListenerPlayer to be null on 1.20.2+; the post-login finalize task
+                        // checks for null before calling .set().
                         if (loginListenerPlayer == null) {
-                                throw new IllegalStateException("Could not locate player field of " + loginListenerClass.getName());
+                                plugin.logger().info("ServerLoginPacketListenerImpl has no EntityPlayer field — "
+                                                + "skipping player field injection (expected on MC 1.20.2+)");
                         }
                         Method loginListenerTick = null;
                         Method loginListenerDisconnect = null;
@@ -544,11 +617,24 @@ public class PlayerPostLoginInjector {
                         if (loginListenerTick == null) {
                                 throw new IllegalStateException("Could not locate tick function of " + loginListenerClass.getName());
                         }
-                        Object protocolStateOnResume = findEnumValueByName(enumProtocolState, "READY_TO_ACCEPT", "READY_TO_LOGIN");
+                        // CRITICAL: The "ready to accept the player" state name has changed across MC versions:
+                        // - MC 1.12-1.16.5: READY_TO_ACCEPT
+                        // - MC 1.17-1.20.1: READY_TO_LOGIN
+                        // - MC 1.20.2+: WAITING_FOR_DUPE_DISCONNECT (the new pre-ACCEPTED state)
+                        // On 1.21.x the State enum is: HELLO, KEY, AUTHENTICATING, NEGOTIATING, VERIFYING,
+                        // WAITING_FOR_DUPE_DISCONNECT, PROTOCOL_SWITCHING, ACCEPTED — 8 constants.
+                        // The previous fallback picked obj[obj.length - 2] = PROTOCOL_SWITCHING, which
+                        // skips the dupe-disconnect check. We now pick obj[obj.length - 3] to land on
+                        // WAITING_FOR_DUPE_DISCONNECT, which is the correct pre-ACCEPTED state.
+                        Object protocolStateOnResume = findEnumValueByName(enumProtocolState,
+                                        "READY_TO_ACCEPT", "READY_TO_LOGIN", "WAITING_FOR_DUPE_DISCONNECT");
                         if (protocolStateOnResume == null) {
                                 Object[] obj = enumProtocolState.getEnumConstants();
                                 if (obj != null && obj.length > 4) {
-                                        protocolStateOnResume = obj[obj.length - 2];
+                                        // obj.length - 1 = ACCEPTED (terminal), obj.length - 2 = PROTOCOL_SWITCHING
+                                        // (also terminal-ish). Pick obj.length - 3 = WAITING_FOR_DUPE_DISCONNECT
+                                        // (the state just before the player is accepted).
+                                        protocolStateOnResume = obj[obj.length - 3];
                                 }
                         }
                         if (protocolStateOnResume == null) {
@@ -687,8 +773,11 @@ public class PlayerPostLoginInjector {
                                                                                                                                 loginListenerNetManager.set(
                                                                                                                                                 loginListener,
                                                                                                                                                 ctx.originalNetworkManager);
-                                                                                                                                loginListenerPlayer.set(loginListener,
-                                                                                                                                                entityPlayer);
+                                                                                                                                // On MC 1.20.2+ the LoginListener has no EntityPlayer field — skip the set.
+                                                                                                                                if (loginListenerPlayer != null) {
+                                                                                                                                        loginListenerPlayer.set(loginListener,
+                                                                                                                                                        entityPlayer);
+                                                                                                                                }
                                                                                                                                 loginListenerState.set(loginListener,
                                                                                                                                                 protocolStateOnResume);
                                                                                                                         } else {
@@ -846,8 +935,12 @@ public class PlayerPostLoginInjector {
         }
 
         private static final String[] KNOWN_PLAY_DISCONNECT_FQNS = new String[] {
-                        "net.minecraft.network.protocol.game.ClientboundDisconnectPacket",
-                        "net.minecraft.server.v1_12_R1.PacketPlayOutKickDisconnect" };
+                        // MC 1.20.2+ moved ClientboundDisconnectPacket from .game. to .common. package
+                        // (configuration phase introduced). Both locations are listed for fallback.
+                        "net.minecraft.network.protocol.common.ClientboundDisconnectPacket", // MC 1.20.2+
+                        "net.minecraft.network.protocol.game.ClientboundDisconnectPacket",   // MC 1.17 - 1.20.1
+                        "net.minecraft.server.v1_12_R1.PacketPlayOutKickDisconnect"          // MC 1.12 - 1.16.5
+        };
 
         private synchronized void bindPacketPlayDisconnect(Class<?> loginDisconnectPacket) {
                 if (PACKETPLAYDISCONNECT_HANDLE.getAcquire(this) != null) {
