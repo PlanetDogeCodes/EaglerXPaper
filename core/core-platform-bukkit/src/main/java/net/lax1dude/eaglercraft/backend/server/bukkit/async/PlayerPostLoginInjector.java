@@ -629,7 +629,18 @@ public class PlayerPostLoginInjector {
                                                                                                 if (e != null) {
                                                                                                         player = e;
                                                                                                 }
-                                                                                                itr.remove();
+                                                                                                // CRITICAL: itr.remove() throws
+                                                                                                // UnsupportedOperationException on authlib 9.x
+                                                                                                // where PropertyMap is immutable.
+                                                                                                // Best-effort: try to remove, but
+                                                                                                // ignore the failure (the marker
+                                                                                                // will be GC'd when the GameProfile
+                                                                                                // is replaced during injectProfileProperty).
+                                                                                                try {
+                                                                                                        itr.remove();
+                                                                                                } catch (UnsupportedOperationException uoe) {
+                                                                                                        // ignore — immutable PropertyMap
+                                                                                                }
                                                                                         }
                                                                                 }
                                                                         }
@@ -909,7 +920,6 @@ public class PlayerPostLoginInjector {
                 // the 2-arg convenience ctor may be stripped by some shaded/relocated authlib builds.
                 String markerName = "$eaglerMarker_" + ThreadLocalRandom.current().nextLong(Long.MAX_VALUE);
                 try {
-                        Property marker = AuthlibCompat.createProperty(markerName, "TMP");
                         Object player = BukkitUnsafe.getHandle(event.getPlayer());
                         GameProfile profile = BukkitUnsafe.getGameProfile(player);
                         // Skip Bedrock-via-Geyser/Floodgate players — they don't go through Eagler's
@@ -918,8 +928,20 @@ public class PlayerPostLoginInjector {
                         if (AuthlibCompat.containsKey(AuthlibCompat.getProperties(profile), "floodgate:is_bedrock")) {
                                 return;
                         }
-                        synchronized (profile) {
-                                AuthlibCompat.put(AuthlibCompat.getProperties(profile), markerName, marker);
+                        // CRITICAL: use BukkitUnsafe.injectProfileProperty() instead of
+                        // AuthlibCompat.put(props, ...) directly, because on authlib 9.x
+                        // (Paper 26.x / MC 1.21.11) the PropertyMap returned by GameProfile.properties()
+                        // is immutable (ImmutableMultimap.copyOf). The direct put silently no-ops.
+                        // injectProfileProperty detects the immutability and replaces the entire
+                        // GameProfile on the EntityPlayer with a new one containing the modified
+                        // properties.
+                        Property marker = BukkitUnsafe.injectProfileProperty(player, markerName, "TMP", null);
+                        if (marker == null) {
+                                plugin.logger().warn(
+                                                "EaglerXServer: could not inject $eaglerMarker_ property into GameProfile for player "
+                                                                + event.getPlayer().getName()
+                                                                + " — post-login Eagler features will be unavailable");
+                                return;
                         }
                         entityPlayers.put(marker, event.getPlayer());
                 } catch (Throwable t) {

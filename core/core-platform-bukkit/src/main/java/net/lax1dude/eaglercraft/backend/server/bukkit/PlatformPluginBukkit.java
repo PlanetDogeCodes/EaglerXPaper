@@ -271,27 +271,48 @@ public class PlatformPluginBukkit extends JavaPlugin implements IPlatform<Player
                 aborted = true; // Will set to false if onEnable completes normally
 
                 // AuthlibCompat smoke test — verify that the Property.name/value/signature
-                // accessors resolve correctly at startup, so future authlib bumps produce
-                // a clear failure in the log rather than a runtime NoSuchMethodError buried
-                // deep in an event handler. This is defensive: if the smoke test fails,
-                // we log a clear error and disable the isEaglerPlayer property feature
-                // (which depends on authlib reflection) but still allow Eagler logins.
-                String authlibErr = net.lax1dude.eaglercraft.backend.server.api.bukkit.compat.AuthlibCompat
-                                .smokeTest();
-                if (authlibErr != null) {
+                // and GameProfile.properties()/getProperties() accessors resolve correctly
+                // at startup, so future authlib bumps produce a clear failure in the log
+                // rather than a runtime NoSuchMethodError buried deep in an event handler.
+                // This is defensive: if the smoke test fails (or the AuthlibCompat class
+                // itself fails to initialize due to an unexpected authlib change), we log
+                // a clear error but still allow the plugin to load. Most server operators
+                // would prefer a degraded EaglerXServer over no EaglerXServer at all.
+                try {
+                        String authlibErr = net.lax1dude.eaglercraft.backend.server.api.bukkit.compat.AuthlibCompat
+                                        .smokeTest();
+                        if (authlibErr != null) {
+                                loggerImpl.error("***********************************************");
+                                loggerImpl.error("* AUTHLIB COMPAT WARNING:");
+                                loggerImpl.error("* " + authlibErr);
+                                loggerImpl.error("* EaglerXServer will continue to load, but Eagler");
+                                loggerImpl.error("* player detection, skin injection, and the post-");
+                                loggerImpl.error("* login swap flow may fail at runtime.");
+                                loggerImpl.error("***********************************************");
+                        } else {
+                                String variant;
+                                if (net.lax1dude.eaglercraft.backend.server.api.bukkit.compat.AuthlibCompat.GAMEPROFILE_IS_RECORD) {
+                                        variant = "9.x record API (GameProfile record)";
+                                } else if (net.lax1dude.eaglercraft.backend.server.api.bukkit.compat.AuthlibCompat.AUTHLIB_6_PLUS) {
+                                        variant = "6.x record API (Property record)";
+                                } else {
+                                        variant = "1.x-4.x legacy API";
+                                }
+                                loggerImpl.info("AuthlibCompat smoke test passed (authlib " + variant + " detected).");
+                        }
+                } catch (Throwable t) {
+                        // ExceptionInInitializerError, NoClassDefFoundError, etc. — AuthlibCompat
+                        // couldn't be initialized. This is a hard error, but we log it clearly
+                        // and continue loading the plugin. Most plugin features still work
+                        // (Eagler login flow, voice, RPC) — only isEaglerPlayerProperty
+                        // detection and skin textures lookup will return false/null.
                         loggerImpl.error("***********************************************");
-                        loggerImpl.error("* AUTHLIB COMPAT WARNING:");
-                        loggerImpl.error("* " + authlibErr);
-                        loggerImpl.error("* EaglerXServer will continue to load, but Eagler");
-                        loggerImpl.error("* player detection, skin injection, and the post-");
-                        loggerImpl.error("* login swap flow may fail at runtime.");
+                        loggerImpl.error("* AUTHLIB COMPAT INITIALIZATION FAILED:");
+                        loggerImpl.error("* " + t.getClass().getSimpleName() + ": " + t.getMessage());
+                        loggerImpl.error("* EaglerXServer will continue to load, but authlib-based");
+                        loggerImpl.error("* features (isEaglerPlayer, skin textures lookup) will");
+                        loggerImpl.error("* return false/null. Please report this to the developer.");
                         loggerImpl.error("***********************************************");
-                } else {
-                        loggerImpl.info("AuthlibCompat smoke test passed (authlib "
-                                        + (net.lax1dude.eaglercraft.backend.server.api.bukkit.compat.AuthlibCompat.AUTHLIB_6_PLUS
-                                                        ? "6.x record API"
-                                                        : "1.x-4.x legacy API")
-                                        + " detected).");
                 }
 
                 Server server = getServer();

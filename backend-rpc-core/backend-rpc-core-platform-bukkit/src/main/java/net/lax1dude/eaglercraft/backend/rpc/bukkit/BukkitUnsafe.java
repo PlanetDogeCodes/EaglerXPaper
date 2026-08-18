@@ -86,13 +86,16 @@ public class BukkitUnsafe {
                                 if (CLASS_CRAFTPLAYER_HANDLE.getAcquire() == null) {
                                         bindCraftPlayer(player);
                                 }
-                                // CRITICAL: Use AuthlibCompat.getValue() instead of Property.getValue()
-                                // directly — authlib 6.x (Paper 26.x / MC 1.21.11) renamed getValue() to value(),
-                                // so a direct bytecode call throws NoSuchMethodError at runtime.
-                                // Note: getProperties() return type widened to Multimap is safe because
-                                // authlib 6.x PropertyMap still implements Multimap<String, Property>.
-                                Multimap<String, Property> props = ((GameProfile) method_EntityPlayer_getProfile
-                                                .invoke(method_CraftPlayer_getHandle.invoke(player))).getProperties();
+                                // CRITICAL: use AuthlibCompat.getProperties() and AuthlibCompat.getValue()
+                                // because authlib 9.x made GameProfile a record (properties() not getProperties())
+                                // and authlib 6.x+ renamed Property accessors (value() not getValue()).
+                                GameProfile profile = (GameProfile) method_EntityPlayer_getProfile
+                                                .invoke(method_CraftPlayer_getHandle.invoke(player));
+                                Multimap<String, Property> props = net.lax1dude.eaglercraft.backend.server.api.bukkit.compat.AuthlibCompat
+                                                .getProperties(profile);
+                                if (props == null) {
+                                        return false;
+                                }
                                 Collection<Property> tex = props.get("isEaglerPlayer");
                                 if (!tex.isEmpty()) {
                                         return Boolean.parseBoolean(

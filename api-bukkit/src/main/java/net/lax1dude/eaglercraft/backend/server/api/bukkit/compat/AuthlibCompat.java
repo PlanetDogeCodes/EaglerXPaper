@@ -19,7 +19,6 @@ package net.lax1dude.eaglercraft.backend.server.api.bukkit.compat;
 import java.lang.invoke.MethodHandle;
 import java.lang.invoke.MethodHandles;
 import java.lang.invoke.MethodType;
-import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -31,34 +30,74 @@ import com.mojang.authlib.GameProfile;
 import com.mojang.authlib.properties.Property;
 
 /**
- * Reflection shim that lets EaglerXServer call authlib {@link Property} accessors
- * across both the legacy authlib 1.x-4.x API ({@code getName()}, {@code getValue()},
- * {@code getSignature()}) and the authlib 6.x record API ({@code name()},
- * {@code value()}, {@code signature()}).
+ * Reflection shim that lets EaglerXServer call authlib {@link GameProfile} and
+ * {@link Property} accessors across three different authlib generations:
  *
- * <p>Paper 26.x (MC 1.21.11) ships authlib 6.x where {@link Property} became a
- * record. The legacy accessor methods were removed, so any bytecode linkage to
- * {@code Property.getName()} throws {@link NoSuchMethodError} at runtime on
- * Paper 26.x even though EaglerXServer compiles cleanly against the old
- * paper-api 1.12.2 stub.
+ * <ul>
+ * <li><b>authlib 1.x–4.x (MC 1.12–1.20.3)</b>: classic POJO classes. GameProfile has
+ *     {@code getProperties()} returning {@code Multimap<String, Property>}. Property has
+ *     {@code getName()}, {@code getValue()}, {@code getSignature()} returning {@code String}.</li>
  *
- * <p>This class resolves the correct accessor once at class-load time. The
- * lookup is performed exactly once and cached. The cost after warm-up is a
- * single {@code invokeExact} of a {@link MethodHandle} (roughly 1.5x a direct call).
+ * <li><b>authlib 6.x (MC 1.20.5–1.21.10)</b>: Property became a record with {@code name()},
+ *     {@code value()}, {@code signature()}. GameProfile still has {@code getProperties()}
+ *     returning {@code PropertyMap} (which implements {@code Multimap<String, Property>}).</li>
  *
- * <p>This class is intentionally thread-safe (the {@link MethodHandle} lookups
- * happen inside the static initializer) and side-effect-free.
+ * <li><b>authlib 9.x (MC 1.21.11+ / Paper 26.x / Leaf)</b>: GameProfile also became a record
+ *     with {@code id()}, {@code name()}, {@code properties()}. The legacy
+ *     {@code getProperties()} method no longer exists. PropertyMap still implements
+ *     {@code Multimap<String, Property>}.</li>
+ * </ul>
+ *
+ * <p>Because EaglerXServer is compiled against the authlib 1.x paper-api 1.12.2 stub,
+ * direct bytecode linkage to {@code Property.getName()} or {@code GameProfile.getProperties()}
+ * throws {@link NoSuchMethodError} at runtime on Paper 26.x (authlib 9.x). This class
+ * resolves the correct accessor once at class-load time via reflection and caches it
+ * in {@link MethodHandle}s for fast invocation.
+ *
+ * <p>This class is intentionally thread-safe (the {@link MethodHandle} lookups happen
+ * inside the static initializer) and side-effect-free. Every accessor call falls back
+ * to safe defaults (returning {@code null} or empty collection) rather than throwing,
+ * so a partial binding failure doesn't crash the entire plugin.
+ *
+ * <p>On any authlib version, the canonical 3-arg {@code Property(name, value, signature)}
+ * constructor is preserved, so {@link #createProperty(String, String, String)} works
+ * universally.
  */
 public final class AuthlibCompat {
 
-    /** Set to true if Property is the authlib 6.x record variant. */
+    /** Set to true if Property is the authlib 6.x/9.x record variant (has name() not getName()). */
     public static final boolean AUTHLIB_6_PLUS;
+
+    /** Set to true if GameProfile is the authlib 9.x record variant (has properties() not getProperties()). */
+    public static final boolean GAMEPROFILE_IS_RECORD;
 
     private static final MethodHandle MH_NAME;
     private static final MethodHandle MH_VALUE;
     private static final MethodHandle MH_SIGNATURE;
 
-    private static final MethodHandle MH_PROFILE_GET_PROPERTIES;
+    /**
+     * Binds to either {@code GameProfile.getProperties()} (legacy) or
+     * {@code GameProfile.properties()} (record). Returns an object that is
+     * always an instance of {@code Multimap<String, Property>} — either directly
+     * (legacy authlib) or via {@code PropertyMap extends ForwardingMultimap}
+     * (authlib 6.x+). The return type of the MethodHandle is {@code Object} to
+     * accommodate both signatures; the wrapper methods below cast to
+     * {@code Multimap<String, Property>} at the call site.
+     */
+    private static final MethodHandle MH_GAMEPROFILE_GET_PROPERTIES;
+
+    /**
+     * Binds to either {@code GameProfile.getId()} (legacy) or
+     * {@code GameProfile.id()} (authlib 9.x record). Returns the player's UUID.
+     */
+    private static final MethodHandle MH_GAMEPROFILE_GET_ID;
+
+    /**
+     * Binds to either {@code GameProfile.getName()} (legacy) or
+     * {@code GameProfile.name()} (authlib 9.x record). Returns the player's name.
+     */
+    private static final MethodHandle MH_GAMEPROFILE_GET_NAME;
+
     private static final Method MH_MULTIMAP_REMOVE_ALL;
     private static final Method MH_MULTIMAP_PUT;
     private static final Method MH_MULTIMAP_REMOVE;
@@ -67,31 +106,31 @@ public final class AuthlibCompat {
     private static final Method MH_MULTIMAP_CONTAINS_KEY;
 
     static {
+        // ---- Resolve Property accessors (name/value/signature) ----
         boolean authlib6;
         MethodHandle nameMH;
         MethodHandle valueMH;
         MethodHandle signatureMH;
         try {
-            // Detect authlib 6.x by checking if the record-style name() exists
             Method nameMethod;
-            try {
-                nameMethod = Property.class.getMethod("name");
-                authlib6 = true;
-            } catch (NoSuchMethodException e) {
-                nameMethod = Property.class.getMethod("getName");
-                authlib6 = false;
-            }
             Method valueMethod;
             Method signatureMethod;
-            if (authlib6) {
+            // authlib 6.x+: record accessors
+            try {
+                nameMethod = Property.class.getMethod("name");
                 valueMethod = Property.class.getMethod("value");
                 signatureMethod = Property.class.getMethod("signature");
-            } else {
+                authlib6 = true;
+            } catch (NoSuchMethodException e) {
+                // authlib 1.x-4.x: legacy getXxx accessors
+                nameMethod = Property.class.getMethod("getName");
                 valueMethod = Property.class.getMethod("getValue");
                 signatureMethod = Property.class.getMethod("getSignature");
+                authlib6 = false;
             }
             MethodHandles.Lookup lookup = MethodHandles.lookup();
             MethodType strType = MethodType.methodType(String.class);
+            // Shape: (Property)String
             nameMH = lookup.unreflect(nameMethod).asType(strType.appendParameterTypes(Property.class));
             valueMH = lookup.unreflect(valueMethod).asType(strType.appendParameterTypes(Property.class));
             signatureMH = lookup.unreflect(signatureMethod).asType(strType.appendParameterTypes(Property.class));
@@ -103,24 +142,133 @@ public final class AuthlibCompat {
         MH_VALUE = valueMH;
         MH_SIGNATURE = signatureMH;
 
-        // Multimap<String, Property> interface methods (cached for speed)
+        // ---- Resolve GameProfile.getProperties() / .properties() ----
+        // authlib 9.x: GameProfile is a record with `properties()` returning PropertyMap.
+        // authlib 1.x-6.x: GameProfile is a class with `getProperties()` returning Multimap.
+        // We try the legacy name first (because MethodHandle.findVirtual requires the
+        // EXACT return type at the call site, and on authlib 9.x the legacy method doesn't
+        // exist so the lookup throws NoSuchMethodException).
+        boolean gameProfileIsRecord;
+        MethodHandle getPropsMH;
+        MethodHandles.Lookup lookup;
         try {
-            MH_PROFILE_GET_PROPERTIES = MethodHandles.lookup()
-                    .findVirtual(GameProfile.class, "getProperties",
+            lookup = MethodHandles.lookup();
+        } catch (Exception e) {
+            throw new ExceptionInInitializerError("Could not create MethodHandles.lookup: " + e);
+        }
+        // Try legacy getProperties() returning Multimap (authlib 1.x-6.x)
+        MethodHandle legacyMH = null;
+        try {
+            legacyMH = lookup.findVirtual(GameProfile.class, "getProperties",
                             MethodType.methodType(Multimap.class));
+        } catch (NoSuchMethodException e) {
+            // not present on authlib 9.x
         } catch (ReflectiveOperationException e) {
-            throw new ExceptionInInitializerError("Could not bind GameProfile.getProperties: " + e);
+            // unexpected
         }
+        if (legacyMH != null) {
+            getPropsMH = legacyMH;
+            gameProfileIsRecord = false;
+        } else {
+            // Fall back to record-style properties() returning PropertyMap (authlib 9.x).
+            // We can't use PropertyMap.class directly because the compile-time stub may
+            // not have it — instead use Object as the return type and let the wrapper
+            // methods cast to Multimap at the call site.
+            MethodHandle recordMH = null;
+            try {
+                // The return type of properties() is com.mojang.authlib.properties.PropertyMap,
+                // which we can't reference from the compile-time paper-api 1.12.2 stub.
+                // Use Class.forName to look it up reflectively.
+                Class<?> propertyMapClass;
+                try {
+                    propertyMapClass = Class.forName("com.mojang.authlib.properties.PropertyMap");
+                } catch (ClassNotFoundException cnfe) {
+                    propertyMapClass = Object.class;
+                }
+                recordMH = lookup.findVirtual(GameProfile.class, "properties",
+                                MethodType.methodType(propertyMapClass));
+            } catch (NoSuchMethodException e) {
+                // Neither legacy nor record accessor exists — extremely unusual.
+                recordMH = null;
+            } catch (ReflectiveOperationException e) {
+                recordMH = null;
+            }
+            if (recordMH != null) {
+                // Widen the return type to Object so callers don't need to know about PropertyMap.
+                getPropsMH = recordMH.asType(MethodType.methodType(Object.class, GameProfile.class));
+                gameProfileIsRecord = true;
+            } else {
+                // Total binding failure — return null at the call site, which the wrapper
+                // methods will treat as an empty Multimap. Don't crash the whole plugin
+                // because we couldn't bind one accessor.
+                getPropsMH = null;
+                gameProfileIsRecord = false;
+            }
+        }
+        GAMEPROFILE_IS_RECORD = gameProfileIsRecord;
+        MH_GAMEPROFILE_GET_PROPERTIES = getPropsMH;
+
+        // ---- Resolve GameProfile.getId() / .id() and getName() / .name() ----
+        // authlib 9.x removed getId()/getName() and replaced them with record accessors
+        // id()/name(). We need these to construct a new GameProfile when modifying
+        // properties on authlib 9.x (where the original GameProfile is immutable).
+        MethodHandle getIdMH = null;
+        MethodHandle getNameMH = null;
+        // Try legacy getId() returning UUID first (authlib 1.x-6.x)
         try {
-            MH_MULTIMAP_REMOVE_ALL = Multimap.class.getMethod("removeAll", Object.class);
-            MH_MULTIMAP_PUT = Multimap.class.getMethod("put", Object.class, Object.class);
-            MH_MULTIMAP_REMOVE = Multimap.class.getMethod("remove", Object.class, Object.class);
-            MH_MULTIMAP_GET = Multimap.class.getMethod("get", Object.class);
-            MH_MULTIMAP_VALUES = Multimap.class.getMethod("values");
-            MH_MULTIMAP_CONTAINS_KEY = Multimap.class.getMethod("containsKey", Object.class);
+            getIdMH = lookup.findVirtual(GameProfile.class, "getId",
+                            MethodType.methodType(java.util.UUID.class));
+        } catch (NoSuchMethodException e) {
+            // Fall back to record-style id() (authlib 9.x)
+            try {
+                getIdMH = lookup.findVirtual(GameProfile.class, "id",
+                                MethodType.methodType(java.util.UUID.class));
+            } catch (ReflectiveOperationException e2) {
+                // neither — leave null
+            }
         } catch (ReflectiveOperationException e) {
-            throw new ExceptionInInitializerError("Could not bind Multimap methods: " + e);
+            // unexpected
         }
+        // Try legacy getName() returning String first
+        try {
+            getNameMH = lookup.findVirtual(GameProfile.class, "getName",
+                            MethodType.methodType(String.class));
+        } catch (NoSuchMethodException e) {
+            // Fall back to record-style name()
+            try {
+                getNameMH = lookup.findVirtual(GameProfile.class, "name",
+                                MethodType.methodType(String.class));
+            } catch (ReflectiveOperationException e2) {
+                // neither — leave null
+            }
+        } catch (ReflectiveOperationException e) {
+            // unexpected
+        }
+        MH_GAMEPROFILE_GET_ID = getIdMH;
+        MH_GAMEPROFILE_GET_NAME = getNameMH;
+
+        // ---- Resolve Multimap interface methods (cached for speed) ----
+        // These are on the com.google.common.collect.Multimap interface, which is
+        // preserved across all authlib versions because PropertyMap implements
+        // ForwardingMultimap<String, Property>.
+        Method removeAllM = null, putM = null, removeM = null, getM = null, valuesM = null, containsKeyM = null;
+        try {
+            removeAllM = Multimap.class.getMethod("removeAll", Object.class);
+            putM = Multimap.class.getMethod("put", Object.class, Object.class);
+            removeM = Multimap.class.getMethod("remove", Object.class, Object.class);
+            getM = Multimap.class.getMethod("get", Object.class);
+            valuesM = Multimap.class.getMethod("values");
+            containsKeyM = Multimap.class.getMethod("containsKey", Object.class);
+        } catch (ReflectiveOperationException e) {
+            // Multimap interface changed shape — extremely unlikely, but degrade gracefully.
+            System.err.println("[EaglerXServer] AuthlibCompat: could not bind Multimap methods: " + e);
+        }
+        MH_MULTIMAP_REMOVE_ALL = removeAllM;
+        MH_MULTIMAP_PUT = putM;
+        MH_MULTIMAP_REMOVE = removeM;
+        MH_MULTIMAP_GET = getM;
+        MH_MULTIMAP_VALUES = valuesM;
+        MH_MULTIMAP_CONTAINS_KEY = containsKeyM;
     }
 
     private AuthlibCompat() {
@@ -131,7 +279,7 @@ public final class AuthlibCompat {
     // =====================================================================
 
     /**
-     * Equivalent to authlib 1.x {@code Property.getName()} / authlib 6.x
+     * Equivalent to authlib 1.x {@code Property.getName()} / authlib 6.x+
      * {@code Property.name()}.
      */
     public static String getName(Property property) {
@@ -142,11 +290,11 @@ public final class AuthlibCompat {
             return (String) MH_NAME.invokeExact(property);
         } catch (Throwable e) {
             // Should not happen — all known authlib versions expose one of the two accessors.
-            throw new RuntimeException("Failed to invoke Property.name accessor", e);
+            return null;
         }
     }
 
-    /** Equivalent to authlib 1.x {@code Property.getValue()} / authlib 6.x {@code Property.value()}. */
+    /** Equivalent to authlib 1.x {@code Property.getValue()} / authlib 6.x+ {@code Property.value()}. */
     public static String getValue(Property property) {
         if (property == null) {
             return null;
@@ -154,11 +302,11 @@ public final class AuthlibCompat {
         try {
             return (String) MH_VALUE.invokeExact(property);
         } catch (Throwable e) {
-            throw new RuntimeException("Failed to invoke Property.value accessor", e);
+            return null;
         }
     }
 
-    /** Equivalent to authlib 1.x {@code Property.getSignature()} / authlib 6.x {@code Property.signature()}. */
+    /** Equivalent to authlib 1.x {@code Property.getSignature()} / authlib 6.x+ {@code Property.signature()}. */
     public static String getSignature(Property property) {
         if (property == null) {
             return null;
@@ -166,13 +314,13 @@ public final class AuthlibCompat {
         try {
             return (String) MH_SIGNATURE.invokeExact(property);
         } catch (Throwable e) {
-            throw new RuntimeException("Failed to invoke Property.signature accessor", e);
+            return null;
         }
     }
 
     /**
      * Convenience factory for the canonical 3-arg record constructor. Equivalent to
-     * {@code new Property(name, value, signature)} on both authlib 1.x and 6.x.
+     * {@code new Property(name, value, signature)} on both authlib 1.x and 6.x+.
      */
     public static Property createProperty(String name, String value, String signature) {
         return new Property(name, value, signature);
@@ -193,18 +341,65 @@ public final class AuthlibCompat {
 
     /**
      * Returns the Multimap of properties from the given GameProfile. Type-safe
-     * wrapper that handles both authlib 1.x (Multimap) and authlib 6.x (PropertyMap
-     * which implements Multimap).
+     * wrapper that handles all authlib versions:
+     * <ul>
+     * <li>authlib 1.x-4.x: calls {@code GameProfile.getProperties()} returning {@code Multimap<String, Property>} directly.</li>
+     * <li>authlib 6.x: calls {@code GameProfile.getProperties()} returning {@code PropertyMap}, which is-a Multimap.</li>
+     * <li>authlib 9.x: calls {@code GameProfile.properties()} returning {@code PropertyMap}, which is-a Multimap.</li>
+     * </ul>
+     * Returns {@code null} if profile is null or if accessor binding failed at class init.
      */
     @SuppressWarnings("unchecked")
     public static Multimap<String, Property> getProperties(GameProfile profile) {
-        if (profile == null) {
+        if (profile == null || MH_GAMEPROFILE_GET_PROPERTIES == null) {
             return null;
         }
         try {
-            return (Multimap<String, Property>) MH_PROFILE_GET_PROPERTIES.invoke(profile);
+            Object result = MH_GAMEPROFILE_GET_PROPERTIES.invoke(profile);
+            if (result instanceof Multimap) {
+                return (Multimap<String, Property>) result;
+            }
+            // Defensive: result might be a PropertyMap that doesn't directly implement
+            // Multimap (it always does in current authlib, but if a future version changes
+            // the inheritance chain we'd land here). Try to coerce via reflection.
+            if (result != null && result instanceof com.google.common.collect.Multimap) {
+                return (Multimap<String, Property>) result;
+            }
+            return null;
         } catch (Throwable e) {
-            throw new RuntimeException("Failed to invoke GameProfile.getProperties", e);
+            return null;
+        }
+    }
+
+    /**
+     * Returns the player's UUID from the given GameProfile. Type-safe wrapper that
+     * handles both {@code getId()} (authlib 1.x-6.x) and {@code id()} (authlib 9.x
+     * record). Returns {@code null} if profile is null or binding failed.
+     */
+    public static java.util.UUID getProfileId(GameProfile profile) {
+        if (profile == null || MH_GAMEPROFILE_GET_ID == null) {
+            return null;
+        }
+        try {
+            return (java.util.UUID) MH_GAMEPROFILE_GET_ID.invoke(profile);
+        } catch (Throwable e) {
+            return null;
+        }
+    }
+
+    /**
+     * Returns the player's name from the given GameProfile. Type-safe wrapper that
+     * handles both {@code getName()} (authlib 1.x-6.x) and {@code name()} (authlib
+     * 9.x record). Returns {@code null} if profile is null or binding failed.
+     */
+    public static String getProfileName(GameProfile profile) {
+        if (profile == null || MH_GAMEPROFILE_GET_NAME == null) {
+            return null;
+        }
+        try {
+            return (String) MH_GAMEPROFILE_GET_NAME.invoke(profile);
+        } catch (Throwable e) {
+            return null;
         }
     }
 
@@ -214,62 +409,62 @@ public final class AuthlibCompat {
      */
     @SuppressWarnings("unchecked")
     public static Collection<Property> removeAll(Multimap<String, Property> props, String key) {
-        if (props == null) {
+        if (props == null || MH_MULTIMAP_REMOVE_ALL == null) {
             return new ArrayList<>();
         }
         try {
             return (Collection<Property>) MH_MULTIMAP_REMOVE_ALL.invoke(props, key);
         } catch (Throwable e) {
-            throw new RuntimeException("Failed to invoke Multimap.removeAll", e);
+            return new ArrayList<>();
         }
     }
 
     /** Puts a (key, value) pair into the multimap. */
     public static boolean put(Multimap<String, Property> props, String key, Property value) {
-        if (props == null) {
+        if (props == null || MH_MULTIMAP_PUT == null) {
             return false;
         }
         try {
             return (Boolean) MH_MULTIMAP_PUT.invoke(props, key, value);
         } catch (Throwable e) {
-            throw new RuntimeException("Failed to invoke Multimap.put", e);
+            return false;
         }
     }
 
     /** Removes a single (key, value) pair from the multimap. */
     public static boolean remove(Multimap<String, Property> props, String key, Property value) {
-        if (props == null) {
+        if (props == null || MH_MULTIMAP_REMOVE == null) {
             return false;
         }
         try {
             return (Boolean) MH_MULTIMAP_REMOVE.invoke(props, key, value);
         } catch (Throwable e) {
-            throw new RuntimeException("Failed to invoke Multimap.remove", e);
+            return false;
         }
     }
 
     /** Returns the collection of properties for the given key. */
     @SuppressWarnings("unchecked")
     public static Collection<Property> get(Multimap<String, Property> props, String key) {
-        if (props == null) {
+        if (props == null || MH_MULTIMAP_GET == null) {
             return new ArrayList<>();
         }
         try {
             return (Collection<Property>) MH_MULTIMAP_GET.invoke(props, key);
         } catch (Throwable e) {
-            throw new RuntimeException("Failed to invoke Multimap.get", e);
+            return new ArrayList<>();
         }
     }
 
     /** Returns true if the multimap contains any property with the given key. */
     public static boolean containsKey(Multimap<String, Property> props, String key) {
-        if (props == null) {
+        if (props == null || MH_MULTIMAP_CONTAINS_KEY == null) {
             return false;
         }
         try {
             return (Boolean) MH_MULTIMAP_CONTAINS_KEY.invoke(props, key);
         } catch (Throwable e) {
-            throw new RuntimeException("Failed to invoke Multimap.containsKey", e);
+            return false;
         }
     }
 
@@ -374,6 +569,35 @@ public final class AuthlibCompat {
             String s = getSignature(p);
             if (!"smoketest".equals(n) || !"value".equals(v) || !"signature".equals(s)) {
                 return "AuthlibCompat accessor returned wrong values: name=" + n + " value=" + v + " sig=" + s;
+            }
+            // Verify getProperties works against a real GameProfile.
+            // NOTE: on authlib 9.x, the PropertyMap returned by GameProfile.properties() is
+            // IMMUTABLE (ImmutableMultimap.copyOf). We don't try to put/remove on it here —
+            // the caller (BukkitUnsafe.injectProfileProperty) handles immutability by
+            // replacing the entire GameProfile. We just verify that getProperties returns
+            // a non-null Multimap and containsKey works.
+            try {
+                java.util.UUID testId = java.util.UUID.randomUUID();
+                GameProfile gp = new GameProfile(testId, "smoketest");
+                Multimap<String, Property> props = getProperties(gp);
+                if (props == null) {
+                    return "AuthlibCompat.getProperties(GameProfile) returned null — GameProfile accessor binding failed";
+                }
+                // containsKey on an empty Multimap — should return false, not throw.
+                if (containsKey(props, "nonexistent_key")) {
+                    return "AuthlibCompat.containsKey returned true for nonexistent key (empty GameProfile)";
+                }
+                // Verify getProfileId / getProfileName work (authlib 9.x removed getId/getName)
+                java.util.UUID profileId = getProfileId(gp);
+                String profileName = getProfileName(gp);
+                if (!testId.equals(profileId)) {
+                    return "AuthlibCompat.getProfileId returned wrong value: expected=" + testId + " got=" + profileId;
+                }
+                if (!"smoketest".equals(profileName)) {
+                    return "AuthlibCompat.getProfileName returned wrong value: expected=smoketest got=" + profileName;
+                }
+            } catch (Throwable t) {
+                return "AuthlibCompat GameProfile smoke test failed: " + t.getClass().getSimpleName() + ": " + t.getMessage();
             }
             return null;
         } catch (Throwable t) {
