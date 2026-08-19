@@ -751,63 +751,56 @@ public class PlayerPostLoginInjector {
                         }
                         return loginListenerProxy.createProxy(loginListenerCtor, ctorArgs, (obj, meth, args) -> {
                                                 if (loginListenerTick.equals(meth)) {
-                                                        // CRITICAL: Use the EaglerError mechanism on ALL MC versions.
-                                                        // The EaglerError is thrown when LoginSuccess is sent (inside tick()),
-                                                        // caught here, and used to fire PlayerLoginPostEvent which does the
-                                                        // pipeline swap (restore original NM).
+                                                        // CRITICAL: On MC 1.20.2+ (setupInboundMethod != null), DON'T use
+                                                        // the EaglerError mechanism at all. The EaglerError is thrown from
+                                                        // inside LoginListener.tick() which BREAKS the tick execution.
+                                                        // On 1.12-1.20.1 we recovered by manually setting the LoginListener
+                                                        // state to protocolStateOnResume. On 1.20.2+ we can't set the state
+                                                        // (the state machine is different), so the LoginListener never advances
+                                                        // to ACCEPTED → the client's LoginAcknowledged packet is rejected with
+                                                        // "Unexpected login acknowledgement packet" → "Connection closed during
+                                                        // protocol change".
                                                         //
-                                                        // On MC 1.20.2+, we must NOT set loginListenerState — the state
-                                                        // machine is different (VERIFYING → WAITING_FOR_DUPE_DISCONNECT →
-                                                        // PROTOCOL_SWITCHING → ACCEPTED → Configuration → Play) and setting
-                                                        // it to WAITING_FOR_DUPE_DISCONNECT causes the LoginListener to
-                                                        // re-send LoginSuccess in the wrong protocol phase, producing
-                                                        // "Pipeline has no outbound protocol configured" errors.
-                                                        // Instead we just swap the pipeline and let the LoginListener's
-                                                        // natural state machine continue.
-                                                        //
-                                                        // On MC 1.12-1.20.1, we also set the state to protocolStateOnResume
-                                                        // because that's how the old login flow resumed after the swap.
-                                                        try {
-                                                                ctx.markThrowOnLoginSuccess(true);
+                                                        // Instead, on 1.20.2+ we let tick() proceed naturally. The pipeline
+                                                        // swap (restore original NM) and PlayerLoginPostEvent firing happen
+                                                        // from handleLoginEvent (during PlayerLoginEvent, which fires AFTER
+                                                        // LoginSuccess is sent but BEFORE the configuration phase starts).
+                                                        if (setupInboundMethod == null) {
+                                                                // MC 1.12-1.20.1: use the EaglerError mechanism
                                                                 try {
-                                                                        return meth.invoke(loginListener, args);
-                                                                } finally {
-                                                                        ctx.markThrowOnLoginSuccess(false);
-                                                                }
-                                                        } catch (InvocationTargetException ex) {
-                                                                Throwable er = ex.getCause();
-                                                                if (er instanceof EaglerError err) {
-                                                                        Player player = null;
-                                                                        synchronized (err.gameProfile) {
-                                                                                Iterator<Property> itr = AuthlibCompat
-                                                                                                .getProperties(err.gameProfile)
-                                                                                                .values().iterator();
-                                                                                while (itr.hasNext()) {
-                                                                                        Property prop = itr.next();
-                                                                                        String propName = AuthlibCompat
-                                                                                                        .getName(prop);
-                                                                                        if (propName != null && propName
-                                                                                                        .startsWith("$eaglerMarker_")) {
-                                                                                                Player e = entityPlayers
-                                                                                                                .remove(prop);
-                                                                                                if (e != null) {
-                                                                                                        player = e;
-                                                                                                }
-                                                                                                // CRITICAL: itr.remove() throws
-                                                                                                // UnsupportedOperationException on authlib 9.x
-                                                                                                // where PropertyMap is immutable.
-                                                                                                // Best-effort: try to remove, but
-                                                                                                // ignore the failure (the marker
-                                                                                                // will be GC'd when the GameProfile
-                                                                                                // is replaced during injectProfileProperty).
-                                                                                                try {
-                                                                                                        itr.remove();
-                                                                                                } catch (UnsupportedOperationException uoe) {
-                                                                                                        // ignore — immutable PropertyMap
+                                                                        ctx.markThrowOnLoginSuccess(true);
+                                                                        try {
+                                                                                return meth.invoke(loginListener, args);
+                                                                        } finally {
+                                                                                ctx.markThrowOnLoginSuccess(false);
+                                                                        }
+                                                                } catch (InvocationTargetException ex) {
+                                                                        Throwable er = ex.getCause();
+                                                                        if (er instanceof EaglerError err) {
+                                                                                Player player = null;
+                                                                                synchronized (err.gameProfile) {
+                                                                                        Iterator<Property> itr = AuthlibCompat
+                                                                                                        .getProperties(err.gameProfile)
+                                                                                                        .values().iterator();
+                                                                                        while (itr.hasNext()) {
+                                                                                                Property prop = itr.next();
+                                                                                                String propName = AuthlibCompat
+                                                                                                                .getName(prop);
+                                                                                                if (propName != null && propName
+                                                                                                                .startsWith("$eaglerMarker_")) {
+                                                                                                        Player e = entityPlayers
+                                                                                                                        .remove(prop);
+                                                                                                        if (e != null) {
+                                                                                                                player = e;
+                                                                                                        }
+                                                                                                        try {
+                                                                                                                itr.remove();
+                                                                                                        } catch (UnsupportedOperationException uoe) {
+                                                                                                                // ignore — immutable PropertyMap
+                                                                                                        }
                                                                                                 }
                                                                                         }
                                                                                 }
-                                                                        }
                                                                         if (player != null) {
                                                                                 final Player playerFinal = player;
                                                                                 fireEventLoginPostAsync(playerFinal, ctx,
@@ -939,6 +932,12 @@ public class PlayerPostLoginInjector {
                                                                                 throw ee;
                                                                         throw new RuntimeException(er);
                                                                 }
+                                                        }
+                                                        } else {
+                                                                // MC 1.20.2+: DON'T throw EaglerError. Let tick() proceed naturally.
+                                                                // PlayerLoginPostEvent is fired from handleLoginEvent (during
+                                                                // PlayerLoginEvent, which fires after LoginSuccess is sent).
+                                                                return meth.invoke(loginListener, args);
                                                         }
                                                 }
                                                 return meth.invoke(loginListener, args);
