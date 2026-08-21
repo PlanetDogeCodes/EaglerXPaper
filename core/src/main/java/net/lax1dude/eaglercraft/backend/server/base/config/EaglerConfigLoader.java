@@ -76,8 +76,8 @@ public class EaglerConfigLoader {
                                 + "no official uses outside of server lists"
                         ));
                         int eaglerLoginTimeout = config.getInteger(
-                                "eagler_login_timeout", 10000,
-                                "Default value is 10000, sets the maximum age in milliseconds that a connection "
+                                "eagler_login_timeout", 30000,
+                                "Default value is 30000, sets the maximum age in milliseconds that a connection "
                                 + "can stay in the login phase before being disconnected, this is necessary "
                                 + "because WebSocket ping frames could be used to keep a connection from timing "
                                 + "out forever without ever having to advance it to the next state"

@@ -27,24 +27,19 @@ public class BufferUtils {
         public static final boolean RETAINEDSLICE_SUPPORT;
 
         static {
-                // CRITICAL: Previously the second `b = true` set b to true on success but
-                // never reset it to false on failure, so RETAINEDSLICE_SUPPORT would always
-                // be true if CHARSEQ_SUPPORT was true — even on Netty versions that lack
-                // readRetainedSlice. Using separate variables fixes the feature detection.
-                boolean c = false;
+                boolean b = false;
                 try {
                         ByteBuf.class.getMethod("readCharSequence", int.class, Charset.class);
-                        c = true;
+                        b = true;
                 } catch (ReflectiveOperationException ex) {
                 }
-                CHARSEQ_SUPPORT = c;
-                boolean r = false;
+                CHARSEQ_SUPPORT = b;
                 try {
                         ByteBuf.class.getMethod("readRetainedSlice", int.class);
-                        r = true;
+                        b = true;
                 } catch (ReflectiveOperationException ex) {
                 }
-                RETAINEDSLICE_SUPPORT = r;
+                RETAINEDSLICE_SUPPORT = b;
         }
 
         public static int readVarInt(ByteBuf buffer, int maxBytes) {
@@ -52,6 +47,11 @@ public class BufferUtils {
                 int bytes = 0;
                 byte in;
                 while (true) {
+                        // Check readable bytes BEFORE reading to prevent IndexOutOfBoundsException
+                        // on truncated packets (which happens on flaky networks).
+                        if (!buffer.isReadable()) {
+                                throw new IndexOutOfBoundsException("VarInt too short (buffer underflow)");
+                        }
                         in = buffer.readByte();
 
                         out |= (in & 0x7F) << (bytes++ * 7);
@@ -73,6 +73,9 @@ public class BufferUtils {
                 int j = 0;
                 byte b0;
                 while (true) {
+                        if (!buffer.isReadable()) {
+                                throw new IndexOutOfBoundsException("VarLong too short (buffer underflow)");
+                        }
                         b0 = buffer.readByte();
 
                         i |= (long) (b0 & 0x7F) << j++ * 7;

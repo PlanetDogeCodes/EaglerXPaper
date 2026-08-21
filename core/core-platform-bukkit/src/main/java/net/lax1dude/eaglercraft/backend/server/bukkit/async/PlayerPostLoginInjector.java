@@ -24,7 +24,6 @@ import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.util.Iterator;
-import java.util.NoSuchElementException;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.Consumer;
@@ -42,7 +41,6 @@ import io.netty.channel.ChannelHandlerAdapter;
 import io.netty.util.AttributeKey;
 import io.netty.util.concurrent.GenericFutureListener;
 import net.lax1dude.eaglercraft.backend.server.api.bukkit.event.PlayerLoginPostEvent;
-import net.lax1dude.eaglercraft.backend.server.api.bukkit.compat.AuthlibCompat;
 import net.lax1dude.eaglercraft.backend.server.bukkit.BukkitUnsafe;
 import net.lax1dude.eaglercraft.backend.server.bukkit.NmsNames;
 import net.lax1dude.eaglercraft.backend.server.bukkit.PlatformPluginBukkit;
@@ -79,6 +77,7 @@ public class PlayerPostLoginInjector {
         protected ClassProxy<Object> netManagerProxy;
         protected Field netManagerDir;
         protected Field netManagerChannel;
+        protected Method setHandlerMethod;
         protected Method sendPacketMethod1;
         protected Method sendPacketMethod2;
         protected Method sendPacketMethod3;
@@ -98,42 +97,13 @@ public class PlayerPostLoginInjector {
         protected Field loginListenerState;
         protected Method loginListenerTick;
         protected Method loginListenerDisconnect;
-        /**
-         * The EntityPlayer/ServerPlayer field on the LoginListener. On MC 1.12-1.20.1
-         * this is a real field (set during login). On MC 1.20.2+ (configuration phase
-         * introduced) the LoginListener no longer holds an EntityPlayer reference —
-         * the player is created later in PlayerList.placeNewPlayer. Nullable on 1.20.2+.
-         */
         protected Field loginListenerPlayer;
-        /**
-         * The 1-arg setListener(PacketListener) method on Connection/NetworkManager.
-         * Used on MC 1.12-1.20.1 to install the LoginListener. On MC 1.20.2+ this
-         * method was renamed to {@code setListenerForServerboundHandshake} and only
-         * fires for the HandshakeListener — see {@link #setupInboundMethod}.
-         */
-        protected Method setHandlerMethod;
-        /**
-         * The 2-arg setupInboundProtocol(ProtocolInfo, PacketListener) method on
-         * Connection/NetworkManager. Used on MC 1.20.2+ to install any listener
-         * including the LoginListener and ConfigurationListener. Null on 1.12-1.20.1.
-         */
-        protected Method setupInboundMethod;
 
         /**
          * The 'transferred' boolean field on ServerLoginPacketListenerImpl (1.20.5+).
          * Null on older versions. Used to pass the correct value to the 3-arg constructor.
          */
         protected Field loginListenerTransferred;
-
-        /**
-         * The GameProfile field on ServerLoginPacketListenerImpl (1.20.2+).
-         * On 1.20.2+ the LoginListener has an 'authenticatedProfile' field that holds
-         * the GameProfile of the player being logged in. We use this to get the player's
-         * UUID so we can map it to the LoginEventContext (needed because on 1.20.2+ we
-         * can't get the channel from the EntityPlayer during PlayerLoginEvent).
-         * Null if not found (1.12-1.20.1 don't have this field — they use the EaglerError path).
-         */
-        protected Field loginListenerGameProfile;
 
         protected volatile Class<Object> packetLoginSuccessClass;
         protected Field packetLoginSuccessGameProfile;
@@ -144,33 +114,9 @@ public class PlayerPostLoginInjector {
 
         protected final ConcurrentMap<Property, Player> entityPlayers;
 
-        /**
-         * Maps player UUID → LoginEventContext for connections that are in the
-         * post-login flow. On MC 1.20.2+, we can't get the channel from the
-         * EntityPlayer (its connection field is null during PlayerLoginEvent),
-         * so we use this map to find the ctx by UUID instead.
-         */
-        protected final ConcurrentMap<java.util.UUID, LoginEventContext> ctxByUUID;
-
         public PlayerPostLoginInjector(PlatformPluginBukkit plugin) {
                 this.plugin = plugin;
                 this.entityPlayers = (new MapMaker()).concurrencyLevel(8).weakKeys().weakValues().makeMap();
-                this.ctxByUUID = (new MapMaker()).concurrencyLevel(8).weakValues().makeMap();
-        }
-
-        /**
-         * Removes the (marker, player) entry from the entityPlayers weak map. Called by
-         * {@link BukkitListener#onQuitEvent} after the marker Property is removed from
-         * the GameProfile. Without this, the entry stays alive until GC reclaims both
-         * the Property and the Player — which can take seconds to minutes. During that
-         * window a fast reconnect could match a stale marker.
-         */
-        public void removeMarker(Property marker) {
-                if (marker == null) return;
-                try {
-                        entityPlayers.remove(marker);
-                } catch (Throwable ignored) {
-                }
         }
 
         private synchronized void bind(Object netManager) {
@@ -214,7 +160,6 @@ public class PlayerPostLoginInjector {
                                 throw new IllegalStateException("Could not locate channel field of " + netManagerClass.getName());
                         }
                         Method setHandlerMethod = null;
-                        Method setupInboundMethod = null;
                         Method sendPacketMethod1 = null;
                         Method sendPacketMethod2 = null;
                         Method sendPacketMethod3 = null;
@@ -224,18 +169,7 @@ public class PlayerPostLoginInjector {
                                 Class<?>[] params = m.getParameterTypes();
                                 if (setHandlerMethod == null && params.length == 1
                                                 && params[0].getSimpleName().equals("PacketListener")) {
-                                        // MC 1.12-1.20.1: setListener(PacketListener) — used to install LoginListener.
-                                        // MC 1.20.2+: renamed to setListenerForServerboundHandshake — only fires for HandshakeListener.
-                                        // On 1.20.2+ we ALSO bind setupInboundProtocol below; the proxy handler checks the
-                                        // listener type at runtime to decide which path to take.
                                         setHandlerMethod = m;
-                                } else if (setupInboundMethod == null && params.length == 2
-                                                && params[0].getSimpleName().equals("ProtocolInfo")
-                                                && params[1].getSimpleName().equals("PacketListener")) {
-                                        // MC 1.20.2+: setupInboundProtocol(ProtocolInfo, PacketListener) — used to
-                                        // install any listener including LoginListener and ConfigurationListener.
-                                        // This is the primary path on 1.20.2+; setListener is the HandshakeListener-only path.
-                                        setupInboundMethod = m;
                                 } else if (sendPacketMethod1 == null && params.length == 1
                                                 && params[0].getSimpleName().equals("Packet")) {
                                         sendPacketMethod1 = m;
@@ -256,16 +190,9 @@ public class PlayerPostLoginInjector {
                                         break;
                                 }
                         }
-                        // CRITICAL: on MC 1.20.2+ setHandlerMethod (1-arg) only fires for the HandshakeListener,
-                        // NOT the LoginListener. The LoginListener is installed via setupInboundProtocol (2-arg).
-                        // If we don't find setupInboundProtocol AND setHandlerMethod is missing or only fires
-                        // for HandshakeListener, the wrapLoginListener proxy never runs and EaglerXServer's
-                        // post-login flow (skins, voice, RPC, pause menu) silently fails to activate.
-                        // We accept either path — the proxy handler tries both at runtime.
-                        if (setHandlerMethod == null && setupInboundMethod == null) {
+                        if (setHandlerMethod == null) {
                                 throw new IllegalStateException(
-                                                "Could not locate set handler function of " + netManagerClass.getName()
-                                                                + " — neither setListener(PacketListener) nor setupInboundProtocol(ProtocolInfo, PacketListener) found");
+                                                "Could not locate set handler function of " + netManagerClass.getName());
                         }
                         if (sendPacketMethod1 == null) {
                                 throw new IllegalStateException(
@@ -304,7 +231,6 @@ public class PlayerPostLoginInjector {
                         this.netManagerDir = protocolDirField;
                         this.netManagerChannel = channelField;
                         this.setHandlerMethod = setHandlerMethod;
-                        this.setupInboundMethod = setupInboundMethod;
                         this.sendPacketMethod1 = sendPacketMethod1;
                         this.sendPacketMethod2 = sendPacketMethod2;
                         this.sendPacketMethod3 = sendPacketMethod3;
@@ -314,11 +240,6 @@ public class PlayerPostLoginInjector {
                         this.handlerAdded = ChannelHandlerAdapter.class.getDeclaredField("added");
                         this.handlerAdded.setAccessible(true);
                         NETMANAGERCLASS_HANDLE.setRelease(this, netManagerClass);
-                        if (setupInboundMethod != null) {
-                                plugin.logger().info("EaglerXServer: detected MC 1.20.2+ setupInboundProtocol(ProtocolInfo, PacketListener) — using 2-arg listener install path");
-                        } else {
-                                plugin.logger().info("EaglerXServer: detected MC 1.12-1.20.1 setListener(PacketListener) — using 1-arg listener install path");
-                        }
                 } catch (ReflectiveOperationException e) {
                         throw Util.propagateReflectThrowable(e);
                 }
@@ -328,23 +249,10 @@ public class PlayerPostLoginInjector {
 
                 protected final Object originalNetworkManager;
                 protected final Channel channel;
-                protected volatile Object proxiedNetworkManager;
-                protected volatile boolean compressionDisable;
-                protected volatile boolean throwOnLoginSuccess;
+                protected Object proxiedNetworkManager;
+                protected boolean compressionDisable;
+                protected boolean throwOnLoginSuccess;
                 protected volatile boolean clientPlayState;
-                /**
-                 * Set to true when EaglerError fires but no marker was found (MC 1.20.2+ where
-                 * LoginSuccess is sent BEFORE PlayerLoginEvent). The post-login flow is deferred
-                 * to handleLoginEvent which fires during PlayerLoginEvent (after the player
-                 * has been created).
-                 */
-                protected volatile boolean pendingPostLogin;
-                /**
-                 * The original (unwrapped) LoginListener, captured when wrapLoginListener is
-                 * called. Used by the deferred post-login flow to set the LoginListener state
-                 * and NM field.
-                 */
-                protected volatile Object loginListener;
 
                 protected LoginEventContext(Object originalNetworkManager, Channel channel) {
                         this.originalNetworkManager = originalNetworkManager;
@@ -392,39 +300,15 @@ public class PlayerPostLoginInjector {
                         final LoginEventContext ctx = new LoginEventContext(netManager, channel);
                         Object ret = netManagerProxy.createProxy(netManagerCtor, new Object[] { netManagerDir.get(netManager) },
                                         (obj, meth, args) -> {
-                                                // CRITICAL: On MC 1.12-1.20.1, the LoginListener is installed via
-                                                // setListener(PacketListener) — 1-arg. On MC 1.20.2+, it's installed via
-                                                // setupInboundProtocol(ProtocolInfo, PacketListener) — 2-arg. We must
-                                                // intercept BOTH paths, otherwise wrapLoginListener is never called
-                                                // on 1.20.2+ and EaglerXServer's post-login features silently fail.
-                                                if (setHandlerMethod != null && setHandlerMethod.equals(meth)) {
-                                                        // 1-arg setListener path (MC 1.12-1.20.1)
-                                                        if (args != null && args.length >= 1 && args[0] != null
-                                                                        && NmsNames.matches(args[0], NmsNames.LOGIN_LISTENER)) {
+                                                if (setHandlerMethod.equals(meth)) {
+                                                        if (NmsNames.matches(args[0], NmsNames.LOGIN_LISTENER)) {
                                                                 meth.invoke(netManager, args);
                                                                 fireEventLoginInit(channel);
                                                                 args[0] = wrapLoginListener(getHandlerMethod.invoke(netManager), ctx);
                                                                 meth.invoke(netManager, args);
                                                                 return null;
                                                         }
-                                                        // On MC 1.20.2+, setListener is for HandshakeListener only — fall through
-                                                        // to the default `meth.invoke(netManager, args)` at the bottom.
-                                                } else if (setupInboundMethod != null && setupInboundMethod.equals(meth)) {
-                                                        // 2-arg setupInboundProtocol path (MC 1.20.2+)
-                                                        // args[0] is ProtocolInfo, args[1] is PacketListener
-                                                        if (args != null && args.length >= 2 && args[1] != null
-                                                                        && NmsNames.matches(args[1], NmsNames.LOGIN_LISTENER)) {
-                                                                fireEventLoginInit(channel);
-                                                                // Wrap BEFORE calling setupInboundProtocol so the wrapped listener
-                                                                // gets installed. On 1.20.2+ we can't call getHandlerMethod.invoke()
-                                                                // before the listener is installed (it would return the previous
-                                                                // listener, not the new one), so we wrap the args[1] directly.
-                                                                args[1] = wrapLoginListener(args[1], ctx);
-                                                                return meth.invoke(netManager, args);
-                                                        }
-                                                        // ConfigurationListener and others pass through unchanged.
-                                                }
-                                                if (sendPacketMethod1 != null && sendPacketMethod1.equals(meth)) {
+                                                } else if (sendPacketMethod1.equals(meth)) {
                                                         String nm = args[0].getClass().getSimpleName();
                                                         if (NmsNames.PACKET_LOGIN_DISCONNECT.contains(nm) && ctx.clientPlayState) {
                                                                 Class<?> clz2;
@@ -456,21 +340,8 @@ public class PlayerPostLoginInjector {
                         handshakeListenerNetManager.set(getHandlerMethod.invoke(netManager), ret);
                         netManagerChannel.set(ret, channel);
                         return ret;
-                } catch (Throwable e) {
-                        // Widened from ReflectiveOperationException: channel.attr(attr).set(ctx)
-                        // can throw IllegalArgumentException (key conflict); netManagerDir.get()
-                        // can NPE if bind() ran on a different NM class; ctx.originalNetworkManager
-                        // cast can ClassCastException. None are reflective — let them through cleanly.
-                        if (e instanceof ReflectiveOperationException) {
-                                throw Util.propagateReflectThrowable((ReflectiveOperationException) e);
-                        }
-                        if (e instanceof RuntimeException) {
-                                throw (RuntimeException) e;
-                        }
-                        if (e instanceof Error) {
-                                throw (Error) e;
-                        }
-                        throw new RuntimeException("wrapNetworkManager failed", e);
+                } catch (ReflectiveOperationException e) {
+                        throw Util.propagateReflectThrowable(e);
                 }
         }
 
@@ -548,7 +419,6 @@ public class PlayerPostLoginInjector {
                         Field loginListenerState = null;
                         Field loginListenerPlayer = null;
                         Field loginListenerTransferred = null; // 1.20.5+ boolean field
-                        Field loginListenerGameProfile = null; // 1.20.2+ GameProfile field
                         for (Field f : loginListenerClass.getDeclaredFields()) {
                                 if (f.getType() == mcServerClass) {
                                         f.setAccessible(true);
@@ -568,11 +438,6 @@ public class PlayerPostLoginInjector {
                                         // 1.20.5+ has a 'transferred' boolean field
                                         f.setAccessible(true);
                                         loginListenerTransferred = f;
-                                } else if (f.getType() == GameProfile.class) {
-                                        // 1.20.2+ has an 'authenticatedProfile' GameProfile field.
-                                        // Used to get the player's UUID for ctxByUUID lookup.
-                                        f.setAccessible(true);
-                                        loginListenerGameProfile = f;
                                 }
                                 if (loginListenerServer != null && loginListenerNetManager != null && loginListenerState != null
                                                 && loginListenerPlayer != null) {
@@ -589,14 +454,8 @@ public class PlayerPostLoginInjector {
                         if (loginListenerState == null) {
                                 throw new IllegalStateException("Could not locate state field of " + loginListenerClass.getName());
                         }
-                        // CRITICAL: On MC 1.20.2+ (configuration phase introduced), the LoginListener
-                        // no longer holds an EntityPlayer reference — the player is created later in
-                        // PlayerList.placeNewPlayer during the configuration→play transition. We allow
-                        // loginListenerPlayer to be null on 1.20.2+; the post-login finalize task
-                        // checks for null before calling .set().
                         if (loginListenerPlayer == null) {
-                                plugin.logger().info("ServerLoginPacketListenerImpl has no EntityPlayer field — "
-                                                + "skipping player field injection (expected on MC 1.20.2+)");
+                                throw new IllegalStateException("Could not locate player field of " + loginListenerClass.getName());
                         }
                         Method loginListenerTick = null;
                         Method loginListenerDisconnect = null;
@@ -655,24 +514,11 @@ public class PlayerPostLoginInjector {
                         if (loginListenerTick == null) {
                                 throw new IllegalStateException("Could not locate tick function of " + loginListenerClass.getName());
                         }
-                        // CRITICAL: The "ready to accept the player" state name has changed across MC versions:
-                        // - MC 1.12-1.16.5: READY_TO_ACCEPT
-                        // - MC 1.17-1.20.1: READY_TO_LOGIN
-                        // - MC 1.20.2+: WAITING_FOR_DUPE_DISCONNECT (the new pre-ACCEPTED state)
-                        // On 1.21.x the State enum is: HELLO, KEY, AUTHENTICATING, NEGOTIATING, VERIFYING,
-                        // WAITING_FOR_DUPE_DISCONNECT, PROTOCOL_SWITCHING, ACCEPTED — 8 constants.
-                        // The previous fallback picked obj[obj.length - 2] = PROTOCOL_SWITCHING, which
-                        // skips the dupe-disconnect check. We now pick obj[obj.length - 3] to land on
-                        // WAITING_FOR_DUPE_DISCONNECT, which is the correct pre-ACCEPTED state.
-                        Object protocolStateOnResume = findEnumValueByName(enumProtocolState,
-                                        "READY_TO_ACCEPT", "READY_TO_LOGIN", "WAITING_FOR_DUPE_DISCONNECT");
+                        Object protocolStateOnResume = findEnumValueByName(enumProtocolState, "READY_TO_ACCEPT", "READY_TO_LOGIN");
                         if (protocolStateOnResume == null) {
                                 Object[] obj = enumProtocolState.getEnumConstants();
                                 if (obj != null && obj.length > 4) {
-                                        // obj.length - 1 = ACCEPTED (terminal), obj.length - 2 = PROTOCOL_SWITCHING
-                                        // (also terminal-ish). Pick obj.length - 3 = WAITING_FOR_DUPE_DISCONNECT
-                                        // (the state just before the player is accepted).
-                                        protocolStateOnResume = obj[obj.length - 3];
+                                        protocolStateOnResume = obj[obj.length - 2];
                                 }
                         }
                         if (protocolStateOnResume == null) {
@@ -692,7 +538,6 @@ public class PlayerPostLoginInjector {
                         this.loginListenerDisconnect = loginListenerDisconnect;
                         this.loginListenerPlayer = loginListenerPlayer;
                         this.loginListenerTransferred = loginListenerTransferred;
-                        this.loginListenerGameProfile = loginListenerGameProfile;
                         LOGINLISTENERCLASS_HANDLE.setRelease(this, loginListenerClass);
                 } catch (ReflectiveOperationException e) {
                         throw Util.propagateReflectThrowable(e);
@@ -707,29 +552,6 @@ public class PlayerPostLoginInjector {
                 }
                 if (!loginListenerClass.isAssignableFrom(loginListener.getClass())) {
                         throw new IllegalStateException("Unknown LoginListener type: " + loginListener.getClass().getName());
-                }
-                // Store the original LoginListener on the ctx so the deferred post-login flow
-                // (handleLoginEvent) can access it for state/NM field manipulation.
-                ctx.loginListener = loginListener;
-                // CRITICAL: On MC 1.20.2+, we need to map the player's UUID to this ctx so
-                // handleLoginEvent (fired during PlayerLoginEvent) can find the ctx without
-                // calling BukkitUnsafe.getPlayerChannel (which NPEs because the EntityPlayer's
-                // connection field is null at this point). We read the GameProfile from the
-                // LoginListener's 'authenticatedProfile' field to get the UUID.
-                if (loginListenerGameProfile != null) {
-                        try {
-                                GameProfile llProfile = (GameProfile) loginListenerGameProfile.get(loginListener);
-                                if (llProfile != null) {
-                                        java.util.UUID profileUUID = net.lax1dude.eaglercraft.backend.server.api.bukkit.compat.AuthlibCompat
-                                                        .getProfileId(llProfile);
-                                        if (profileUUID != null) {
-                                                ctxByUUID.put(profileUUID, ctx);
-                                        }
-                                }
-                        } catch (Throwable t) {
-                                // Best effort — handleLoginEvent will still work on 1.12-1.20.1
-                                // via the EaglerError path (which doesn't use ctxByUUID).
-                        }
                 }
                 try {
                         Object[] ctorArgs;
@@ -751,181 +573,67 @@ public class PlayerPostLoginInjector {
                         }
                         return loginListenerProxy.createProxy(loginListenerCtor, ctorArgs, (obj, meth, args) -> {
                                                 if (loginListenerTick.equals(meth)) {
-                                                        // CRITICAL: On MC 1.20.2+ (setupInboundMethod != null), DON'T use
-                                                        // the EaglerError mechanism at all. The EaglerError is thrown from
-                                                        // inside LoginListener.tick() which BREAKS the tick execution.
-                                                        // On 1.12-1.20.1 we recovered by manually setting the LoginListener
-                                                        // state to protocolStateOnResume. On 1.20.2+ we can't set the state
-                                                        // (the state machine is different), so the LoginListener never advances
-                                                        // to ACCEPTED → the client's LoginAcknowledged packet is rejected with
-                                                        // "Unexpected login acknowledgement packet" → "Connection closed during
-                                                        // protocol change".
-                                                        //
-                                                        // Instead, on 1.20.2+ we let tick() proceed naturally. The pipeline
-                                                        // swap (restore original NM) and PlayerLoginPostEvent firing happen
-                                                        // from handleLoginEvent (during PlayerLoginEvent, which fires AFTER
-                                                        // LoginSuccess is sent but BEFORE the configuration phase starts).
-                                                        if (setupInboundMethod == null) {
-                                                                // MC 1.12-1.20.1: use the EaglerError mechanism
+                                                        try {
+                                                                ctx.markThrowOnLoginSuccess(true);
                                                                 try {
-                                                                        ctx.markThrowOnLoginSuccess(true);
-                                                                        try {
-                                                                                return meth.invoke(loginListener, args);
-                                                                        } finally {
-                                                                                ctx.markThrowOnLoginSuccess(false);
-                                                                        }
-                                                                } catch (InvocationTargetException ex) {
-                                                                        Throwable er = ex.getCause();
-                                                                        if (er instanceof EaglerError err) {
-                                                                                Player player = null;
-                                                                                synchronized (err.gameProfile) {
-                                                                                        Iterator<Property> itr = AuthlibCompat
-                                                                                                        .getProperties(err.gameProfile)
-                                                                                                        .values().iterator();
-                                                                                        while (itr.hasNext()) {
-                                                                                                Property prop = itr.next();
-                                                                                                String propName = AuthlibCompat
-                                                                                                                .getName(prop);
-                                                                                                if (propName != null && propName
-                                                                                                                .startsWith("$eaglerMarker_")) {
-                                                                                                        Player e = entityPlayers
-                                                                                                                        .remove(prop);
-                                                                                                        if (e != null) {
-                                                                                                                player = e;
-                                                                                                        }
-                                                                                                        try {
-                                                                                                                itr.remove();
-                                                                                                        } catch (UnsupportedOperationException uoe) {
-                                                                                                                // ignore — immutable PropertyMap
-                                                                                                        }
+                                                                        return meth.invoke(loginListener, args);
+                                                                } finally {
+                                                                        ctx.markThrowOnLoginSuccess(false);
+                                                                }
+                                                        } catch (InvocationTargetException ex) {
+                                                                Throwable er = ex.getCause();
+                                                                if (er instanceof EaglerError err) {
+                                                                        Player player = null;
+                                                                        synchronized (err.gameProfile) {
+                                                                                Iterator<Property> itr = err.gameProfile.getProperties().values().iterator();
+                                                                                while (itr.hasNext()) {
+                                                                                        Property prop = itr.next();
+                                                                                        if (prop.getName().startsWith("$eaglerMarker_")) {
+                                                                                                Player e = entityPlayers.remove(prop);
+                                                                                                if (e != null) {
+                                                                                                        player = e;
                                                                                                 }
+                                                                                                itr.remove();
                                                                                         }
                                                                                 }
+                                                                        }
                                                                         if (player != null) {
                                                                                 final Player playerFinal = player;
-                                                                                fireEventLoginPostAsync(playerFinal, ctx,
-                                                                                                (res) -> {
-                                                                                                        // CRITICAL: pipeline.replace MUST be invoked on the channel's EventLoop.
-                                                                                                        // The login-listener tick runs on the Bukkit main thread. Without this
-                                                                                                        // wrap, pipeline mutation is deferred by Netty but our subsequent
-                                                                                                        // setLoginListenerState/Player runs BEFORE the swap actually applies,
-                                                                                                        // causing the next tick to re-enter the wrapped LoginListener and
-                                                                                                        // throw EaglerError again -> infinite loop / immediate disconnect.
-                                                                                                        Runnable task = () -> {
-                                                                                                                try {
-                                                                                                                        if (!res.isCancelled()) {
-                                                                                                                                handlerAdded.set(ctx.originalNetworkManager,
-                                                                                                                                                false);
-                                                                                                                                try {
-                                                                                                                                        ctx.channel.pipeline()
-                                                                                                                                                        .replace("packet_handler",
-                                                                                                                                                                        "packet_handler",
-                                                                                                                                                                        (ChannelHandler) ctx.originalNetworkManager);
-                                                                                                                                } catch (NoSuchElementException nse) {
-                                                                                                                                        // "packet_handler" was removed/renamed by another plugin (ProtocolLib, ViaVersion, PacketEvents).
-                                                                                                                                        // Try the original NetworkManager by direct lookup; fall back to closing the channel.
-                                                                                                                                        try {
-                                                                                                                                                ctx.channel.pipeline()
-                                                                                                                                                                .addFirst("eagler-restored-handler",
-                                                                                                                                                                                (ChannelHandler) ctx.originalNetworkManager);
-                                                                                                                                        } catch (Throwable t2) {
-                                                                                                                                                plugin.logger().error(
-                                                                                                                                                                "EaglerXServer: could not restore NetworkManager after packet_handler was missing",
-                                                                                                                                                                t2);
-                                                                                                                                                try {
-                                                                                                                                                        ctx.channel.close();
-                                                                                                                                                } catch (Throwable ignored) {
-                                                                                                                                                }
-                                                                                                                                                return;
-                                                                                                                                        }
-                                                                                                                                }
-                                                                                                                                Object entityPlayer = BukkitUnsafe
-                                                                                                                                                .getHandle(playerFinal);
-                                                                                                                                loginListenerNetManager.set(
-                                                                                                                                                loginListener,
-                                                                                                                                                ctx.originalNetworkManager);
-                                                                                                                                // On MC 1.20.2+ the LoginListener has no EntityPlayer field — skip the set.
-                                                                                                                                if (loginListenerPlayer != null) {
-                                                                                                                                        loginListenerPlayer.set(loginListener,
-                                                                                                                                                        entityPlayer);
-                                                                                                                                }
-                                                                                                                                // CRITICAL: On MC 1.20.2+ (setupInboundMethod != null), DON'T set
-                                                                                                                                // loginListenerState. Setting it to WAITING_FOR_DUPE_DISCONNECT causes
-                                                                                                                                // the LoginListener to re-send LoginSuccess in the wrong protocol phase,
-                                                                                                                                // producing "Pipeline has no outbound protocol configured" errors and
-                                                                                                                                // "Unexpected login acknowledgement packet" errors. The 1.20.2+ state
-                                                                                                                                // machine transitions naturally (VERIFYING → WAITING_FOR_DUPE_DISCONNECT
-                                                                                                                                // → PROTOCOL_SWITCHING → ACCEPTED → Configuration → Play) and setting
-                                                                                                                                // it manually breaks that flow.
-                                                                                                                                // On MC 1.12-1.20.1 (setupInboundMethod == null), we set the state
-                                                                                                                                // to protocolStateOnResume to resume the old login flow.
-                                                                                                                                if (setupInboundMethod == null && loginListenerState != null) {
-                                                                                                                                        loginListenerState.set(loginListener,
-                                                                                                                                                        protocolStateOnResume);
-                                                                                                                                }
-                                                                                                                        } else {
-                                                                                                                                BaseComponent comp = res.getMessage();
-                                                                                                                                if (comp == null) {
-                                                                                                                                        comp = new TextComponent(
-                                                                                                                                                        "Connection Closed");
-                                                                                                                                }
-                                                                                                                                String legacyText = comp.toLegacyText();
-                                                                                                                                Object arg = legacyText;
-                                                                                                                                Class<?> paramType = loginListenerDisconnect
-                                                                                                                                                .getParameterTypes()[0];
-                                                                                                                                if (paramType != String.class) {
-                                                                                                                                        arg = convertToComponent(legacyText,
-                                                                                                                                                        paramType);
-                                                                                                                                }
-                                                                                                                                loginListenerDisconnect.invoke(loginListener,
-                                                                                                                                                arg);
-                                                                                                                        }
-                                                                                                                } catch (Throwable e) {
-                                                                                                                        // Widened from ReflectiveOperationException:
-                                                                                                                        // NoSuchElementException (packet_handler missing),
-                                                                                                                        // NPE (handlerAdded null), ClassCastException (param type),
-                                                                                                                        // InvocationTargetException (disconnect invoke) — none are
-                                                                                                                        // ReflectiveOperationException but all crash the tick if they
-                                                                                                                        // escape. Log + close channel cleanly instead of throwing.
-                                                                                                                        plugin.logger().error(
-                                                                                                                                        "EaglerXServer: post-login finalize failed, closing channel",
-                                                                                                                                        e);
-                                                                                                                        try {
-                                                                                                                                ctx.channel.close();
-                                                                                                                        } catch (Throwable ignored) {
-                                                                                                                        }
-                                                                                                                }
-                                                                                                        };
-                                                                                                        if (ctx.channel.eventLoop().inEventLoop()) {
-                                                                                                                task.run();
-                                                                                                        } else {
-                                                                                                                try {
-                                                                                                                        ctx.channel.eventLoop().submit(task);
-                                                                                                                } catch (Throwable t) {
-                                                                                                                        plugin.logger().error(
-                                                                                                                                        "EaglerXServer: failed to schedule post-login finalize on event loop",
-                                                                                                                                        t);
-                                                                                                                        try {
-                                                                                                                                ctx.channel.close();
-                                                                                                                        } catch (Throwable ignored) {
-                                                                                                                        }
-                                                                                                                }
+                                                                                fireEventLoginPostAsync(playerFinal, ctx, (res) -> {
+                                                                                        try {
+                                                                                                if (!res.isCancelled()) {
+                                                                                                        handlerAdded.set(ctx.originalNetworkManager, false);
+                                                                                                        ctx.channel.pipeline().replace("packet_handler", "packet_handler",
+                                                                                                                        (ChannelHandler) ctx.originalNetworkManager);
+                                                                                                        Object entityPlayer = BukkitUnsafe.getHandle(playerFinal);
+                                                                                                        loginListenerNetManager.set(loginListener,
+                                                                                                                        ctx.originalNetworkManager);
+                                                                                                        loginListenerPlayer.set(loginListener, entityPlayer);
+                                                                                                        loginListenerState.set(loginListener, protocolStateOnResume);
+                                                                                                } else {
+                                                                                                        BaseComponent comp = res.getMessage();
+                                                                                                        if (comp == null) {
+                                                                                                                comp = new TextComponent("Connection Closed");
                                                                                                         }
-                                                                                                });
+                                                                                                        String legacyText = comp.toLegacyText();
+                                                                                                        // The disconnect method may take String (1.12-1.16) or
+                                                                                                        // net.minecraft.network.chat.Component (1.17+) or
+                                                                                                        // net.kyori.adventure.text.Component (Paper adventure).
+                                                                                                        // Convert the legacy text to the correct parameter type.
+                                                                                                        Object arg = legacyText;
+                                                                                                        Class<?> paramType = loginListenerDisconnect.getParameterTypes()[0];
+                                                                                                        if (paramType != String.class) {
+                                                                                                                arg = convertToComponent(legacyText, paramType);
+                                                                                                        }
+                                                                                                        loginListenerDisconnect.invoke(loginListener, arg);
+                                                                                                }
+                                                                                        } catch (ReflectiveOperationException e) {
+                                                                                                throw Util.propagateReflectThrowable(e);
+                                                                                        }
+                                                                                });
                                                                                 return null;
                                                                         } else {
-                                                                                // EaglerError fired but no marker was found. This happens on MC 1.20.2+
-                                                                                // where LoginSuccess (ClientboundLoginFinishedPacket) is sent BEFORE
-                                                                                // PlayerLoginEvent fires (which is where the marker gets injected).
-                                                                                //
-                                                                                // DON'T close the channel and DON'T set LoginListener state — both
-                                                                                // break the 1.20.2+ login→config→play transition.
-                                                                                //
-                                                                                // Instead, set ctx.pendingPostLogin = true so handleLoginEvent
-                                                                                // (called during PlayerLoginEvent, which fires shortly after) can
-                                                                                // fire PlayerLoginPostEvent with the pipeline swap callback.
-                                                                                ctx.pendingPostLogin = true;
-                                                                                return null;
+                                                                                throw new IllegalStateException();
                                                                         }
                                                                 } else {
                                                                         if (er instanceof RuntimeException ee)
@@ -933,29 +641,11 @@ public class PlayerPostLoginInjector {
                                                                         throw new RuntimeException(er);
                                                                 }
                                                         }
-                                                        } else {
-                                                                // MC 1.20.2+: DON'T throw EaglerError. Let tick() proceed naturally.
-                                                                // PlayerLoginPostEvent is fired from handleLoginEvent (during
-                                                                // PlayerLoginEvent, which fires after LoginSuccess is sent).
-                                                                return meth.invoke(loginListener, args);
-                                                        }
                                                 }
                                                 return meth.invoke(loginListener, args);
                                         });
-                } catch (Throwable e) {
-                        // Widened from ReflectiveOperationException: EaglerError may surface here
-                        // if the inner try threw it without being wrapped in InvocationTargetException
-                        // (defensive — should not normally happen).
-                        if (e instanceof ReflectiveOperationException) {
-                                throw Util.propagateReflectThrowable((ReflectiveOperationException) e);
-                        }
-                        if (e instanceof RuntimeException) {
-                                throw (RuntimeException) e;
-                        }
-                        if (e instanceof Error) {
-                                throw (Error) e;
-                        }
-                        throw new RuntimeException("wrapLoginListener failed", e);
+                } catch (ReflectiveOperationException e) {
+                        throw Util.propagateReflectThrowable(e);
                 }
         }
 
@@ -1025,12 +715,8 @@ public class PlayerPostLoginInjector {
         }
 
         private static final String[] KNOWN_PLAY_DISCONNECT_FQNS = new String[] {
-                        // MC 1.20.2+ moved ClientboundDisconnectPacket from .game. to .common. package
-                        // (configuration phase introduced). Both locations are listed for fallback.
-                        "net.minecraft.network.protocol.common.ClientboundDisconnectPacket", // MC 1.20.2+
-                        "net.minecraft.network.protocol.game.ClientboundDisconnectPacket",   // MC 1.17 - 1.20.1
-                        "net.minecraft.server.v1_12_R1.PacketPlayOutKickDisconnect"          // MC 1.12 - 1.16.5
-        };
+                        "net.minecraft.network.protocol.game.ClientboundDisconnectPacket",
+                        "net.minecraft.server.v1_12_R1.PacketPlayOutKickDisconnect" };
 
         private synchronized void bindPacketPlayDisconnect(Class<?> loginDisconnectPacket) {
                 if (PACKETPLAYDISCONNECT_HANDLE.getAcquire(this) != null) {
@@ -1096,133 +782,13 @@ public class PlayerPostLoginInjector {
         }
 
         public void handleLoginEvent(PlayerLoginEvent event) {
-                // Capture the marker name as a local String before constructing the Property,
-                // so we never invoke Property.getName() reflectively (which throws NoSuchMethodError
-                // on authlib 6.x — Paper 26.x / MC 1.21.11). Also use the 3-arg canonical ctor
-                // (name, value, null) which is guaranteed to exist on all authlib versions;
-                // the 2-arg convenience ctor may be stripped by some shaded/relocated authlib builds.
-                String markerName = "$eaglerMarker_" + ThreadLocalRandom.current().nextLong(Long.MAX_VALUE);
-                try {
-                        Object player = BukkitUnsafe.getHandle(event.getPlayer());
-                        GameProfile profile = BukkitUnsafe.getGameProfile(player);
-                        // Skip Bedrock-via-Geyser/Floodgate players — they don't go through Eagler's
-                        // post-login swap flow, so inserting the marker would just leak into their
-                        // PacketLoginOutSuccess and confuse Geyser's profile translation.
-                        if (AuthlibCompat.containsKey(AuthlibCompat.getProperties(profile), "floodgate:is_bedrock")) {
-                                return;
-                        }
-                        // CRITICAL: use BukkitUnsafe.injectProfileProperty() instead of
-                        // AuthlibCompat.put(props, ...) directly, because on authlib 9.x
-                        // (Paper 26.x / MC 1.21.11) the PropertyMap returned by GameProfile.properties()
-                        // is immutable (ImmutableMultimap.copyOf). The direct put silently no-ops.
-                        // injectProfileProperty detects the immutability and replaces the entire
-                        // GameProfile on the EntityPlayer with a new one containing the modified
-                        // properties.
-                        Property marker = BukkitUnsafe.injectProfileProperty(player, markerName, "TMP", null);
-                        if (marker == null) {
-                                plugin.logger().warn(
-                                                "EaglerXServer: could not inject $eaglerMarker_ property into GameProfile for player "
-                                                                + event.getPlayer().getName()
-                                                                + " — post-login Eagler features will be unavailable");
-                                return;
-                        }
-                        entityPlayers.put(marker, event.getPlayer());
-
-                        // CRITICAL (MC 1.20.2+): On MC 1.20.2+, we DON'T use the EaglerError
-                        // mechanism (setupInboundMethod != null). Instead, we fire
-                        // PlayerLoginPostEvent directly from here (during PlayerLoginEvent).
-                        // We find the ctx by the player's UUID (stored in ctxByUUID by
-                        // wrapLoginListener). We do NOT set LoginListener state — the login
-                        // flow proceeds naturally (LoginSuccess → LoginAcknowledged → Config → Play).
-                        if (setupInboundMethod != null) {
-                                LoginEventContext ctx = ctxByUUID.get(event.getPlayer().getUniqueId());
-                                if (ctx != null) {
-                                        ctxByUUID.remove(event.getPlayer().getUniqueId()); // clean up
-                                        final Object loginListenerObj = ctx.loginListener;
-                                        fireEventLoginPostAsync(event.getPlayer(), ctx, (res) -> {
-                                                Channel ch = ctx.channel;
-                                                Runnable task = () -> {
-                                                        try {
-                                                                if (!res.isCancelled()) {
-                                                                        // Pipeline swap: restore the original (non-proxied) NetworkManager.
-                                                                        // On 1.20.2+ we DON'T set LoginListener state or player field —
-                                                                        // the login flow proceeds naturally through Config → Play.
-                                                                        handlerAdded.set(ctx.originalNetworkManager, false);
-                                                                        try {
-                                                                                ch.pipeline().replace("packet_handler",
-                                                                                                "packet_handler",
-                                                                                                (ChannelHandler) ctx.originalNetworkManager);
-                                                                        } catch (NoSuchElementException nse) {
-                                                                                try {
-                                                                                        ch.pipeline().addFirst(
-                                                                                                        "eagler-restored-handler",
-                                                                                                        (ChannelHandler) ctx.originalNetworkManager);
-                                                                                } catch (Throwable t2) {
-                                                                                        plugin.logger().error(
-                                                                                                        "EaglerXServer: could not restore NetworkManager",
-                                                                                                        t2);
-                                                                                        return;
-                                                                                }
-                                                                        }
-                                                                        // On 1.20.2+, restore the LoginListener's NM field to the original
-                                                                        // (non-proxied) NM so future packets go through the real NM.
-                                                                        if (loginListenerObj != null && loginListenerNetManager != null) {
-                                                                                                loginListenerNetManager.set(loginListenerObj,
-                                                                                                                ctx.originalNetworkManager);
-                                                                        }
-                                                                        // DON'T set loginListenerState or loginListenerPlayer on 1.20.2+ —
-                                                                        // the state machine is different and setting it breaks the flow.
-                                                                } else {
-                                                                        BaseComponent comp = res.getMessage();
-                                                                        if (comp == null) {
-                                                                                comp = new TextComponent("Connection Closed");
-                                                                        }
-                                                                        String legacyText = comp.toLegacyText();
-                                                                        Object arg = legacyText;
-                                                                        Class<?> paramType = loginListenerDisconnect.getParameterTypes()[0];
-                                                                        if (paramType != String.class) {
-                                                                                arg = convertToComponent(legacyText, paramType);
-                                                                        }
-                                                                        if (loginListenerObj != null) {
-                                                                                loginListenerDisconnect.invoke(loginListenerObj, arg);
-                                                                        }
-                                                                }
-                                                        } catch (Throwable e) {
-                                                                plugin.logger().error(
-                                                                                "EaglerXServer: post-login finalize failed (1.20.2+ path)",
-                                                                                e);
-                                                        }
-                                                };
-                                                if (ch.eventLoop().inEventLoop()) {
-                                                        task.run();
-                                                } else {
-                                                        try {
-                                                                ch.eventLoop().submit(task);
-                                                        } catch (Throwable t) {
-                                                                plugin.logger().error(
-                                                                                "EaglerXServer: failed to schedule post-login finalize",
-                                                                                t);
-                                                        }
-                                                }
-                                        });
-                                } else {
-                                        // ctx not found — this means wrapLoginListener wasn't called
-                                        // (e.g., the connection is a vanilla/Geyser connection that
-                                        // bypassed EaglerXServer's proxy). Log a debug message and
-                                        // continue — the player will join but without Eagler features.
-                                        // This is expected for non-Eagler connections.
-                                }
-                        }
-                } catch (Throwable t) {
-                        // If anything goes wrong (e.g. GameProfile lookup fails for some custom server,
-                        // or authlib removes the 3-arg ctor in a future version), log and bail — don't
-                        // kick the player. The post-login flow will gracefully short-circuit because
-                        // no matching marker will be found in entityPlayers.
-                        plugin.logger().warn(
-                                        "EaglerXServer: handleLoginEvent failed for player " + event.getPlayer().getName()
-                                                        + " — post-login Eagler features will be unavailable",
-                                        t);
+                Property marker = new Property("$eaglerMarker_" + ThreadLocalRandom.current().nextLong(Long.MAX_VALUE), "TMP");
+                Object player = BukkitUnsafe.getHandle(event.getPlayer());
+                GameProfile profile = BukkitUnsafe.getGameProfile(player);
+                synchronized (profile) {
+                        profile.getProperties().put(marker.getName(), marker);
                 }
+                entityPlayers.put(marker, event.getPlayer());
         }
 
         private void fireEventLoginInit(Channel channel) {

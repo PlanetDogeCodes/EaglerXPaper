@@ -107,13 +107,11 @@ public final class NmsNames {
     /**
      * Server -> client packet sent when login succeeds. Contains the GameProfile.
      * - 1.12-1.16.5: net.minecraft.server.v1_12_R1.PacketLoginOutSuccess
-     * - 1.17-1.21.10: net.minecraft.network.protocol.login.ClientboundGameProfilePacket
-     * - 1.21.11+  : renamed to ClientboundLoginFinishedPacket (Paper 26.x / Leaf)
+     * - 1.17+      : net.minecraft.network.protocol.login.ClientboundGameProfilePacket
      */
     public static final Set<String> PACKET_LOGIN_SUCCESS = Set.of(
-            "ClientboundLoginFinishedPacket", // 1.21.11+ (Paper 26.x / Leaf)
-            "ClientboundGameProfilePacket",   // 1.17 - 1.21.10
-            "PacketLoginOutSuccess"           // 1.12-1.16.5
+            "ClientboundGameProfilePacket", // 1.17+
+            "PacketLoginOutSuccess"         // 1.12-1.16.5
     );
 
     /**

@@ -23,30 +23,40 @@ import net.lax1dude.eaglercraft.v1_8.socket.protocol.pkt.WrongPacketException;
 
 public abstract class ServerMessageHandler implements MessageController.IMessageHandler {
 
-	protected final EaglerPlayerInstance<?> eaglerHandle;
+        protected final EaglerPlayerInstance<?> eaglerHandle;
 
-	public ServerMessageHandler(EaglerPlayerInstance<?> eaglerHandle) {
-		this.eaglerHandle = eaglerHandle;
-	}
+        public ServerMessageHandler(EaglerPlayerInstance<?> eaglerHandle) {
+                this.eaglerHandle = eaglerHandle;
+        }
 
-	public EaglerXServer<?> getServer() {
-		return eaglerHandle.getEaglerXServer();
-	}
+        public EaglerXServer<?> getServer() {
+                return eaglerHandle.getEaglerXServer();
+        }
 
-	@Override
-	public void handleException(Exception ex) {
-		EaglerXServer<?> server = getServer();
-		server.logger().error("Exception thrown while handling eagler packet for \"" + eaglerHandle.getUsername() + "\"!", ex);
-		eaglerHandle.disconnect(server.componentBuilder().buildTextComponent().beginStyle().color(EnumChatColor.RED)
-				.end().text("Eaglercraft Packet Error").end());
-	}
+        @Override
+        public void handleException(Exception ex) {
+                EaglerXServer<?> server = getServer();
+                // CRITICAL: Don't disconnect the player on every packet error.
+                // IOException from truncated packets, IndexOutOfBoundsException from
+                // buffer underflow, and similar transient errors should NOT kill
+                // the connection. Only disconnect on serious errors (WrongPacketException,
+                // NotCapableException) that indicate a protocol-level mismatch.
+                if (ex instanceof WrongPacketException || ex instanceof NotCapableException) {
+                        server.logger().error("Protocol error for \"" + eaglerHandle.getUsername() + "\", disconnecting", ex);
+                        eaglerHandle.disconnect(server.componentBuilder().buildTextComponent().beginStyle().color(EnumChatColor.RED)
+                                        .end().text("Eaglercraft Protocol Error").end());
+                } else {
+                        // Transient error — log and continue. The player stays connected.
+                        server.logger().warn("Transient packet error for \"" + eaglerHandle.getUsername() + "\" (player NOT disconnected): " + ex.getMessage());
+                }
+        }
 
-	protected RuntimeException wrongPacket() {
-		return new WrongPacketException();
-	}
+        protected RuntimeException wrongPacket() {
+                return new WrongPacketException();
+        }
 
-	protected RuntimeException notCapable() {
-		return new NotCapableException();
-	}
+        protected RuntimeException notCapable() {
+                return new NotCapableException();
+        }
 
 }

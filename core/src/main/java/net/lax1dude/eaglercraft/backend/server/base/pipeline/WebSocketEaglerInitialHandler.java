@@ -94,20 +94,10 @@ public class WebSocketEaglerInitialHandler extends MessageToMessageCodec<ByteBuf
 
         private final EaglerXServer<?> server;
         private final NettyPipelineData pipelineData;
-        // CRITICAL: handshaker and vanillaInitializer are written by the EventLoop
-        // (decode path) and read by handleBackendHandshakeSuccess/enterPlayState
-        // (also EventLoop), but event callbacks from HandshakerInstance may execute
-        // on a different thread if a plugin's EaglercraftAuthCookieEvent handler
-        // dispatches asynchronously. Marking volatile makes the contract explicit
-        // and prevents rare stale-read bugs.
-        private volatile IHandshaker handshaker;
-        private volatile VanillaInitializer vanillaInitializer;
-        // CRITICAL: terminated and canSendV3Kick may be written by terminateErrorCode/kickLegacy
-        // (EventLoop) AND by continueLoginCookieAuth via inboundHandler.terminated = true
-        // (potentially on a different thread). Without volatile, the decode loop may
-        // miss the termination signal and continue processing frames on a closing channel.
-        public volatile boolean terminated;
-        public volatile boolean canSendV3Kick;
+        private IHandshaker handshaker;
+        private VanillaInitializer vanillaInitializer;
+        public boolean terminated;
+        public boolean canSendV3Kick;
 
         public WebSocketEaglerInitialHandler(EaglerXServer<?> server, NettyPipelineData pipelineData) {
                 this.server = server;
@@ -629,12 +619,6 @@ public class WebSocketEaglerInitialHandler extends MessageToMessageCodec<ByteBuf
 
         @Override
         public void handlerRemoved(ChannelHandlerContext ctx) throws Exception {
-                // CRITICAL: cancel the login timeout task when our handler is removed from
-                // the pipeline. If another plugin (ProtocolLib, ViaVersion) removes our
-                // handler without the channel going inactive, the disconnectTask would
-                // otherwise fire after eaglerLoginTimeout seconds and call channel.close()
-                // on a possibly-still-active channel — kicking a player mid-handshake.
-                pipelineData.cancelLoginTimeoutHelper();
                 if (vanillaInitializer != null) {
                         vanillaInitializer.release();
                 }
@@ -659,15 +643,44 @@ public class WebSocketEaglerInitialHandler extends MessageToMessageCodec<ByteBuf
                 handshaker.finish(ctx);
                 ChannelPipeline pipeline = ctx.pipeline();
                 pipeline.fireUserEventTriggered(EnumPipelineEvent.EAGLER_HANDSHAKE_COMPLETE);
-                // ServerboundLoginAcknowledged (0x03) is now fired earlier — in
-                // VanillaInitializer.handleInbound immediately after parsing S02PacketLoginSuccess.
-                // Firing it there eliminates the LOGIN→CONFIGURATION wait window on 1.20.2+ that
-                // could exceed the 30s login timeout on slow networks.
-                // The duplicate block that used to fire it here has been removed.
+                if (pipelineData.minecraftProtocol >= 764) {
+                        ByteBuf ackBuf = ctx.alloc().buffer();
+                        try {
+                                BufferUtils.writeVarInt(ackBuf, 0x03);
+                                ctx.fireChannelRead(ackBuf.retain());
+                        } finally {
+                                ackBuf.release();
+                        }
+                }
                 vanillaInitializer.flushBufferedPackets(ctx);
                 pipeline.remove(PipelineTransformer.HANDLER_HANDSHAKE);
                 pipelineData.signalPlayState();
                 pipeline.fireUserEventTriggered(EnumPipelineEvent.EAGLER_ENTERED_PLAY_STATE);
+        }
+
+        @Override
+        public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
+                // CRITICAL: Don't let exceptions crash the connection silently.
+                // Netty's default behavior is to close the channel on any exception.
+                // For Eagler connections, this means a single malformed packet
+                // (truncated VarInt, buffer underflow, etc.) kills the player.
+                // Instead, log the error and terminate gracefully with an error code.
+                try {
+                        if (pipelineData.connectionLogger != null) {
+                                pipelineData.connectionLogger.error("EaglerXServer: caught exception in WebSocket handler", cause);
+                        } else {
+                                System.err.println("[EaglerXServer] caught exception in WebSocket handler: " + cause);
+                        }
+                } catch (Throwable ignored) {
+                }
+                // If we haven't terminated yet, send an error and close.
+                if (!terminated) {
+                        try {
+                                terminated = true;
+                                ctx.close();
+                        } catch (Throwable ignored) {
+                        }
+                }
         }
 
 }
