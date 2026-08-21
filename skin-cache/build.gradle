@@ -1,9 +1,0 @@
-
-plugins {
-	id "java-library"
-}
-
-dependencies {
-	compileOnly(libs.guava)
-	compileOnly(libs.bundles.netty.all)
-}
