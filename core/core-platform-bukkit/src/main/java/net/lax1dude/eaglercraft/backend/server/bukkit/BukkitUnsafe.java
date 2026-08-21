@@ -195,30 +195,54 @@ public class BukkitUnsafe {
         }
 
         public static Channel getPlayerChannel(Player playerObject) {
-                if (CLASS_CRAFTPLAYER_HANDLE.getAcquire() == null) {
-                        bindCraftPlayer(playerObject);
-                }
                 try {
+                        if (CLASS_CRAFTPLAYER_HANDLE.getAcquire() == null) {
+                                bindCraftPlayer(playerObject);
+                        }
                         return (Channel) field_NetworkManager_channel.get(field_PlayerConnection_networkManager
                                         .get(field_EntityPlayer_playerConnection.get(method_CraftPlayer_getHandle.invoke(playerObject))));
-                } catch (ReflectiveOperationException e) {
-                        throw Util.propagateReflectThrowable(e);
+                } catch (Throwable e) {
+                        // bindCraftPlayer can throw RuntimeException if a future Paper refactor
+                        // moves CraftPlayer.getHandle() — let it through cleanly with a clear message.
+                        if (e instanceof ReflectiveOperationException) {
+                                throw Util.propagateReflectThrowable((ReflectiveOperationException) e);
+                        }
+                        if (e instanceof RuntimeException) {
+                                throw (RuntimeException) e;
+                        }
+                        throw new RuntimeException("getPlayerChannel failed", e);
                 }
         }
 
         public static String getTexturesProperty(Player player) {
-                if (CLASS_CRAFTPLAYER_HANDLE.getAcquire() == null) {
-                        bindCraftPlayer(player);
-                }
                 try {
-                        Multimap<String, Property> props = ((GameProfile) method_EntityPlayer_getProfile
-                                        .invoke(method_CraftPlayer_getHandle.invoke(player))).getProperties();
+                        if (CLASS_CRAFTPLAYER_HANDLE.getAcquire() == null) {
+                                bindCraftPlayer(player);
+                        }
+                        // CRITICAL: Use AuthlibCompat to access GameProfile.getProperties() / .properties()
+                        // (authlib 9.x made GameProfile a record with properties() returning PropertyMap,
+                        // not getProperties() returning Multimap) AND to access Property.getValue() /
+                        // .value() (authlib 6.x renamed Property accessors). Both calls go through
+                        // reflection-cached MethodHandles so they work on all authlib versions.
+                        GameProfile profile = (GameProfile) method_EntityPlayer_getProfile
+                                        .invoke(method_CraftPlayer_getHandle.invoke(player));
+                        Multimap<String, Property> props = net.lax1dude.eaglercraft.backend.server.api.bukkit.compat.AuthlibCompat
+                                        .getProperties(profile);
+                        if (props == null) {
+                                return null;
+                        }
                         Collection<Property> tex = props.get("textures");
                         if (!tex.isEmpty()) {
-                                return tex.iterator().next().getValue();
+                                return net.lax1dude.eaglercraft.backend.server.api.bukkit.compat.AuthlibCompat
+                                                .getValue(tex.iterator().next());
                         }
                 } catch (ReflectiveOperationException e) {
                         throw Util.propagateReflectThrowable(e);
+                } catch (Throwable t) {
+                        // NoSuchMethodError, ClassCastException, etc. — log and return null so skins
+                        // subsystem degrades gracefully instead of kicking the player.
+                        System.err.println("[EaglerXServer] getTexturesProperty failed: " + t);
+                        return null;
                 }
                 return null;
         }
@@ -230,25 +254,72 @@ public class BukkitUnsafe {
 
                 private final Multimap<String, Property> props;
                 private final Object lock;
+                /**
+                 * The EntityPlayer/ServerPlayer instance whose GameProfile we're modifying.
+                 * Used on authlib 9.x where GameProfile is an immutable record — we need to
+                 * construct a new GameProfile with the modified properties and replace the
+                 * field on the EntityPlayer via reflection.
+                 */
+                private final Object entityPlayer;
+                /**
+                 * The original GameProfile. Used to construct a new GameProfile with modified
+                 * properties on authlib 9.x.
+                 */
+                private final GameProfile originalProfile;
 
                 protected PropertyInjector(Multimap<String, Property> props, Object lock) {
+                        this(props, lock, null, null);
+                }
+
+                protected PropertyInjector(Multimap<String, Property> props, Object lock, Object entityPlayer,
+                                GameProfile originalProfile) {
                         this.props = props;
                         this.lock = lock;
+                        this.entityPlayer = entityPlayer;
+                        this.originalProfile = originalProfile;
                 }
 
                 public void injectTexturesProperty(String texturesPropertyValue, String texturesPropertySignature) {
                         synchronized (lock) {
-                                props.removeAll("textures");
-                                props.put("textures",
-                                                new Property("textures", texturesPropertyValue, texturesPropertySignature));
+                                try {
+                                        props.removeAll("textures");
+                                        props.put("textures",
+                                                        new Property("textures", texturesPropertyValue, texturesPropertySignature));
+                                } catch (UnsupportedOperationException | IllegalArgumentException e) {
+                                        // authlib 9.x: PropertyMap is immutable (ImmutableMultimap.copyOf).
+                                        // Replace the entire GameProfile with a new one containing the
+                                        // modified properties.
+                                        replaceGameProfileOnEntityPlayer("textures", new Property("textures",
+                                                        texturesPropertyValue, texturesPropertySignature));
+                                }
                         }
                 }
 
                 public void injectIsEaglerPlayerProperty(boolean val) {
                         synchronized (lock) {
-                                props.removeAll("isEaglerPlayer");
-                                props.put("isEaglerPlayer", val ? isEaglerPlayerPropertyT : isEaglerPlayerPropertyF);
+                                try {
+                                        props.removeAll("isEaglerPlayer");
+                                        props.put("isEaglerPlayer", val ? isEaglerPlayerPropertyT : isEaglerPlayerPropertyF);
+                                } catch (UnsupportedOperationException | IllegalArgumentException e) {
+                                        // authlib 9.x: immutable PropertyMap — replace GameProfile.
+                                        replaceGameProfileOnEntityPlayer("isEaglerPlayer",
+                                                        val ? isEaglerPlayerPropertyT : isEaglerPlayerPropertyF);
+                                }
                         }
+                }
+
+                /**
+                 * Called when the existing GameProfile's PropertyMap is immutable (authlib 9.x).
+                 * Delegates to the outer class's static helper.
+                 */
+                private void replaceGameProfileOnEntityPlayer(String key, Property newProp) {
+                        if (originalProfile == null || entityPlayer == null) {
+                                System.err.println("[EaglerXServer] PropertyInjector: cannot replace GameProfile on authlib 9.x "
+                                                + "because originalProfile or entityPlayer is null — property '" + key
+                                                + "' will not be injected");
+                                return;
+                        }
+                        BukkitUnsafe.replaceGameProfileOnEntityPlayer(entityPlayer, props, originalProfile, key, newProp);
                 }
 
                 public void complete() {
@@ -257,26 +328,173 @@ public class BukkitUnsafe {
         }
 
         public static BukkitUnsafe.PropertyInjector propertyInjector(Player player) {
-                if (CLASS_CRAFTPLAYER_HANDLE.getAcquire() == null) {
-                        bindCraftPlayer(player);
-                }
                 try {
-                        GameProfile profile = (GameProfile) method_EntityPlayer_getProfile
-                                        .invoke(method_CraftPlayer_getHandle.invoke(player));
-                        return new PropertyInjector(profile.getProperties(), profile);
-                } catch (ReflectiveOperationException e) {
-                        throw Util.propagateReflectThrowable(e);
+                        if (CLASS_CRAFTPLAYER_HANDLE.getAcquire() == null) {
+                                bindCraftPlayer(player);
+                        }
+                        Object entityPlayer = method_CraftPlayer_getHandle.invoke(player);
+                        GameProfile profile = (GameProfile) method_EntityPlayer_getProfile.invoke(entityPlayer);
+                        // CRITICAL: use AuthlibCompat.getProperties() instead of profile.getProperties()
+                        // because authlib 9.x made GameProfile a record with properties() returning
+                        // PropertyMap (no getProperties() method).
+                        Multimap<String, Property> props = net.lax1dude.eaglercraft.backend.server.api.bukkit.compat.AuthlibCompat
+                                        .getProperties(profile);
+                        if (props == null) {
+                                throw new IllegalStateException("Could not get GameProfile properties via AuthlibCompat");
+                        }
+                        // Pass the entityPlayer and originalProfile so that on authlib 9.x (where
+                        // PropertyMap is immutable), the PropertyInjector can construct a new
+                        // GameProfile with the modified properties and replace the field on the
+                        // EntityPlayer via reflection.
+                        return new PropertyInjector(props, profile, entityPlayer, profile);
+                } catch (Throwable e) {
+                        if (e instanceof ReflectiveOperationException) {
+                                throw Util.propagateReflectThrowable((ReflectiveOperationException) e);
+                        }
+                        if (e instanceof RuntimeException) {
+                                throw (RuntimeException) e;
+                        }
+                        throw new RuntimeException("propertyInjector failed", e);
                 }
         }
 
-        public static Object getHandle(Player player) {
+        /**
+         * Injects a (key, property) pair into the EntityPlayer's GameProfile, transparently
+         * handling all authlib versions:
+         * <ul>
+         * <li>authlib 1.x-6.x: the PropertyMap returned by {@code getProperties()} is mutable,
+         *     so we just call {@code props.put(key, property)} after {@code props.removeAll(key)}.</li>
+         * <li>authlib 9.x: the PropertyMap returned by {@code properties()} is immutable
+         *     (ImmutableMultimap.copyOf). We construct a new GameProfile with the modified
+         *     properties and replace the {@code gameProfile} field on the EntityPlayer via
+         *     reflection.</li>
+         * </ul>
+         *
+         * <p>Returns the Property that was injected (useful for tracking the marker to remove
+         * it later), or {@code null} on failure.
+         */
+        public static Property injectProfileProperty(Object entityPlayer, String key, String value, String signature) {
                 if (CLASS_CRAFTPLAYER_HANDLE.getAcquire() == null) {
-                        bindCraftPlayer(player);
+                        // bindCraftPlayer requires a Player object, not an EntityPlayer; we can't bind here.
+                        // Caller should have already bound via getPlayerChannel/propertyInjector/getHandle/etc.
+                        // Best-effort: return null.
+                        return null;
                 }
                 try {
+                        GameProfile profile = (GameProfile) method_EntityPlayer_getProfile.invoke(entityPlayer);
+                        Multimap<String, Property> props = net.lax1dude.eaglercraft.backend.server.api.bukkit.compat.AuthlibCompat
+                                        .getProperties(profile);
+                        if (props == null) {
+                                return null;
+                        }
+                        Property newProp = net.lax1dude.eaglercraft.backend.server.api.bukkit.compat.AuthlibCompat
+                                        .createProperty(key, value, signature);
+                        try {
+                                // Try mutable path first (authlib 1.x-6.x)
+                                props.removeAll(key);
+                                props.put(key, newProp);
+                                // Verify the put actually succeeded (authlib 9.x silently no-ops)
+                                if (!net.lax1dude.eaglercraft.backend.server.api.bukkit.compat.AuthlibCompat
+                                                .containsKey(props, key)) {
+                                        // Silent no-op — fall back to immutable path.
+                                        throw new UnsupportedOperationException("PropertyMap is immutable");
+                                }
+                                return newProp;
+                        } catch (UnsupportedOperationException | IllegalArgumentException e) {
+                                // authlib 9.x immutable path — replace GameProfile entirely.
+                                return replaceGameProfileOnEntityPlayer(entityPlayer, props, profile, key, newProp);
+                        }
+                } catch (Throwable t) {
+                        System.err.println("[EaglerXServer] injectProfileProperty failed for key '" + key + "': " + t);
+                        return null;
+                }
+        }
+
+        /**
+         * Helper for {@link #injectProfileProperty} — constructs a new GameProfile with the
+         * modified properties and replaces the {@code gameProfile} field on the EntityPlayer.
+         * Used on authlib 9.x where PropertyMap is immutable.
+         */
+        private static Property replaceGameProfileOnEntityPlayer(Object entityPlayer, Multimap<String, Property> props,
+                        GameProfile originalProfile, String key, Property newProp) {
+                try {
+                        // Build a new mutable PropertyMap with the original properties plus the new one.
+                        com.google.common.collect.LinkedListMultimap<String, Property> mutableProps =
+                                        com.google.common.collect.LinkedListMultimap.create();
+                        for (java.util.Map.Entry<String, Property> e : props.entries()) {
+                                if (!e.getKey().equals(key)) {
+                                        mutableProps.put(e.getKey(), e.getValue());
+                                }
+                        }
+                        mutableProps.put(key, newProp);
+                        // Construct a new PropertyMap with the mutable copy
+                        Class<?> propertyMapClass = Class.forName("com.mojang.authlib.properties.PropertyMap");
+                        java.lang.reflect.Constructor<?> ctor = propertyMapClass.getConstructor(
+                                        com.google.common.collect.Multimap.class);
+                        Object newPropertyMap = ctor.newInstance(mutableProps);
+                        // Construct a new GameProfile with the same id, name, and new PropertyMap
+                        java.lang.reflect.Constructor<?> gpCtor = GameProfile.class.getDeclaredConstructor(
+                                        java.util.UUID.class, String.class, propertyMapClass);
+                        gpCtor.setAccessible(true);
+                        // CRITICAL: use AuthlibCompat.getProfileId() / getProfileName() instead of
+                        // originalProfile.getId() / .getName() because authlib 9.x made GameProfile
+                        // a record and removed the getId()/getName() methods (replaced with id() /
+                        // name() record accessors). A direct bytecode call throws NoSuchMethodError.
+                        java.util.UUID profileId = net.lax1dude.eaglercraft.backend.server.api.bukkit.compat.AuthlibCompat
+                                        .getProfileId(originalProfile);
+                        String profileName = net.lax1dude.eaglercraft.backend.server.api.bukkit.compat.AuthlibCompat
+                                        .getProfileName(originalProfile);
+                        if (profileId == null || profileName == null) {
+                                System.err.println("[EaglerXServer] replaceGameProfileOnEntityPlayer: could not get profile id/name "
+                                                + "via AuthlibCompat — property '" + key + "' will not be injected");
+                                return null;
+                        }
+                        GameProfile newProfile = (GameProfile) gpCtor.newInstance(profileId, profileName, newPropertyMap);
+                        // Find the gameProfile field on the EntityPlayer (or its superclass Player)
+                        Field gameProfileField = findGameProfileField(entityPlayer.getClass());
+                        if (gameProfileField == null) {
+                                System.err.println("[EaglerXServer] could not locate gameProfile field on "
+                                                + entityPlayer.getClass().getName() + " — property '" + key
+                                                + "' will not be injected");
+                                return null;
+                        }
+                        gameProfileField.set(entityPlayer, newProfile);
+                        return newProp;
+                } catch (Throwable t) {
+                        System.err.println("[EaglerXServer] replaceGameProfileOnEntityPlayer failed for key '"
+                                        + key + "': " + t);
+                        return null;
+                }
+        }
+
+        private static Field findGameProfileField(Class<?> entityPlayerClass) {
+                Class<?> walk = entityPlayerClass;
+                while (walk != null && walk != Object.class) {
+                        for (Field f : walk.getDeclaredFields()) {
+                                if (f.getType() == GameProfile.class) {
+                                        f.setAccessible(true);
+                                        return f;
+                                }
+                        }
+                        walk = walk.getSuperclass();
+                }
+                return null;
+        }
+
+        public static Object getHandle(Player player) {
+                try {
+                        if (CLASS_CRAFTPLAYER_HANDLE.getAcquire() == null) {
+                                bindCraftPlayer(player);
+                        }
                         return method_CraftPlayer_getHandle.invoke(player);
-                } catch (ReflectiveOperationException e) {
-                        throw Util.propagateReflectThrowable(e);
+                } catch (Throwable e) {
+                        if (e instanceof ReflectiveOperationException) {
+                                throw Util.propagateReflectThrowable((ReflectiveOperationException) e);
+                        }
+                        if (e instanceof RuntimeException) {
+                                throw (RuntimeException) e;
+                        }
+                        throw new RuntimeException("getHandle failed", e);
                 }
         }
 
@@ -325,23 +543,41 @@ public class BukkitUnsafe {
         }
 
         public static void addPlayerChannel(Player player, String ch) {
-                if (CLASS_CRAFTPLAYER_HANDLE.getAcquire() == null) {
-                        bindCraftPlayer(player);
-                }
-                if (method_CraftPlayer_addChannel == null) {
-                        // addChannel was removed from CraftPlayer in 1.20+ — no-op
-                        return;
-                }
                 try {
+                        if (CLASS_CRAFTPLAYER_HANDLE.getAcquire() == null) {
+                                bindCraftPlayer(player);
+                        }
+                        if (method_CraftPlayer_addChannel == null) {
+                                // addChannel was removed from CraftPlayer in 1.20+ — no-op
+                                return;
+                        }
                         method_CraftPlayer_addChannel.invoke(player, ch);
-                } catch (ReflectiveOperationException e) {
-                        throw Util.propagateReflectThrowable(e);
+                } catch (Throwable e) {
+                        if (e instanceof ReflectiveOperationException) {
+                                throw Util.propagateReflectThrowable((ReflectiveOperationException) e);
+                        }
+                        if (e instanceof RuntimeException) {
+                                throw (RuntimeException) e;
+                        }
+                        throw new RuntimeException("addPlayerChannel failed", e);
                 }
         }
 
         private static class CleanupList implements Consumer<ChannelInitializerHijacker>, Runnable {
 
                 protected List<ChannelInitializerHijacker> cleanup = new ArrayList<>();
+
+                /**
+                 * Captured on construction so that {@code run()} can restore the original
+                 * {@code List<ChannelFuture>} back into the ServerConnection field when
+                 * the plugin is disabled. Without this, every PlugMan {@code /reload}
+                 * stacks a new ForwardingList on top of the previous one, and the field
+                 * never gets back its original list. After N reloads the field holds N
+                 * nested ForwardingLists and {@code add()} becomes O(N).
+                 */
+                protected Field restoreField;
+                protected Object restoreTarget;
+                protected List<ChannelFuture> restoreOriginalList;
 
                 @Override
                 public void accept(ChannelInitializerHijacker c) {
@@ -363,6 +599,41 @@ public class BukkitUnsafe {
                         }
                         for (ChannelInitializerHijacker c : cc) {
                                 c.deactivate();
+                        }
+                        // Restore the original List<ChannelFuture> back into the ServerConnection
+                        // field. This unwinds the ForwardingList wrapper we installed, so a
+                        // subsequent reload starts from a clean state instead of stacking another
+                        // wrapper. If restore fails (e.g. field was already mutated by another
+                        // plugin), we silently leave it — better than throwing on disable.
+                        //
+                        // CRITICAL: Only restore if the field still contains OUR wrapper. If another
+                        // plugin (Geyser, Floodgate) wrapped our ForwardingList with their own, blindly
+                        // restoring would clobber their wrapper and break their channel init flow.
+                        if (restoreField != null && restoreTarget != null && restoreOriginalList != null) {
+                                try {
+                                        Object current = restoreField.get(restoreTarget);
+                                        // Only restore if the current value is the ForwardingList we installed.
+                                        // We can't compare by reference because the ForwardingList is an
+                                        // anonymous class created in injectChannelInitializerOld; compare by
+                                        // class name + delegate identity instead. If anything looks different,
+                                        // leave the field alone — the new plugin's wrapper stays in place.
+                                        if (current != null && current.getClass().getName().contains("ForwardingList")
+                                                        && current != restoreOriginalList) {
+                                                // Looks like our wrapper — safe to restore.
+                                                restoreField.set(restoreTarget, restoreOriginalList);
+                                        } else if (current == restoreOriginalList) {
+                                                // Already restored — nothing to do.
+                                        } else {
+                                                // Some other plugin replaced the list — leave it alone.
+                                                System.err.println(
+                                                                "[EaglerXServer] ServerConnection channel futures list was replaced by another plugin; not restoring original to avoid clobbering their wrapper.");
+                                        }
+                                } catch (Throwable t) {
+                                        System.err.println("[EaglerXServer] Could not restore original channel futures list: " + t);
+                                }
+                                restoreField = null;
+                                restoreTarget = null;
+                                restoreOriginalList = null;
                         }
                 }
 
@@ -458,6 +729,12 @@ public class BukkitUnsafe {
                         }
                         CleanupList cleanupList = new CleanupList();
                         final List<ChannelFuture> oldList = (List<ChannelFuture>) channelFuturesList.get(serverConnection);
+                        // Capture the field+target+originalList so the cleanup Runnable can restore
+                        // the original (non-wrapped) list on disable. Without this, PlugMan reload
+                        // stacks a new ForwardingList on every plugin reload.
+                        cleanupList.restoreField = channelFuturesList;
+                        cleanupList.restoreTarget = serverConnection;
+                        cleanupList.restoreOriginalList = oldList;
                         for (ChannelFuture ch : oldList) {
                                 injectChannelInitializer(ch, listener, initHandler, cleanupList);
                         }
@@ -536,8 +813,20 @@ public class BukkitUnsafe {
                         parent = (ChannelInitializer<Channel>) foundField.get(foundHandler);
                         initChannel = Util.findDeclaredMethod(parent.getClass(), "initChannel", Channel.class);
                         initChannel.setAccessible(true);
-                } catch (ReflectiveOperationException e) {
-                        throw Util.propagateReflectThrowable(e);
+                } catch (Throwable e) {
+                        // Widened from ReflectiveOperationException: a ClassCastException if Paper
+                        // refactored the field type, an NPE if foundField is null, or any other
+                        // Throwable must not abort plugin startup with a misleading message.
+                        if (e instanceof ReflectiveOperationException) {
+                                throw Util.propagateReflectThrowable((ReflectiveOperationException) e);
+                        }
+                        if (e instanceof RuntimeException) {
+                                throw (RuntimeException) e;
+                        }
+                        if (e instanceof Error) {
+                                throw (Error) e;
+                        }
+                        throw new RuntimeException("injectInto failed to bind parent initializer", e);
                 }
                 ChannelInitializerHijacker newInit = new ChannelInitializerHijacker(init) {
 
@@ -545,8 +834,17 @@ public class BukkitUnsafe {
                         protected void callParent(Channel channel) {
                                 try {
                                         initChannel.invoke(parent, channel);
-                                } catch (ReflectiveOperationException e) {
-                                        throw Util.propagateReflectThrowable(e);
+                                } catch (Throwable e) {
+                                        if (e instanceof ReflectiveOperationException) {
+                                                throw Util.propagateReflectThrowable((ReflectiveOperationException) e);
+                                        }
+                                        if (e instanceof RuntimeException) {
+                                                throw (RuntimeException) e;
+                                        }
+                                        if (e instanceof Error) {
+                                                throw (Error) e;
+                                        }
+                                        throw new RuntimeException("callParent failed", e);
                                 }
                         }
 
@@ -555,8 +853,14 @@ public class BukkitUnsafe {
                                 Object newInitializer;
                                 try {
                                         newInitializer = foundField.get(foundHandler);
-                                } catch (IllegalArgumentException | IllegalAccessException e) {
-                                        throw Util.propagateReflectThrowable(e);
+                                } catch (Throwable e) {
+                                        if (e instanceof RuntimeException) {
+                                                throw (RuntimeException) e;
+                                        }
+                                        if (e instanceof Error) {
+                                                throw (Error) e;
+                                        }
+                                        throw new RuntimeException("reInject failed to read foundField", e);
                                 }
                                 if (this != newInitializer) {
                                         System.err.println("Detected another plugin's channel initializer ("
@@ -573,8 +877,17 @@ public class BukkitUnsafe {
                 };
                 try {
                         foundField.set(foundHandler, newInit);
-                } catch (ReflectiveOperationException e) {
-                        throw Util.propagateReflectThrowable(e);
+                } catch (Throwable e) {
+                        if (e instanceof ReflectiveOperationException) {
+                                throw Util.propagateReflectThrowable((ReflectiveOperationException) e);
+                        }
+                        if (e instanceof RuntimeException) {
+                                throw (RuntimeException) e;
+                        }
+                        if (e instanceof Error) {
+                                throw (Error) e;
+                        }
+                        throw new RuntimeException("injectInto failed to set newInit", e);
                 }
                 cleanupCallback.accept(newInit);
         }

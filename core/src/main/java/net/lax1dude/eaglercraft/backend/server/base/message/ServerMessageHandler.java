@@ -36,7 +36,7 @@ public abstract class ServerMessageHandler implements MessageController.IMessage
 	@Override
 	public void handleException(Exception ex) {
 		EaglerXServer<?> server = getServer();
-		server.logger().error("Exception thrown while handling eagler packet for \"" + eaglerHandle.getUsername() + "\"!", ex);
+		server.logger().warn("Transient packet error for \"" + eaglerHandle.getUsername() + "\"!", ex);
 		eaglerHandle.disconnect(server.componentBuilder().buildTextComponent().beginStyle().color(EnumChatColor.RED)
 				.end().text("Eaglercraft Packet Error").end());
 	}

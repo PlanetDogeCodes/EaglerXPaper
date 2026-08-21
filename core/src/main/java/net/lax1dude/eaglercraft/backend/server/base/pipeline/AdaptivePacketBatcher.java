@@ -80,9 +80,13 @@ public class AdaptivePacketBatcher extends ChannelDuplexHandler {
 
     /**
      * Creates a batcher with sensible defaults for Eaglercraft connections.
+     * burstThreshold=16 (was 20) — activates batching only during real bursts
+     * (chunk loading), not during normal chat/heartbeat traffic.
+     * maxDelayMs=2 (was 20) — 2ms is enough to batch without noticeable lag.
+     * maxBufferSize=16 (was 64) — flushes more frequently during bursts.
      */
     public AdaptivePacketBatcher() {
-        this(20, 100, 20, 200, 64);
+        this(16, 100, 2, 200, 16);
     }
 
     @Override

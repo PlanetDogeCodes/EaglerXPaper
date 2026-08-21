@@ -116,18 +116,18 @@ public abstract class HandshakerInstance implements IHandshaker {
                                                         obj = server.componentBuilder().buildTranslationComponent().translation("disconnect.closed")
                                                                         .end();
                                                 }
-                                                state = HandshakePacketTypes.STATE_CLIENT_COMPLETE;
+                                                
                                                 inboundHandler.terminateErrorCode(ctx, getVersion(),
                                                                 HandshakePacketTypes.SERVER_ERROR_CUSTOM_MESSAGE, obj);
                                         }
                                 } else {
-                                        state = HandshakePacketTypes.STATE_CLIENT_COMPLETE;
+                                        
                                         inboundHandler.terminateInternalError(ctx, getVersion());
                                         pipelineData.connectionLogger.error("Caught exception dispatching client brand event", err);
                                 }
                         }));
                 } else {
-                        state = HandshakePacketTypes.STATE_CLIENT_COMPLETE;
+                        
                         inboundHandler.terminateErrorCode(ctx, getVersion(), HandshakePacketTypes.SERVER_ERROR_WRONG_PACKET,
                                         "Wrong Initial Packet");
                 }
@@ -136,7 +136,7 @@ public abstract class HandshakerInstance implements IHandshaker {
         private void continueHandshakeInit(ChannelHandlerContext ctx) {
                 if (server.isAuthenticationEventsEnabled()) {
                         if (getVersion() <= 1 || pipelineData.handshakeAuthUsername == null) {
-                                state = HandshakePacketTypes.STATE_CLIENT_COMPLETE;
+                                
                                 inboundHandler.terminateErrorCode(ctx, getVersion(), HandshakePacketTypes.SERVER_ERROR_CUSTOM_MESSAGE,
                                                 "Outdated Client (Authentication Required)");
                                 return;
@@ -148,9 +148,6 @@ public abstract class HandshakerInstance implements IHandshaker {
                                         IEaglercraftAuthCheckRequiredEvent.EnumAuthResponse response = evt.getAuthRequired();
                                         if (response == null) {
                                                 // No plugin handled the auth event — default to SKIP (allow login)
-                                                // instead of terminating with an internal error. This prevents
-                                                // "Auth required check event was not handled" from killing
-                                                // every Eagler connection when no auth plugin is installed.
                                                 state = HandshakePacketTypes.STATE_CLIENT_VERSION;
                                                 inboundHandler.canSendV3Kick = true;
                                                 sendPacketVersionNoAuth(ctx, pipelineData.handshakeProtocol,
@@ -171,7 +168,7 @@ public abstract class HandshakerInstance implements IHandshaker {
                                                         break;
                                                 case REQUIRE:
                                                         if (pipelineData.authType == (byte) 0) {
-                                                                state = HandshakePacketTypes.STATE_CLIENT_COMPLETE;
+                                                                
                                                                 inboundHandler.terminateInternalError(ctx, getVersion());
                                                                 pipelineData.connectionLogger
                                                                                 .error("Auth required check event handler did not provide auth type");
@@ -180,7 +177,7 @@ public abstract class HandshakerInstance implements IHandshaker {
                                                         if (!pipelineData.handshakeAuthEnabled
                                                                         && (getVersion() < 4 || !pipelineData.cookieAuthEventEnabled)) {
                                                                 inboundHandler.terminated = true;
-                                                                state = HandshakePacketTypes.STATE_CLIENT_COMPLETE;
+                                                                
                                                                 sendPacketAuthRequired(ctx, pipelineData.authType, evt.getAuthMessage())
                                                                                 .addListener(ChannelFutureListener.CLOSE);
                                                                 break;
@@ -193,7 +190,7 @@ public abstract class HandshakerInstance implements IHandshaker {
                                                                         server.getServerVersion(), pipelineData.authType, evt.getSaltingData(),
                                                                         evt.isNicknameSelectionEnabled());
                                                         if (future == null) {
-                                                                state = HandshakePacketTypes.STATE_CLIENT_COMPLETE;
+                                                                
                                                         }
                                                         break;
                                                 case DENY:
@@ -202,14 +199,14 @@ public abstract class HandshakerInstance implements IHandshaker {
                                                                 obj = server.componentBuilder().buildTranslationComponent()
                                                                                 .translation("disconnect.closed").end();
                                                         }
-                                                        state = HandshakePacketTypes.STATE_CLIENT_COMPLETE;
+                                                        
                                                         inboundHandler.terminateErrorCode(ctx, getVersion(),
                                                                         HandshakePacketTypes.SERVER_ERROR_CUSTOM_MESSAGE, obj);
                                                         break;
                                                 }
                                         }
                                 } else {
-                                        state = HandshakePacketTypes.STATE_CLIENT_COMPLETE;
+                                        
                                         inboundHandler.terminateInternalError(ctx, getVersion());
                                         pipelineData.connectionLogger
                                                         .error("Caught exception dispatching auth required check event", err);
@@ -274,7 +271,7 @@ public abstract class HandshakerInstance implements IHandshaker {
                         }
 
                         if (!USERNAME_REGEX.matcher(username).matches()) {
-                                state = HandshakePacketTypes.STATE_CLIENT_COMPLETE;
+                                
                                 inboundHandler.terminateErrorCode(ctx, getVersion(), HandshakePacketTypes.SERVER_ERROR_CUSTOM_MESSAGE,
                                                 "Invalid Username");
                                 return;
@@ -300,7 +297,7 @@ public abstract class HandshakerInstance implements IHandshaker {
                                 } else if (pipelineData.cookieAuthEventEnabled) {
                                         continueLoginCookieAuth(ctx, requestedUsername);
                                 } else {
-                                        state = HandshakePacketTypes.STATE_CLIENT_COMPLETE;
+                                        
                                         inboundHandler.terminateErrorCode(ctx, getVersion(), HandshakePacketTypes.SERVER_ERROR_WRONG_PACKET,
                                                         "Missing Login Packet Password");
                                 }
@@ -310,7 +307,7 @@ public abstract class HandshakerInstance implements IHandshaker {
                                 handleContinueLogin(ctx);
                         }
                 } else {
-                        state = HandshakePacketTypes.STATE_CLIENT_COMPLETE;
+                        
                         inboundHandler.terminateErrorCode(ctx, getVersion(), HandshakePacketTypes.SERVER_ERROR_WRONG_PACKET,
                                         "Wrong Request Login Packet");
                 }
@@ -448,7 +445,7 @@ public abstract class HandshakerInstance implements IHandshaker {
                                 pipelineData.requestedServer, inEventLoop(ctx.channel(), (evt, err) -> {
                         IEaglercraftAuthPasswordEvent.EnumAuthResponse response = evt.getAuthResponse();
                         if (response == null) {
-                                state = HandshakePacketTypes.STATE_CLIENT_COMPLETE;
+                                
                                 inboundHandler.terminateInternalError(ctx, getVersion());
                                 pipelineData.connectionLogger.error("Auth password event was not handled");
                         } else if (response == IEaglercraftAuthPasswordEvent.EnumAuthResponse.ALLOW) {
@@ -468,7 +465,7 @@ public abstract class HandshakerInstance implements IHandshaker {
                                                         .end();
                                 }
                                 final Object obj2 = obj;
-                                state = HandshakePacketTypes.STATE_CLIENT_COMPLETE;
+                                
                                 sendPacketDenyLogin(ctx, obj2).addListener(ChannelFutureListener.CLOSE);
                         }
                 }));
@@ -482,7 +479,7 @@ public abstract class HandshakerInstance implements IHandshaker {
                                 inEventLoop(ctx.channel(), (evt, err) -> {
                         IEaglercraftAuthCookieEvent.EnumAuthResponse response = evt.getAuthResponse();
                         if (response == null) {
-                                state = HandshakePacketTypes.STATE_CLIENT_COMPLETE;
+                                
                                 inboundHandler.terminateInternalError(ctx, getVersion());
                                 pipelineData.connectionLogger.error("Auth cookie event was not handled");
                                 return;
@@ -506,12 +503,12 @@ public abstract class HandshakerInstance implements IHandshaker {
                                                         .end();
                                 }
                                 final Object obj2 = obj;
-                                state = HandshakePacketTypes.STATE_CLIENT_COMPLETE;
+                                
                                 sendPacketDenyLogin(ctx, obj2).addListener(ChannelFutureListener.CLOSE);
                                 break;
                         case REQUIRE_AUTH:
                                 inboundHandler.terminated = true;
-                                state = HandshakePacketTypes.STATE_CLIENT_COMPLETE;
+                                
                                 sendPacketAuthRequired(ctx, pipelineData.authType, evt.getAuthMessage())
                                                 .addListener(ChannelFutureListener.CLOSE);
                                 break;
@@ -529,7 +526,7 @@ public abstract class HandshakerInstance implements IHandshaker {
                                 inEventLoop(ctx.channel(), (evt, err) -> {
                         if (err == null) {
                                 if (evt.isCancelled()) {
-                                        state = HandshakePacketTypes.STATE_CLIENT_COMPLETE;
+                                        
                                         Object kickMsg = evt.getMessage();
                                         if (kickMsg == null) {
                                                 String redirectAddr = evt.getRedirectAddress();
@@ -562,7 +559,7 @@ public abstract class HandshakerInstance implements IHandshaker {
                                         inboundHandler.beginBackendHandshake(ctx);
                                 }
                         } else {
-                                state = HandshakePacketTypes.STATE_CLIENT_COMPLETE;
+                                
                                 inboundHandler.terminateInternalError(ctx, getVersion());
                                 pipelineData.connectionLogger.error("Caught exception dispatching login event", err);
                         }
@@ -611,16 +608,16 @@ public abstract class HandshakerInstance implements IHandshaker {
                                 pipelineData.profileDatas = new HashMap<>(4);
                                 pipelineData.profileDatas.put(key, value);
                         } else if (pipelineData.profileDatas.size() >= 8) {
-                                state = HandshakePacketTypes.STATE_CLIENT_COMPLETE;
+                                
                                 inboundHandler.terminateErrorCode(ctx, getVersion(),
                                                 HandshakePacketTypes.SERVER_ERROR_EXCESSIVE_PROFILE_DATA, "Too Many Profile Datas");
                         } else if (pipelineData.profileDatas.putIfAbsent(key, value) != null) {
-                                state = HandshakePacketTypes.STATE_CLIENT_COMPLETE;
+                                
                                 inboundHandler.terminateErrorCode(ctx, getVersion(),
                                                 HandshakePacketTypes.SERVER_ERROR_DUPLICATE_PROFILE_DATA, "Duplicate Profile Data");
                         }
                 } else {
-                        state = HandshakePacketTypes.STATE_CLIENT_COMPLETE;
+                        
                         inboundHandler.terminateErrorCode(ctx, getVersion(), HandshakePacketTypes.SERVER_ERROR_WRONG_PACKET,
                                         "Wrong Profile Data Packet");
                 }
@@ -631,7 +628,7 @@ public abstract class HandshakerInstance implements IHandshaker {
                         state = HandshakePacketTypes.STATE_STALLING;
                         inboundHandler.enterPlayState(ctx);
                 } else {
-                        state = HandshakePacketTypes.STATE_CLIENT_COMPLETE;
+                        
                         inboundHandler.terminateErrorCode(ctx, getVersion(), HandshakePacketTypes.SERVER_ERROR_WRONG_PACKET,
                                         "Wrong Finish Login Packet");
                 }
@@ -640,7 +637,7 @@ public abstract class HandshakerInstance implements IHandshaker {
         protected abstract ChannelFuture sendPacketFinishLogin(ChannelHandlerContext ctx);
 
         public void finish(ChannelHandlerContext ctx) {
-                state = HandshakePacketTypes.STATE_CLIENT_COMPLETE;
+                
                 sendPacketFinishLogin(ctx);
         }
 
