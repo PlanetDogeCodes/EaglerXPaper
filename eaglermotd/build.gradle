@@ -1,0 +1,63 @@
+
+plugins {
+	id "java-library"
+	id "com.gradleup.shadow" version "8.3.6"
+}
+
+configurations {
+	platformBukkit
+	platformBungee
+	platformVelocity
+}
+
+dependencies {
+	platformBukkit project(":eaglermotd:eaglermotd-platform-bukkit")
+	platformBungee project(":eaglermotd:eaglermotd-platform-bungee")
+	platformVelocity project(":eaglermotd:eaglermotd-platform-velocity")
+	compileOnly project(":api")
+	compileOnly(libs.guava)
+	compileOnly(libs.gson)
+	compileOnly(libs.slf4j)
+}
+
+tasks.named("shadowJar", com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar) {
+	group "shadow"
+	description "Builds the JAR for all supported platforms"
+	configurations = [
+		project.configurations.runtimeClasspath,
+		project.configurations.platformBukkit,
+		project.configurations.platformBungee,
+		project.configurations.platformVelocity
+	]
+	archiveFileName = "EaglerMOTD.jar"
+}
+
+tasks.register("shadowJarBukkit", com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar) {
+	group "shadow"
+	description "Builds the JAR for Bukkit platforms"
+	configurations = [
+		project.configurations.runtimeClasspath,
+		project.configurations.platformBukkit
+	]
+	archiveFileName = "EaglerMOTD-Bukkit.jar"
+}
+
+tasks.register("shadowJarBungee", com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar) {
+	group "shadow"
+	description "Builds the JAR for Bungee platforms"
+	configurations = [
+		project.configurations.runtimeClasspath,
+		project.configurations.platformBungee
+	]
+	archiveFileName = "EaglerMOTD-Bungee.jar"
+}
+
+tasks.register("shadowJarVelocity", com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar) {
+	group "shadow"
+	description "Builds the JAR for Velocity platforms"
+	configurations = [
+		project.configurations.runtimeClasspath,
+		project.configurations.platformVelocity
+	]
+	archiveFileName = "EaglerMOTD-Velocity.jar"
+}

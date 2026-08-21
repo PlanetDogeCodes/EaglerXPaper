@@ -1,0 +1,10 @@
+
+plugins {
+	id "java-library"
+}
+
+dependencies {
+	compileOnly(libs.velocity.api)
+	compileOnly(libs.bungeecord.api)
+	compileOnly(libs.bundles.netty.all)
+}
