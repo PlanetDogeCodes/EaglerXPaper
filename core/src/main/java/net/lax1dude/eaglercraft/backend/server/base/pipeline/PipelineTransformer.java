@@ -153,15 +153,9 @@ public class PipelineTransformer {
                 String bungeeHack = null;
                 for (IPipelineComponent comp : components) {
                         if (VANILLA_FRAME_DECODERS.contains(comp.getIdentifiedType())) {
-                                // CRITICAL: Don't remove the splitter/prepender on MC 1.20.2+.
+                                // CRITICAL: Keep splitter/prepender for Eaglercraft connections.
                                 // Connection.setupCompression() calls pipeline.addAfter("splitter", ...)
                                 // which throws NoSuchElementException if the splitter was removed.
-                                // On 1.20.2+, we need to keep the vanilla frame handlers in the
-                                // pipeline so setupCompression can find them. The WebSocket frame
-                                // codec handles actual framing — the vanilla handlers are harmless
-                                // pass-throughs for BinaryWebSocketFrame messages.
-                                // On 1.12-1.20.1, we still remove them (the EaglerError mechanism
-                                // handles compression suppression via the NM proxy).
                                 if (!pipelineData.isCompressionDisable()) {
                                         pipeline.remove(comp.getHandle());
                                 }
@@ -227,7 +221,6 @@ public class PipelineTransformer {
                 IPipelineComponent haproxy = null;
                 for (IPipelineComponent comp : components) {
                         if (VANILLA_FRAME_DECODERS.contains(comp.getIdentifiedType())) {
-                                // Same fix as injectSingleStack: keep splitter/prepender for Eaglercraft
                                 if (!pipelineData.isCompressionDisable()) {
                                         toRemove.add(comp.getHandle());
                                 }

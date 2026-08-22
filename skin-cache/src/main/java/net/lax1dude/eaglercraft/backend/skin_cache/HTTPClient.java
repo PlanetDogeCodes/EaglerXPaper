@@ -56,207 +56,229 @@ import io.netty.handler.timeout.ReadTimeoutHandler;
 
 public class HTTPClient implements IHTTPClient {
 
-	public static final int MAX_REDIRECTS = 8;
+        public static final int MAX_REDIRECTS = 8;
 
-	private static class RedirectTracker {
-		private int redirects = 0;
-		private String method;
+        private static class RedirectTracker {
+                private int redirects = 0;
+                private String method;
 
-		private RedirectTracker(String method) {
-			this.method = method;
-		}
-	}
+                private RedirectTracker(String method) {
+                        this.method = method;
+                }
+        }
 
-	private class NettyHttpChannelFutureListener implements ChannelFutureListener {
+        private class NettyHttpChannelFutureListener implements ChannelFutureListener {
 
-		protected final String method;
-		protected final URI requestURI;
-		protected final Consumer<Response> responseCallback;
+                protected final String method;
+                protected final URI requestURI;
+                protected final Consumer<Response> responseCallback;
 
-		protected NettyHttpChannelFutureListener(String method, URI requestURI, Consumer<Response> responseCallback) {
-			this.method = method;
-			this.requestURI = requestURI;
-			this.responseCallback = responseCallback;
-		}
+                protected NettyHttpChannelFutureListener(String method, URI requestURI, Consumer<Response> responseCallback) {
+                        this.method = method;
+                        this.requestURI = requestURI;
+                        this.responseCallback = responseCallback;
+                }
 
-		@Override
-		public void operationComplete(ChannelFuture future) throws Exception {
-			if (future.isSuccess()) {
-				String path = requestURI.getRawPath()
-						+ ((requestURI.getRawQuery() == null) ? "" : ("?" + requestURI.getRawQuery()));
-				HttpRequest request = new DefaultHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.valueOf(method), path);
-				request.headers().set(HttpHeaderNames.HOST, requestURI.getHost());
-				request.headers().set(HttpHeaderNames.USER_AGENT, userAgent);
-				future.channel().writeAndFlush(request);
-			} else {
-				addressCache.invalidate(requestURI.getHost());
-				responseCallback.accept(new Response(new IOException("Connection failed")));
-			}
-		}
+                @Override
+                public void operationComplete(ChannelFuture future) throws Exception {
+                        if (future.isSuccess()) {
+                                String path = requestURI.getRawPath()
+                                                + ((requestURI.getRawQuery() == null) ? "" : ("?" + requestURI.getRawQuery()));
+                                HttpRequest request = new DefaultHttpRequest(HttpVersion.HTTP_1_1, HttpMethod.valueOf(method), path);
+                                request.headers().set(HttpHeaderNames.HOST, requestURI.getHost());
+                                request.headers().set(HttpHeaderNames.USER_AGENT, userAgent);
+                                future.channel().writeAndFlush(request);
+                        } else {
+                                addressCache.invalidate(requestURI.getHost());
+                                responseCallback.accept(new Response(new IOException("Connection failed")));
+                        }
+                }
 
-	}
+        }
 
-	private class NettyHttpChannelInitializer extends ChannelInitializer<Channel> {
+        private class NettyHttpChannelInitializer extends ChannelInitializer<Channel> {
 
-		protected final Consumer<Response> responseCallback;
-		protected final RedirectTracker redirectTracker;
-		protected final boolean ssl;
-		protected final String host;
-		protected final int port;
+                protected final Consumer<Response> responseCallback;
+                protected final RedirectTracker redirectTracker;
+                protected final boolean ssl;
+                protected final String host;
+                protected final int port;
 
-		protected NettyHttpChannelInitializer(Consumer<Response> responseCallback, RedirectTracker redirectTracker,
-				boolean ssl, String host, int port) {
-			this.responseCallback = responseCallback;
-			this.redirectTracker = redirectTracker;
-			this.ssl = ssl;
-			this.host = host;
-			this.port = port;
-		}
+                protected NettyHttpChannelInitializer(Consumer<Response> responseCallback, RedirectTracker redirectTracker,
+                                boolean ssl, String host, int port) {
+                        this.responseCallback = responseCallback;
+                        this.redirectTracker = redirectTracker;
+                        this.ssl = ssl;
+                        this.host = host;
+                        this.port = port;
+                }
 
-		@Override
-		protected void initChannel(Channel ch) throws Exception {
-			ch.pipeline().addLast("timeout", new ReadTimeoutHandler(5L, TimeUnit.SECONDS));
-			if (this.ssl) {
-				SSLEngine engine = SslContextBuilder.forClient().build().newEngine(ch.alloc(), host, port);
-				ch.pipeline().addLast("ssl", new SslHandler(engine));
-			}
+                @Override
+                protected void initChannel(Channel ch) throws Exception {
+                        ch.pipeline().addLast("timeout", new ReadTimeoutHandler(5L, TimeUnit.SECONDS));
+                        if (this.ssl) {
+                                SSLEngine engine = SslContextBuilder.forClient().build().newEngine(ch.alloc(), host, port);
+                                ch.pipeline().addLast("ssl", new SslHandler(engine));
+                        }
 
-			ch.pipeline().addLast("http", new HttpClientCodec());
-			ch.pipeline().addLast("handler", new NettyHttpResponseHandler(responseCallback, redirectTracker));
-		}
+                        ch.pipeline().addLast("http", new HttpClientCodec());
+                        ch.pipeline().addLast("handler", new NettyHttpResponseHandler(responseCallback, redirectTracker));
+                }
 
-	}
+        }
 
-	private class NettyHttpResponseHandler extends SimpleChannelInboundHandler<HttpObject> {
+        private class NettyHttpResponseHandler extends SimpleChannelInboundHandler<HttpObject> {
 
-		protected final Consumer<Response> responseCallback;
-		protected final RedirectTracker redirectTracker;
-		protected int responseCode = -1;
-		protected ByteBuf buffer = null;
+                protected final Consumer<Response> responseCallback;
+                protected final RedirectTracker redirectTracker;
+                protected int responseCode = -1;
+                protected ByteBuf buffer = null;
 
-		protected NettyHttpResponseHandler(Consumer<Response> responseCallback, RedirectTracker redirectTracker) {
-			this.responseCallback = responseCallback;
-			this.redirectTracker = redirectTracker;
-		}
+                protected NettyHttpResponseHandler(Consumer<Response> responseCallback, RedirectTracker redirectTracker) {
+                        this.responseCallback = responseCallback;
+                        this.redirectTracker = redirectTracker;
+                }
 
-		@Override
-		protected void channelRead0(ChannelHandlerContext ctx, HttpObject msg) throws Exception {
-			if (msg instanceof HttpResponse response) {
-				responseCode = response.status().code();
-				if (responseCode == 301 || responseCode == 302 || responseCode == 303 || responseCode == 307
-						|| responseCode == 308) {
-					ctx.channel().pipeline().remove(this);
-					ctx.channel().close();
-					if (responseCode == 303) {
-						redirectTracker.method = "GET";
-					}
-					redirect(response);
-					return;
-				} else if (responseCode == 204) {
-					this.done(ctx);
-					return;
-				}
-			}
-			if (msg instanceof HttpContent content) {
-				if (buffer == null) {
-					buffer = ctx.alloc().buffer();
-				}
-				this.buffer.writeBytes(content.content());
-				if (msg instanceof LastHttpContent) {
-					this.done(ctx);
-				}
-			}
-		}
+                @Override
+                protected void channelRead0(ChannelHandlerContext ctx, HttpObject msg) throws Exception {
+                        if (msg instanceof HttpResponse response) {
+                                responseCode = response.status().code();
+                                if (responseCode == 301 || responseCode == 302 || responseCode == 303 || responseCode == 307
+                                                || responseCode == 308) {
+                                        ctx.channel().pipeline().remove(this);
+                                        ctx.channel().close();
+                                        if (responseCode == 303) {
+                                                redirectTracker.method = "GET";
+                                        }
+                                        redirect(response);
+                                        return;
+                                } else if (responseCode == 204) {
+                                        this.done(ctx);
+                                        return;
+                                }
+                        }
+                        if (msg instanceof HttpContent content) {
+                                if (buffer == null) {
+                                        buffer = ctx.alloc().buffer();
+                                }
+                                this.buffer.writeBytes(content.content());
+                                if (msg instanceof LastHttpContent) {
+                                        this.done(ctx);
+                                }
+                        }
+                }
 
-		private void redirect(HttpResponse response) {
-			if (++redirectTracker.redirects >= MAX_REDIRECTS) {
-				responseCallback.accept(new Response(new IllegalStateException("Too many redirects!")));
-			} else {
-				CharSequence target = response.headers().get(HttpHeaderNames.LOCATION);
-				if (target != null) {
-					URI uri;
-					try {
-						uri = new URI(target.toString());
-					} catch (URISyntaxException ex) {
-						responseCallback.accept(new Response(
-								new IllegalStateException("Invalid redirect address in 3xx response!", ex)));
-						return;
-					}
-					asyncRequest(uri, responseCallback, redirectTracker);
-				} else {
-					responseCallback.accept(
-							new Response(new IllegalStateException("Missing redirect address in 3xx response!")));
-				}
-			}
-		}
+                @Override
+                public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
+                        // CRITICAL: Release the accumulated buffer to avoid direct ByteBuf leaks
+                        // when ReadTimeoutHandler (or any other pipeline exception) fires after
+                        // some body bytes have already been buffered. Without this release, every
+                        // timeout during skin downloads steadily leaks direct memory over days.
+                        if (buffer != null) {
+                                try {
+                                        buffer.release();
+                                } catch (Throwable ignored) {
+                                }
+                                buffer = null;
+                        }
+                        responseCallback.accept(new Response(cause));
+                }
 
-		@Override
-		public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
-			responseCallback.accept(new Response(cause));
-		}
+                private void redirect(HttpResponse response) {
+                        // Defensive: release any partial buffer before redirecting. (Current code
+                        // detects redirect on HttpResponse before any HttpContent arrives, so buffer
+                        // is null here, but if a misbehaving server sends body bytes alongside the 3xx,
+                        // we'd leak them without this guard.)
+                        if (buffer != null) {
+                                try {
+                                        buffer.release();
+                                } catch (Throwable ignored) {
+                                }
+                                buffer = null;
+                        }
+                        if (++redirectTracker.redirects >= MAX_REDIRECTS) {
+                                responseCallback.accept(new Response(new IllegalStateException("Too many redirects!")));
+                        } else {
+                                CharSequence target = response.headers().get(HttpHeaderNames.LOCATION);
+                                if (target != null) {
+                                        URI uri;
+                                        try {
+                                                uri = new URI(target.toString());
+                                        } catch (URISyntaxException ex) {
+                                                responseCallback.accept(new Response(
+                                                                new IllegalStateException("Invalid redirect address in 3xx response!", ex)));
+                                                return;
+                                        }
+                                        asyncRequest(uri, responseCallback, redirectTracker);
+                                } else {
+                                        responseCallback.accept(
+                                                        new Response(new IllegalStateException("Missing redirect address in 3xx response!")));
+                                }
+                        }
+                }
 
-		private void done(ChannelHandlerContext ctx) {
-			try {
-				responseCallback.accept(new Response(responseCode, redirectTracker.redirects > 0, buffer));
-			} finally {
-				ctx.channel().pipeline().remove(this);
-				ctx.channel().close();
-			}
-		}
+                private void done(ChannelHandlerContext ctx) {
+                        try {
+                                responseCallback.accept(new Response(responseCode, redirectTracker.redirects > 0, buffer));
+                        } finally {
+                                ctx.channel().pipeline().remove(this);
+                                ctx.channel().close();
+                        }
+                }
 
-	}
+        }
 
-	private final Cache<String, InetAddress> addressCache = CacheBuilder.newBuilder()
-			.expireAfterWrite(15L, TimeUnit.MINUTES).build();
-	private final Supplier<Bootstrap> bootstrapper;
-	private final String userAgent;
+        private final Cache<String, InetAddress> addressCache = CacheBuilder.newBuilder()
+                        .expireAfterWrite(15L, TimeUnit.MINUTES).build();
+        private final Supplier<Bootstrap> bootstrapper;
+        private final String userAgent;
 
-	public HTTPClient(Supplier<Bootstrap> bootstrapper, String userAgent) {
-		this.bootstrapper = bootstrapper;
-		this.userAgent = userAgent;
-	}
+        public HTTPClient(Supplier<Bootstrap> bootstrapper, String userAgent) {
+                this.bootstrapper = bootstrapper;
+                this.userAgent = userAgent;
+        }
 
-	public void asyncRequest(String method, URI uri, Consumer<Response> responseCallback) {
-		asyncRequest(uri, responseCallback, new RedirectTracker(method));
-	}
+        public void asyncRequest(String method, URI uri, Consumer<Response> responseCallback) {
+                asyncRequest(uri, responseCallback, new RedirectTracker(method));
+        }
 
-	private void asyncRequest(URI uri, Consumer<Response> responseCallback, RedirectTracker redirectTracker) {
-		int port = uri.getPort();
-		boolean ssl = false;
-		String scheme = uri.getScheme();
-		switch (scheme) {
-		case "http":
-			if (port == -1) {
-				port = 80;
-			}
-			break;
-		case "https":
-			if (port == -1) {
-				port = 443;
-			}
-			ssl = true;
-			break;
-		default:
-			responseCallback.accept(new Response(new UnsupportedOperationException("Unsupported scheme: " + scheme)));
-			return;
-		}
+        private void asyncRequest(URI uri, Consumer<Response> responseCallback, RedirectTracker redirectTracker) {
+                int port = uri.getPort();
+                boolean ssl = false;
+                String scheme = uri.getScheme();
+                switch (scheme) {
+                case "http":
+                        if (port == -1) {
+                                port = 80;
+                        }
+                        break;
+                case "https":
+                        if (port == -1) {
+                                port = 443;
+                        }
+                        ssl = true;
+                        break;
+                default:
+                        responseCallback.accept(new Response(new UnsupportedOperationException("Unsupported scheme: " + scheme)));
+                        return;
+                }
 
-		String host = uri.getHost();
-		InetAddress inetHost = addressCache.getIfPresent(host);
-		if (inetHost == null) {
-			try {
-				inetHost = InetAddress.getByName(host);
-			} catch (UnknownHostException ex) {
-				responseCallback.accept(new Response(ex));
-				return;
-			}
-			addressCache.put(host, inetHost);
-		}
-		InetSocketAddress addr = new InetSocketAddress(inetHost, port);
-		bootstrapper.get().handler(new NettyHttpChannelInitializer(responseCallback, redirectTracker, ssl, host, port))
-				.option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 5000).option(ChannelOption.TCP_NODELAY, true)
-				.remoteAddress(addr).connect()
-				.addListener(new NettyHttpChannelFutureListener(redirectTracker.method, uri, responseCallback));
-	}
+                String host = uri.getHost();
+                InetAddress inetHost = addressCache.getIfPresent(host);
+                if (inetHost == null) {
+                        try {
+                                inetHost = InetAddress.getByName(host);
+                        } catch (UnknownHostException ex) {
+                                responseCallback.accept(new Response(ex));
+                                return;
+                        }
+                        addressCache.put(host, inetHost);
+                }
+                InetSocketAddress addr = new InetSocketAddress(inetHost, port);
+                bootstrapper.get().handler(new NettyHttpChannelInitializer(responseCallback, redirectTracker, ssl, host, port))
+                                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 5000).option(ChannelOption.TCP_NODELAY, true)
+                                .remoteAddress(addr).connect()
+                                .addListener(new NettyHttpChannelFutureListener(redirectTracker.method, uri, responseCallback));
+        }
 
 }

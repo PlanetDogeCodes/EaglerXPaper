@@ -33,196 +33,228 @@ import net.lax1dude.eaglercraft.v1_8.socket.protocol.pkt.GameMessagePacket;
 
 public class InjectedMessageController extends MessageController {
 
-	protected final Channel channel;
-	protected final ByteBufInputWrapper inputWrapper;
-	protected final ByteBufOutputWrapper outputWrapper;
-	protected final int[] marks;
+        protected final Channel channel;
+        protected final ByteBufInputWrapper inputWrapper;
+        protected final ByteBufOutputWrapper outputWrapper;
+        protected final int[] marks;
 
-	public InjectedMessageController(GamePluginMessageProtocol protocol, ServerMessageHandler handler, Channel channel,
-			int defragSendDelay, int maxPackets) {
-		super(protocol, handler, channel.eventLoop(), defragSendDelay, maxPackets);
-		this.channel = channel;
-		this.inputWrapper = new ByteBufInputWrapper();
-		this.outputWrapper = new ByteBufOutputWrapper();
-		this.marks = new int[32];
-	}
+        public InjectedMessageController(GamePluginMessageProtocol protocol, ServerMessageHandler handler, Channel channel,
+                        int defragSendDelay, int maxPackets) {
+                super(protocol, handler, channel.eventLoop(), defragSendDelay, maxPackets);
+                this.channel = channel;
+                this.inputWrapper = new ByteBufInputWrapper();
+                this.outputWrapper = new ByteBufOutputWrapper();
+                this.marks = new int[32];
+        }
 
-	public static InjectedMessageController injectEagler(GamePluginMessageProtocol protocol,
-			ServerMessageHandler handler, Channel channel, int defragSendDelay, int maxPackets) {
-		InjectedMessageController controller = new InjectedMessageController(protocol, handler, channel,
-				defragSendDelay, maxPackets);
-		channel.pipeline().addAfter(PipelineTransformer.HANDLER_FRAME_CODEC, PipelineTransformer.HANDLER_INJECTED,
-				new EaglerInjectedMessageHandler(controller));
-		channel.pipeline().fireUserEventTriggered(EnumPipelineEvent.EAGLER_INJECTED_MESSAGE_CONTROLLER);
-		return controller;
-	}
+        public static InjectedMessageController injectEagler(GamePluginMessageProtocol protocol,
+                        ServerMessageHandler handler, Channel channel, int defragSendDelay, int maxPackets) {
+                final InjectedMessageController controller = new InjectedMessageController(protocol, handler, channel,
+                                defragSendDelay, maxPackets);
+                // CRITICAL: pipeline.addAfter() MUST run on the channel's EventLoop.
+                // This method is invoked from BukkitListener.onPlayerPostLoginEvent (Bukkit main thread)
+                // -> plugin.initializePlayer -> EaglerXServerPlayerInitializer.acceptPlayer
+                // -> EaglerXServer.registerEaglerPlayer -> MessageControllerFactory.initializePlayer
+                // -> injectEagler.
+                // Without this wrap, Netty defers the addAfter to the EventLoop's task queue, but the
+                // surrounding code does not wait for it. If a BinaryWebSocketFrame arrives in the
+                // meantime, the frame codec will fire channelRead past the position where the
+                // injected handler should have been — packets are silently dropped, and the player
+                // sees "Disconnected from Server".
+                Runnable r = () -> {
+                        try {
+                                channel.pipeline().addAfter(PipelineTransformer.HANDLER_FRAME_CODEC,
+                                                PipelineTransformer.HANDLER_INJECTED,
+                                                new EaglerInjectedMessageHandler(controller));
+                                channel.pipeline().fireUserEventTriggered(EnumPipelineEvent.EAGLER_INJECTED_MESSAGE_CONTROLLER);
+                        } catch (Throwable t) {
+                                // NoSuchElementException if HANDLER_FRAME_CODEC was removed/renamed by another plugin.
+                                // IllegalArgumentException if HANDLER_INJECTED is already in the pipeline (double-init).
+                                // Either way, log and don't kill the channel — Eagler features will be unavailable
+                                // but the player can still join.
+                                System.err.println("[EaglerXServer] injectEagler failed for channel " + channel + ": " + t);
+                        }
+                };
+                if (channel.eventLoop().inEventLoop()) {
+                        r.run();
+                } else {
+                        try {
+                                channel.eventLoop().submit(r);
+                        } catch (Throwable t) {
+                                System.err.println(
+                                                "[EaglerXServer] injectEagler failed to schedule on event loop for channel "
+                                                                + channel + ": " + t);
+                        }
+                }
+                return controller;
+        }
 
-	/**
-	 * IMPORTANT: Do not call this outside of the channel's event loop
-	 */
-	public void readPacket(ByteBuf buffer) {
-		try {
-			GameMessagePacket pkt;
-			if (buffer.readableBytes() > 0) {
-				ByteBufInputWrapper is = inputWrapper;
-				is.buffer = buffer.skipBytes(1);
-				int ii = buffer.readerIndex();
-				if (buffer.getUnsignedByte(ii) == (short) 0xFF) {
-					if (buffer.readableBytes() > 32768) {
-						throw new IOException("Impossible large multi-packet received: " + buffer.readableBytes());
-					}
-					try {
-						int start = buffer.readerIndex();
-						is.readUnsignedByte();
-						int count = is.readVarInt();
-						for (int i = 0, j, k; i < count; ++i) {
-							if (i >= maxPackets) {
-								// Potentially an old client, ignore the rest of the packets
-								return;
-							}
-							j = is.readVarInt();
-							k = (buffer.readerIndex() - start) + j;
-							if (j > is.available()) {
-								throw new IOException("Packet fragment is too long: " + j + " > " + is.available());
-							}
-							pkt = protocol.readPacketV5(GamePluginMessageConstants.CLIENT_TO_SERVER, is);
-							if (buffer.readerIndex() - start != k) {
-								throw new IOException("Packet fragment was the wrong length: "
-										+ (j + (buffer.readerIndex() - start) - k) + " != " + j);
-							}
-							handlePacket(pkt);
-						}
-						if (is.available() > 0) {
-							throw new IOException(
-									"Leftover data after reading multi-packet! (" + is.available() + " bytes)");
-						}
-					} catch (IndexOutOfBoundsException ex) {
-						throw new IOException("Packet buffer underflow! (In multi-packet)", ex);
-					}
-				} else {
-					try {
-						pkt = protocol.readPacketV5(GamePluginMessageConstants.CLIENT_TO_SERVER, is);
-					} catch (IndexOutOfBoundsException ex) {
-						throw new IOException("Packet buffer underflow! (Packet ID 0x"
-								+ Integer.toHexString(buffer.getUnsignedByte(ii)) + ")", ex);
-					}
-					if (is.available() != 0) {
-						throw new IOException("Packet was the wrong length: " + pkt.getClass().getSimpleName());
-					}
-					handlePacket(pkt);
-				}
-			}
-		} catch (IOException ex) {
-			onException(ex);
-		}
-	}
+        /**
+         * IMPORTANT: Do not call this outside of the channel's event loop
+         */
+        public void readPacket(ByteBuf buffer) {
+                try {
+                        GameMessagePacket pkt;
+                        if (buffer.readableBytes() > 0) {
+                                ByteBufInputWrapper is = inputWrapper;
+                                is.buffer = buffer.skipBytes(1);
+                                int ii = buffer.readerIndex();
+                                if (buffer.getUnsignedByte(ii) == (short) 0xFF) {
+                                        if (buffer.readableBytes() > 32768) {
+                                                throw new IOException("Impossible large multi-packet received: " + buffer.readableBytes());
+                                        }
+                                        try {
+                                                int start = buffer.readerIndex();
+                                                is.readUnsignedByte();
+                                                int count = is.readVarInt();
+                                                for (int i = 0, j, k; i < count; ++i) {
+                                                        if (i >= maxPackets) {
+                                                                // Potentially an old client, ignore the rest of the packets
+                                                                return;
+                                                        }
+                                                        j = is.readVarInt();
+                                                        k = (buffer.readerIndex() - start) + j;
+                                                        if (j > is.available()) {
+                                                                throw new IOException("Packet fragment is too long: " + j + " > " + is.available());
+                                                        }
+                                                        pkt = protocol.readPacketV5(GamePluginMessageConstants.CLIENT_TO_SERVER, is);
+                                                        if (buffer.readerIndex() - start != k) {
+                                                                throw new IOException("Packet fragment was the wrong length: "
+                                                                                + (j + (buffer.readerIndex() - start) - k) + " != " + j);
+                                                        }
+                                                        handlePacket(pkt);
+                                                }
+                                                if (is.available() > 0) {
+                                                        throw new IOException(
+                                                                        "Leftover data after reading multi-packet! (" + is.available() + " bytes)");
+                                                }
+                                        } catch (IndexOutOfBoundsException ex) {
+                                                throw new IOException("Packet buffer underflow! (In multi-packet)", ex);
+                                        }
+                                } else {
+                                        try {
+                                                pkt = protocol.readPacketV5(GamePluginMessageConstants.CLIENT_TO_SERVER, is);
+                                        } catch (IndexOutOfBoundsException ex) {
+                                                throw new IOException("Packet buffer underflow! (Packet ID 0x"
+                                                                + Integer.toHexString(buffer.getUnsignedByte(ii)) + ")", ex);
+                                        }
+                                        if (is.available() != 0) {
+                                                throw new IOException("Packet was the wrong length: " + pkt.getClass().getSimpleName());
+                                        }
+                                        handlePacket(pkt);
+                                }
+                        }
+                } catch (IOException ex) {
+                        onException(ex);
+                }
+        }
 
-	@Override
-	protected void writePacket(GameMessagePacket packet) throws IOException {
-		if (channel.isActive()) {
-			channel.writeAndFlush(new InjectedMessage() {
-				@Override
-				public void writePacket(List<Object> output) {
-					ByteBufOutputWrapper os = outputWrapper;
-					ByteBuf buf = channel.alloc().buffer();
-					buf.writeByte(0xEE);
-					os.buffer = buf;
-					try {
-						protocol.writePacketV5(GamePluginMessageConstants.SERVER_TO_CLIENT, os, packet);
-					} catch (IOException e) {
-						buf.release();
-						onException(e);
-						output.add(Unpooled.EMPTY_BUFFER);
-						return;
-					} finally {
-						os.buffer = null;
-					}
-					output.add(buf);
-				}
-			}, channel.voidPromise());
-		}
-	}
+        @Override
+        protected void writePacket(GameMessagePacket packet) throws IOException {
+                if (channel.isActive()) {
+                        channel.writeAndFlush(new InjectedMessage() {
+                                @Override
+                                public void writePacket(List<Object> output) {
+                                        ByteBufOutputWrapper os = outputWrapper;
+                                        ByteBuf buf = channel.alloc().buffer();
+                                        buf.writeByte(0xEE);
+                                        os.buffer = buf;
+                                        try {
+                                                protocol.writePacketV5(GamePluginMessageConstants.SERVER_TO_CLIENT, os, packet);
+                                        } catch (IOException e) {
+                                                buf.release();
+                                                onException(e);
+                                                output.add(Unpooled.EMPTY_BUFFER);
+                                                return;
+                                        } finally {
+                                                os.buffer = null;
+                                        }
+                                        output.add(buf);
+                                }
+                        }, channel.voidPromise());
+                }
+        }
 
-	@Override
-	protected void writeMultiPacket(GameMessagePacket[] packets) throws IOException {
-		if (channel.isActive()) {
-			channel.writeAndFlush(new InjectedMessage() {
-				@Override
-				public void writePacket(List<Object> output) {
-					ByteBufOutputWrapper os = outputWrapper;
-					ByteBuf buf = channel.alloc().buffer();
-					boolean shit = true;
-					try {
-						int total = packets.length;
-						int[] marks;
-						if (total > 16) {
-							marks = new int[total << 1];
-						} else {
-							marks = InjectedMessageController.this.marks;
-						}
-						os.buffer = buf;
-						int j, k;
-						for (int i = 0; i < total; ++i) {
-							j = i << 1;
-							buf.writeByte(0xEE);
-							k = buf.writerIndex();
-							marks[j] = k;
-							protocol.writePacketV5(GamePluginMessageConstants.SERVER_TO_CLIENT, os, packets[i]);
-							marks[j + 1] = buf.writerIndex() - k;
-						}
-						int start = 0;
-						int i, sendCount, totalLen, lastLen;
-						while (total - start > 0) {
-							sendCount = 0;
-							totalLen = 0;
-							do {
-								i = marks[((start + sendCount) << 1) + 1];
-								lastLen = GamePacketOutputBuffer.getVarIntSize(i) + i;
-								totalLen += lastLen;
-								++sendCount;
-							} while (totalLen < 32760 && total - start - sendCount > 0 && sendCount < maxPackets);
-							if (totalLen >= 32760) {
-								--sendCount;
-								totalLen -= lastLen;
-							}
-							if (sendCount <= 1) {
-								i = start << 1;
-								output.add(buf.retainedSlice(marks[i] - 1, marks[i + 1] + 1));
-								shit = false;
-								++start;
-								continue;
-							}
-							i = 2 + totalLen + GamePacketOutputBuffer.getVarIntSize(sendCount);
-							ByteBuf sendBuffer = channel.alloc().buffer(i, i);
-							try {
-								sendBuffer.writeShort(0xEEFF);
-								BufferUtils.writeVarInt(sendBuffer, sendCount);
-								for (j = 0; j < sendCount; ++j) {
-									i = start << 1;
-									lastLen = marks[i + 1];
-									BufferUtils.writeVarInt(sendBuffer, lastLen);
-									sendBuffer.writeBytes(buf, marks[i], lastLen);
-									++start;
-								}
-								output.add(sendBuffer.retain());
-								shit = false;
-							} finally {
-								sendBuffer.release();
-							}
-						}
-					} catch (IOException e) {
-						onException(e);
-						if (shit) {
-							output.add(Unpooled.EMPTY_BUFFER);
-						}
-						return;
-					} finally {
-						buf.release();
-						os.buffer = null;
-					}
-				}
-			}, channel.voidPromise());
-		}
-	}
+        @Override
+        protected void writeMultiPacket(GameMessagePacket[] packets) throws IOException {
+                if (channel.isActive()) {
+                        channel.writeAndFlush(new InjectedMessage() {
+                                @Override
+                                public void writePacket(List<Object> output) {
+                                        ByteBufOutputWrapper os = outputWrapper;
+                                        ByteBuf buf = channel.alloc().buffer();
+                                        boolean shit = true;
+                                        try {
+                                                int total = packets.length;
+                                                int[] marks;
+                                                if (total > 16) {
+                                                        marks = new int[total << 1];
+                                                } else {
+                                                        marks = InjectedMessageController.this.marks;
+                                                }
+                                                os.buffer = buf;
+                                                int j, k;
+                                                for (int i = 0; i < total; ++i) {
+                                                        j = i << 1;
+                                                        buf.writeByte(0xEE);
+                                                        k = buf.writerIndex();
+                                                        marks[j] = k;
+                                                        protocol.writePacketV5(GamePluginMessageConstants.SERVER_TO_CLIENT, os, packets[i]);
+                                                        marks[j + 1] = buf.writerIndex() - k;
+                                                }
+                                                int start = 0;
+                                                int i, sendCount, totalLen, lastLen;
+                                                while (total - start > 0) {
+                                                        sendCount = 0;
+                                                        totalLen = 0;
+                                                        do {
+                                                                i = marks[((start + sendCount) << 1) + 1];
+                                                                lastLen = GamePacketOutputBuffer.getVarIntSize(i) + i;
+                                                                totalLen += lastLen;
+                                                                ++sendCount;
+                                                        } while (totalLen < 32760 && total - start - sendCount > 0 && sendCount < maxPackets);
+                                                        if (totalLen >= 32760) {
+                                                                --sendCount;
+                                                                totalLen -= lastLen;
+                                                        }
+                                                        if (sendCount <= 1) {
+                                                                i = start << 1;
+                                                                output.add(buf.retainedSlice(marks[i] - 1, marks[i + 1] + 1));
+                                                                shit = false;
+                                                                ++start;
+                                                                continue;
+                                                        }
+                                                        i = 2 + totalLen + GamePacketOutputBuffer.getVarIntSize(sendCount);
+                                                        ByteBuf sendBuffer = channel.alloc().buffer(i, i);
+                                                        try {
+                                                                sendBuffer.writeShort(0xEEFF);
+                                                                BufferUtils.writeVarInt(sendBuffer, sendCount);
+                                                                for (j = 0; j < sendCount; ++j) {
+                                                                        i = start << 1;
+                                                                        lastLen = marks[i + 1];
+                                                                        BufferUtils.writeVarInt(sendBuffer, lastLen);
+                                                                        sendBuffer.writeBytes(buf, marks[i], lastLen);
+                                                                        ++start;
+                                                                }
+                                                                output.add(sendBuffer.retain());
+                                                                shit = false;
+                                                        } finally {
+                                                                sendBuffer.release();
+                                                        }
+                                                }
+                                        } catch (IOException e) {
+                                                onException(e);
+                                                if (shit) {
+                                                        output.add(Unpooled.EMPTY_BUFFER);
+                                                }
+                                                return;
+                                        } finally {
+                                                buf.release();
+                                                os.buffer = null;
+                                        }
+                                }
+                        }, channel.voidPromise());
+                }
+        }
 
 }

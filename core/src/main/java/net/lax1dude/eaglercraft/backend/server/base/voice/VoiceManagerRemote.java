@@ -283,6 +283,38 @@ public class VoiceManagerRemote<PlayerObject> extends SerializationContext imple
 
         @Override
         public void destroyVoiceManager() {
+                // CRITICAL: previously this was a no-op. In backend-relayed (supervisor) mode,
+                // the backend never learned that the player disconnected, causing:
+                //  - Other players still saw the disconnected player in the global voice list.
+                //  - Wasted ICE/Desc packets sent to a dead peer.
+                //  - Backend voice session stayed open until its own 30s+ timeout fired.
+                //  - SPacketVoiceSignalDisconnectPeerEAG was never dispatched to peers.
+                // Mirror VoiceManagerLocal.destroyVoiceManager() which correctly does
+                // removeFromChannel(this, true).
+                int lastState = stateXchg(-1);
+                handler = null;
+                if (lastState == 2) {
+                        // Was ENABLED — tell the backend we're disconnecting.
+                        try {
+                                sendBackendMessage(new CPacketVCDisconnect());
+                        } catch (Throwable t) {
+                                // Best effort — backend will time out the session anyway.
+                        }
+                        voiceDisconnected();
+                } else if (lastState == 1) {
+                        // Was DISABLED (voice allowed but not connected). The backend has already
+                        // received CPacketVCCapable (sent in handleServerPostConnect), so a backend
+                        // session exists and would not be cleaned up until the backend's own 30s+
+                        // timeout. Send CPacketVCDisconnect to clean it up immediately.
+                        try {
+                                sendBackendMessage(new CPacketVCDisconnect());
+                        } catch (Throwable t) {
+                                // Best effort — backend will time out the session anyway.
+                        }
+                        // Don't send SPacketVoiceSignalAllowedEAG(false, null) to the player — they
+                        // are already disconnected. Just dispatch the VoiceChangeEvent so plugins
+                        // can clean up their state.
+                }
         }
 
         private boolean ratelimitCon() {
