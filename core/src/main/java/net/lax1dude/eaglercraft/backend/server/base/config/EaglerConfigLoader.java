@@ -76,8 +76,8 @@ public class EaglerConfigLoader {
                                 + "no official uses outside of server lists"
                         ));
                         int eaglerLoginTimeout = config.getInteger(
-                                "eagler_login_timeout", 30000,
-                                "Default value is 30000, sets the maximum age in milliseconds that a connection "
+                                "eagler_login_timeout", 10000,
+                                "Default value is 10000, sets the maximum age in milliseconds that a connection "
                                 + "can stay in the login phase before being disconnected, this is necessary "
                                 + "because WebSocket ping frames could be used to keep a connection from timing "
                                 + "out forever without ever having to advance it to the next state"
@@ -174,8 +174,8 @@ public class EaglerConfigLoader {
                                 + "required on the backend Paper servers for the setting to have any effect."
                         );
                         int protocolV4DefragSendDelay = config.getInteger(
-                                "protocol_v4_defrag_send_delay", 0,
-                                "Default value is 0, the number of milliseconds to wait before flushing all "
+                                "protocol_v4_defrag_send_delay", 10,
+                                "Default value is 10, the number of milliseconds to wait before flushing all "
                                 + "pending EaglercraftX plugin message packets, saves bandwidth by combining "
                                 + "multiple messages into a single plugin message packet. Setting this to 0 has "
                                 + "the same effect on clientbound packets as setting eaglerNoDelay to true does "

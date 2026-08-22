@@ -30,146 +30,121 @@ import net.lax1dude.eaglercraft.v1_8.socket.protocol.pkt.GameMessagePacket;
 
 public abstract class MessageController {
 
-        public interface IExceptionCallback {
-                void handleException(Exception ex);
-        }
+	public interface IExceptionCallback {
+		void handleException(Exception ex);
+	}
 
-        public interface IMessageHandler extends GameMessageHandler, IExceptionCallback {
-        }
+	public interface IMessageHandler extends GameMessageHandler, IExceptionCallback {
+	}
 
-        protected final GamePluginMessageProtocol protocol;
-        protected final GameMessageHandler handler;
-        protected final IExceptionCallback exceptionHandler;
-        protected final EventLoop eventLoop;
-        protected final int defragSendDelay;
-        protected final int maxPackets;
+	protected final GamePluginMessageProtocol protocol;
+	protected final GameMessageHandler handler;
+	protected final IExceptionCallback exceptionHandler;
+	protected final EventLoop eventLoop;
+	protected final int defragSendDelay;
+	protected final int maxPackets;
 
-        protected List<GameMessagePacket> sendQueue;
-        protected final Callable<Void> handleFlush;
-        protected ScheduledFuture<Void> futureSendTask = null;
+	protected List<GameMessagePacket> sendQueue;
+	protected final Callable<Void> handleFlush;
+	protected ScheduledFuture<Void> futureSendTask = null;
 
-        public MessageController(GamePluginMessageProtocol protocol, IMessageHandler handler, EventLoop eventLoop,
-                        int defragSendDelay, int maxPackets) {
-                this(protocol, handler, handler, eventLoop, defragSendDelay, maxPackets);
-        }
+	public MessageController(GamePluginMessageProtocol protocol, IMessageHandler handler, EventLoop eventLoop,
+			int defragSendDelay, int maxPackets) {
+		this(protocol, handler, handler, eventLoop, defragSendDelay, maxPackets);
+	}
 
-        public MessageController(GamePluginMessageProtocol protocol, GameMessageHandler handler,
-                        IExceptionCallback exceptionHandler, EventLoop eventLoop, int defragSendDelay, int maxPackets) {
-                this.protocol = protocol;
-                this.handler = handler;
-                this.exceptionHandler = exceptionHandler;
-                this.eventLoop = eventLoop;
-                if (maxPackets <= 1) {
-                        defragSendDelay = 0;
-                }
-                this.defragSendDelay = defragSendDelay;
-                this.maxPackets = maxPackets;
-                this.sendQueue = defragSendDelay > 0 ? new ArrayList<>() : null;
-                this.handleFlush = defragSendDelay > 0 ? () -> {
-                        GameMessagePacket packet;
-                        eagler: {
-                                GameMessagePacket[] packets;
-                                synchronized (this) {
-                                        futureSendTask = null;
-                                        int len = sendQueue.size();
-                                        if (len == 0) {
-                                                return null;
-                                        } else if (len == 1) {
-                                                packet = sendQueue.remove(0);
-                                                break eagler;
-                                        } else {
-                                                packets = sendQueue.toArray(new GameMessagePacket[len]);
-                                                if (len < 64) {
-                                                        sendQueue.clear();
-                                                } else {
-                                                        sendQueue = new ArrayList<>();
-                                                }
-                                        }
-                                }
-                                try {
-                                        writeMultiPacket(packets);
-                                } catch (IOException ex) {
-                                        onException(ex);
-                                }
-                                return null;
-                        }
-                        try {
-                                writePacket(packet);
-                        } catch (IOException ex) {
-                                onException(ex);
-                        }
-                        return null;
-                } : null;
-        }
+	public MessageController(GamePluginMessageProtocol protocol, GameMessageHandler handler,
+			IExceptionCallback exceptionHandler, EventLoop eventLoop, int defragSendDelay, int maxPackets) {
+		this.protocol = protocol;
+		this.handler = handler;
+		this.exceptionHandler = exceptionHandler;
+		this.eventLoop = eventLoop;
+		if (maxPackets <= 1) {
+			defragSendDelay = 0;
+		}
+		this.defragSendDelay = defragSendDelay;
+		this.maxPackets = maxPackets;
+		this.sendQueue = defragSendDelay > 0 ? new ArrayList<>() : null;
+		this.handleFlush = defragSendDelay > 0 ? () -> {
+			GameMessagePacket packet;
+			eagler: {
+				GameMessagePacket[] packets;
+				synchronized (this) {
+					futureSendTask = null;
+					int len = sendQueue.size();
+					if (len == 0) {
+						return null;
+					} else if (len == 1) {
+						packet = sendQueue.remove(0);
+						break eagler;
+					} else {
+						packets = sendQueue.toArray(new GameMessagePacket[len]);
+						if (len < 64) {
+							sendQueue.clear();
+						} else {
+							sendQueue = new ArrayList<>();
+						}
+					}
+				}
+				try {
+					writeMultiPacket(packets);
+				} catch (IOException ex) {
+					onException(ex);
+				}
+				return null;
+			}
+			try {
+				writePacket(packet);
+			} catch (IOException ex) {
+				onException(ex);
+			}
+			return null;
+		} : null;
+	}
 
-        public boolean isSendQueueEnabled() {
-                return defragSendDelay > 0;
-        }
+	public boolean isSendQueueEnabled() {
+		return defragSendDelay > 0;
+	}
 
-        public void sendPacket(GameMessagePacket packet) {
-                if (defragSendDelay > 0) {
-                        synchronized (this) {
-                                sendQueue.add(packet);
-                                if (futureSendTask == null || futureSendTask.isDone()) {
-                                        futureSendTask = eventLoop.schedule(handleFlush, defragSendDelay, TimeUnit.MILLISECONDS);
-                                }
-                        }
-                } else {
-                        try {
-                                writePacket(packet);
-                        } catch (IOException ex) {
-                                onException(ex);
-                        }
-                }
-        }
+	public void sendPacket(GameMessagePacket packet) {
+		if (defragSendDelay > 0) {
+			synchronized (this) {
+				sendQueue.add(packet);
+				if (futureSendTask == null || futureSendTask.isDone()) {
+					futureSendTask = eventLoop.schedule(handleFlush, defragSendDelay, TimeUnit.MILLISECONDS);
+				}
+			}
+		} else {
+			try {
+				writePacket(packet);
+			} catch (IOException ex) {
+				onException(ex);
+			}
+		}
+	}
 
-        public void sendPacketImmediately(GameMessagePacket packet) {
-                try {
-                        writePacket(packet);
-                } catch (IOException ex) {
-                        onException(ex);
-                }
-        }
+	public void sendPacketImmediately(GameMessagePacket packet) {
+		try {
+			writePacket(packet);
+		} catch (IOException ex) {
+			onException(ex);
+		}
+	}
 
-        protected void handlePacket(GameMessagePacket packet) {
-                try {
-                        packet.handlePacket(handler);
-                } catch (Exception ex) {
-                        onException(ex);
-                }
-        }
+	protected void handlePacket(GameMessagePacket packet) {
+		try {
+			packet.handlePacket(handler);
+		} catch (Exception ex) {
+			onException(ex);
+		}
+	}
 
-        protected void onException(Exception ex) {
-                exceptionHandler.handleException(ex);
-        }
+	protected void onException(Exception ex) {
+		exceptionHandler.handleException(ex);
+	}
 
-        /**
-         * Disposes of this controller's scheduled flush task and clears the send queue.
-         * Should be called when the player is destroyed or the channel is closed, to
-         * avoid the scheduled future firing on a dead channel and to release the
-         * pending GameMessagePacket objects in the sendQueue.
-         *
-         * Without this, players who disconnect immediately after joining leave behind
-         * a {@code futureSendTask} scheduled to fire after {@code defragSendDelay} ms
-         * (default 50 ms), holding up to {@code maxPackets} (default 64) pending
-         * GameMessagePacket objects. During disconnect storms this creates transient
-         * memory pressure.
-         */
-        public synchronized void dispose() {
-                if (futureSendTask != null) {
-                        try {
-                                futureSendTask.cancel(false);
-                        } catch (Throwable ignored) {
-                        }
-                        futureSendTask = null;
-                }
-                if (sendQueue != null) {
-                        sendQueue.clear();
-                }
-        }
+	protected abstract void writePacket(GameMessagePacket packet) throws IOException;
 
-        protected abstract void writePacket(GameMessagePacket packet) throws IOException;
-
-        protected abstract void writeMultiPacket(GameMessagePacket[] packets) throws IOException;
+	protected abstract void writeMultiPacket(GameMessagePacket[] packets) throws IOException;
 
 }

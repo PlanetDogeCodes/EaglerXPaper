@@ -117,7 +117,6 @@ import net.lax1dude.eaglercraft.backend.server.util.GsonLenient;
 import net.lax1dude.eaglercraft.backend.server.util.Util;
 import net.lax1dude.eaglercraft.backend.skin_cache.HTTPClient;
 import net.lax1dude.eaglercraft.backend.skin_cache.IHTTPClient;
-import net.lax1dude.eaglercraft.backend.skin_cache.ISkinCacheService;
 import net.lax1dude.eaglercraft.backend.skin_cache.SkinCacheDatastore;
 import net.lax1dude.eaglercraft.backend.skin_cache.SkinCacheDownloader;
 import net.lax1dude.eaglercraft.backend.skin_cache.SkinCacheService;
@@ -507,20 +506,6 @@ public class EaglerXServer<PlayerObject> implements IEaglerXServerImpl<PlayerObj
                 }
 
                 if (skinCacheService != null) {
-                        // CRITICAL: dispose the SkinCacheService BEFORE closing the JDBC connection.
-                        // dispose() terminates the SkinCacheDatastore worker threads, releases the
-                        // native Deflater/Inflater state, and disposes the PreparedStatements.
-                        // Without this, every /reload or PlugMan toggle leaks N worker threads plus
-                        // ~64 KB of native zlib state per thread, and the workers' PreparedStatements
-                        // stay bound to a closed JDBC connection (will throw on next use).
-                        ISkinCacheService delegate = skinCacheService.getDelegate();
-                        if (delegate instanceof SkinCacheService) {
-                                try {
-                                        ((SkinCacheService) delegate).dispose();
-                                } catch (Throwable t) {
-                                        logger().error("Failed to dispose skin cache service", t);
-                                }
-                        }
                         if (skinCacheJDBCHandle != null) {
                                 logger().info("Disconnecting from skin cache database \""
                                                 + Util.sanitizeJDBCURIForLogs(config.getSettings().getSkinService().getSkinCacheDBURI())
@@ -664,21 +649,6 @@ public class EaglerXServer<PlayerObject> implements IEaglerXServerImpl<PlayerObj
                 if (playerInstance.isEaglerXRewindPlayer()) {
                         ((IEaglerXRewindProtocol<PlayerObject, Object>) playerInstance.getRewindProtocol())
                                         .handleDestroyPlayer(playerInstance.getRewindAttachment());
-                }
-
-                // CRITICAL: dispose the MessageController so its scheduled flush task is cancelled
-                // and the pending sendQueue is cleared. Without this, players who disconnect
-                // immediately after joining leave behind a futureSendTask scheduled to fire after
-                // defragSendDelay ms (default 50 ms), holding up to maxPackets (default 64) pending
-                // GameMessagePacket objects. During disconnect storms this creates transient memory
-                // pressure.
-                if (playerInstance.messageController != null) {
-                        try {
-                                playerInstance.messageController.dispose();
-                        } catch (Throwable t) {
-                                // Best effort — don't crash on unregister
-                        }
-                        playerInstance.messageController = null;
                 }
         }
 
