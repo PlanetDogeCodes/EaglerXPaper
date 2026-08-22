@@ -363,8 +363,12 @@ public class PlatformPluginBukkit extends JavaPlugin implements IPlatform<Player
 
                         Object networkManager = pipeline.get("packet_handler");
                         if (networkManager != null) {
-                                pipeline.replace("packet_handler", "packet_handler",
-                                                (ChannelHandler) postLoginInjector.wrapNetworkManager(networkManager, channel));
+                                if (postLoginInjector.setupInboundMethod == null) {
+                                        pipeline.replace("packet_handler", "packet_handler",
+                                                        (ChannelHandler) postLoginInjector.wrapNetworkManager(networkManager, channel));
+                                } else {
+                                        postLoginInjector.storeContext(networkManager, channel);
+                                }
                         }
 
                         for (String str : pipeline.names()) {

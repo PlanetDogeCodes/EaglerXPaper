@@ -117,7 +117,7 @@ public class PlayerPostLoginInjector {
          * Connection/NetworkManager. Used on MC 1.20.2+ to install any listener
          * including the LoginListener and ConfigurationListener. Null on 1.12-1.20.1.
          */
-        protected Method setupInboundMethod;
+        public Method setupInboundMethod;
 
         /**
          * The 'transferred' boolean field on ServerLoginPacketListenerImpl (1.20.5+).
@@ -156,6 +156,20 @@ public class PlayerPostLoginInjector {
                 this.plugin = plugin;
                 this.entityPlayers = (new MapMaker()).concurrencyLevel(8).weakKeys().weakValues().makeMap();
                 this.ctxByUUID = (new MapMaker()).concurrencyLevel(8).weakValues().makeMap();
+        }
+
+        /**
+         * Stores the LoginEventContext on the channel without wrapping the NetworkManager.
+         * Used on MC 1.20.2+ where we don't wrap the NM (to avoid per-packet proxy overhead
+         * that causes client-side lag). The ctx is found later by handleLoginEvent.
+         */
+        public void storeContext(Object netManager, Channel channel) {
+                try {
+                        LoginEventContext ctx = new LoginEventContext(netManager, channel);
+                        channel.attr(attr).set(ctx);
+                } catch (Throwable t) {
+                        plugin.logger().warn("EaglerXServer: storeContext failed", t);
+                }
         }
 
         /**
@@ -445,17 +459,6 @@ public class PlayerPostLoginInjector {
                                                                         }
                                                                 }
                                                         }
-                                                }
-                                                // CRITICAL PERFORMANCE OPTIMIZATION: Once the player is in play state
-                                                // (post-login), short-circuit ALL proxy dispatch and delegate directly
-                                                // to the real NetworkManager. This avoids:
-                                                // - Method.equals() comparison per packet
-                                                // - getClass().getSimpleName() string building per packet
-                                                // - Method.invoke() dispatch overhead per packet
-                                                // The only post-login interception we need is the login-disconnect→play-disconnect
-                                                // conversion (for clientPlayState), which is rare.
-                                                if (ctx.clientPlayState && !ctx.throwOnLoginSuccess) {
-                                                        return meth.invoke(netManager, args);
                                                 }
                                                 if (sendPacketMethod1 != null && sendPacketMethod1.equals(meth)) {
                                                         String nm = args[0].getClass().getSimpleName();
