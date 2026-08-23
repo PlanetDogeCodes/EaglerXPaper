@@ -153,10 +153,24 @@ public class PipelineTransformer {
                 String bungeeHack = null;
                 for (IPipelineComponent comp : components) {
                         if (VANILLA_FRAME_DECODERS.contains(comp.getIdentifiedType())) {
-                                // CRITICAL: Keep splitter/prepender for Eaglercraft connections.
-                                // Connection.setupCompression() calls pipeline.addAfter("splitter", ...)
-                                // which throws NoSuchElementException if the splitter was removed.
-                                if (!pipelineData.isCompressionDisable()) {
+                                if (pipelineData.isCompressionDisable()) {
+                                        // Eaglercraft connection: replace splitter/prepender with NOP handlers.
+                                        // setupCompression() calls pipeline.addAfter("splitter", "decompress", ...)
+                                        // which requires "splitter" to exist. But the real splitter
+                                        // (LengthFieldBasedFrameDecoder) would corrupt Eaglercraft packets
+                                        // because they're raw ByteBufs from the WebSocket frame codec,
+                                        // not length-prefixed frames. A NOP handler named "splitter"
+                                        // satisfies the name lookup without doing any framing.
+                                        try {
+                                                pipeline.replace(comp.getHandle(), comp.getName(), NOPDummyHandler.INSTANCE);
+                                        } catch (Throwable t) {
+                                                // If replace fails (handler already removed), just add NOP
+                                                try {
+                                                        pipeline.addFirst(comp.getName(), NOPDummyHandler.INSTANCE);
+                                                } catch (Throwable ignored) {
+                                                }
+                                        }
+                                } else {
                                         pipeline.remove(comp.getHandle());
                                 }
                                 if (comp.getIdentifiedType() == EnumPipelineComponent.BUNGEE_LEGACY_KICK_ENCODER) {
@@ -221,7 +235,17 @@ public class PipelineTransformer {
                 IPipelineComponent haproxy = null;
                 for (IPipelineComponent comp : components) {
                         if (VANILLA_FRAME_DECODERS.contains(comp.getIdentifiedType())) {
-                                if (!pipelineData.isCompressionDisable()) {
+                                if (pipelineData.isCompressionDisable()) {
+                                        // Same NOP fix as injectSingleStack
+                                        try {
+                                                channel.pipeline().replace(comp.getHandle(), comp.getName(), NOPDummyHandler.INSTANCE);
+                                        } catch (Throwable t) {
+                                                try {
+                                                        channel.pipeline().addFirst(comp.getName(), NOPDummyHandler.INSTANCE);
+                                                } catch (Throwable ignored) {
+                                                }
+                                        }
+                                } else {
                                         toRemove.add(comp.getHandle());
                                 }
                                 if (comp.getIdentifiedType() == EnumPipelineComponent.BUNGEE_LEGACY_KICK_ENCODER) {

@@ -156,7 +156,8 @@ public class InjectedMessageController extends MessageController {
                                 @Override
                                 public void writePacket(List<Object> output) {
                                         ByteBufOutputWrapper os = outputWrapper;
-                                        ByteBuf buf = channel.alloc().buffer();
+                                        int initialSize = Math.max(64, packet.length() + 2);
+                                        ByteBuf buf = channel.alloc().buffer(initialSize);
                                         buf.writeByte(0xEE);
                                         os.buffer = buf;
                                         try {
@@ -182,7 +183,11 @@ public class InjectedMessageController extends MessageController {
                                 @Override
                                 public void writePacket(List<Object> output) {
                                         ByteBufOutputWrapper os = outputWrapper;
-                                        ByteBuf buf = channel.alloc().buffer();
+                                        int totalSize = 1;
+                                        for (GameMessagePacket p : packets) {
+                                                totalSize += p.length() + 5;
+                                        }
+                                        ByteBuf buf = channel.alloc().buffer(totalSize);
                                         boolean shit = true;
                                         try {
                                                 int total = packets.length;
