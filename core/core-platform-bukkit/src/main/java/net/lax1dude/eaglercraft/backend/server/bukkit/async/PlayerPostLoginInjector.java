@@ -1173,31 +1173,18 @@ public class PlayerPostLoginInjector {
                                 if (ctx != null) {
                                         ctxByUUID.remove(event.getPlayer().getUniqueId());
                                         final Channel ch = ctx.channel;
-                                        // Swap pipeline IMMEDIATELY — don't wait for PlayerLoginPostEvent
-                                        // callback. If we wait, the proxied NM stays in the pipeline and
-                                        // blocks keepalive packets, causing 30-second timeouts.
                                         Runnable swapTask = () -> {
                                                 try {
-                                                        handlerAdded.set(ctx.originalNetworkManager, false);
-                                                        try {
-                                                                ch.pipeline().replace("packet_handler",
-                                                                                "packet_handler",
-                                                                                (ChannelHandler) ctx.originalNetworkManager);
-                                                        } catch (NoSuchElementException nse) {
-                                                                try {
-                                                                        ch.pipeline().addFirst(
-                                                                                        "eagler-restored-handler",
-                                                                                        (ChannelHandler) ctx.originalNetworkManager);
-                                                                } catch (Throwable t2) {
-                                                                        plugin.logger().error(
-                                                                                        "EaglerXServer: could not restore NetworkManager",
-                                                                                        t2);
-                                                                }
-                                                        }
+                                                        // Remove compression handlers that setupCompression added.
+                                                        // These corrupt Eaglercraft packets because they expect
+                                                        // length-prefixed frames but Eaglercraft uses WebSocket framing.
+                                                        try { ch.pipeline().remove("decompress"); } catch (Throwable ignored) {}
+                                                        try { ch.pipeline().remove("compress"); } catch (Throwable ignored) {}
+                                                        // Remove the NOP splitter/prepender — no longer needed.
+                                                        try { ch.pipeline().remove("splitter"); } catch (Throwable ignored) {}
+                                                        try { ch.pipeline().remove("prepender"); } catch (Throwable ignored) {}
                                                 } catch (Throwable e) {
-                                                        plugin.logger().error(
-                                                                        "EaglerXServer: pipeline swap failed",
-                                                                        e);
+                                                        plugin.logger().error("EaglerXServer: compression handler removal failed", e);
                                                 }
                                         };
                                         if (ch.eventLoop().inEventLoop()) {
@@ -1206,13 +1193,10 @@ public class PlayerPostLoginInjector {
                                                 try {
                                                         ch.eventLoop().submit(swapTask);
                                                 } catch (Throwable t) {
-                                                        plugin.logger().error(
-                                                                        "EaglerXServer: failed to schedule pipeline swap",
-                                                                        t);
+                                                        plugin.logger().error("EaglerXServer: failed to schedule compression removal", t);
                                                 }
                                         }
                                         // Fire PlayerLoginPostEvent for EaglerXServer features.
-                                        // The callback is empty (pipeline swap already done above).
                                         fireEventLoginPostAsync(event.getPlayer(), ctx, (res) -> {
                                         });
                                 }
