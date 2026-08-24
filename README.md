@@ -1,5 +1,7 @@
 # EaglerXPaper
 
+### AS OF 8/23/2026, EAGLERXPAPER DEVELOPMENT WILL SLOW DOWN DUE TO TIME CONSTRAINTS WITH SCHOOL.
+
 > Paper 1.21.x port of [EaglerXServer](https://github.com/lax1dude/eaglerxserver) — run Eaglercraft (browser) clients on modern Paper servers.
 
 [![Paper](https://img.shields.io/badge/Paper-1.21.x-blue)](https://papermc.io)
