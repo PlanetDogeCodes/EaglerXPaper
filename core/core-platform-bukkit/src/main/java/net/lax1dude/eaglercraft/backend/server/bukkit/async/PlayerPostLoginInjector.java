@@ -1172,31 +1172,36 @@ public class PlayerPostLoginInjector {
                                 LoginEventContext ctx = ctxByUUID.get(event.getPlayer().getUniqueId());
                                 if (ctx != null) {
                                         ctxByUUID.remove(event.getPlayer().getUniqueId());
+                                        final Object nm = ctx.originalNetworkManager;
                                         final Channel ch = ctx.channel;
-                                        Runnable swapTask = () -> {
+                                        Runnable cleanupTask = () -> {
                                                 try {
-                                                        // Remove compression handlers that setupCompression added.
-                                                        // These corrupt Eaglercraft packets because they expect
-                                                        // length-prefixed frames but Eaglercraft uses WebSocket framing.
-                                                        try { ch.pipeline().remove("decompress"); } catch (Throwable ignored) {}
-                                                        try { ch.pipeline().remove("compress"); } catch (Throwable ignored) {}
-                                                        // Remove the NOP splitter/prepender — no longer needed.
+                                                        // Call setupCompression(-1, false) via reflection to
+                                                        // remove compression handlers added by the server.
+                                                        // This prevents CompressionDecoder/Encoder from
+                                                        // corrupting Eaglercraft packets.
+                                                        try {
+                                                                java.lang.reflect.Method m = nm.getClass().getMethod("setupCompression", int.class, boolean.class);
+                                                                m.invoke(nm, -1, false);
+                                                        } catch (Throwable ignored) {
+                                                                try { ch.pipeline().remove("decompress"); } catch (Throwable ignored2) {}
+                                                                try { ch.pipeline().remove("compress"); } catch (Throwable ignored2) {}
+                                                        }
                                                         try { ch.pipeline().remove("splitter"); } catch (Throwable ignored) {}
                                                         try { ch.pipeline().remove("prepender"); } catch (Throwable ignored) {}
                                                 } catch (Throwable e) {
-                                                        plugin.logger().error("EaglerXServer: compression handler removal failed", e);
+                                                        plugin.logger().error("EaglerXServer: compression cleanup failed", e);
                                                 }
                                         };
                                         if (ch.eventLoop().inEventLoop()) {
-                                                swapTask.run();
+                                                cleanupTask.run();
                                         } else {
                                                 try {
-                                                        ch.eventLoop().submit(swapTask);
+                                                        ch.eventLoop().submit(cleanupTask);
                                                 } catch (Throwable t) {
-                                                        plugin.logger().error("EaglerXServer: failed to schedule compression removal", t);
+                                                        plugin.logger().error("EaglerXServer: failed to schedule cleanup", t);
                                                 }
                                         }
-                                        // Fire PlayerLoginPostEvent for EaglerXServer features.
                                         fireEventLoginPostAsync(event.getPlayer(), ctx, (res) -> {
                                         });
                                 }
