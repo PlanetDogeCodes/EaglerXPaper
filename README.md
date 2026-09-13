@@ -2,7 +2,7 @@
 
 > Paper 1.17.x to 26.x port of [EaglerXServer](https://github.com/lax1dude/eaglerxserver) — run Eaglercraft (browser) clients on modern Paper servers.
 
-[![Paper](https://img.shields.io/badge/Paper-1.21.x-blue)](https://papermc.io)
+[![Paper](https://img.shields.io/badge/Paper-1.17+-blue)](https://papermc.io)
 [![Java](https://img.shields.io/badge/Java-25%2B-orange)](https://adoptium.net)
 [![License](https://img.shields.io/badge/license-BSD--3--Clause-green)](LICENSE)
 
