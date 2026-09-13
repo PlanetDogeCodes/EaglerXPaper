@@ -51,6 +51,9 @@ public class CPacketVCCapable implements EaglerVCPacket {
 	public void writePacket(DataOutput buffer) throws IOException {
 		if (versions != null) {
 			int cnt = versions.length;
+			if (cnt > 255) {
+				throw new IOException("Too many voice protocol versions! (Max is 255, got " + cnt + " total)");
+			}
 			buffer.writeByte(cnt);
 			for (int i = 0; i < cnt; ++i) {
 				buffer.writeByte(versions[i]);

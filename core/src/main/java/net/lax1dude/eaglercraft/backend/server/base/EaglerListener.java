@@ -50,8 +50,8 @@ public class EaglerListener implements IEaglerListenerInfo, IEaglerXServerListen
         private final boolean sslPluginManaged;
         private final ISSLContextProvider sslContext;
         private final byte[] legacyRedirectAddressBuf;
-        private byte[] cachedServerIcon;
-        private List<String> cachedServerMOTD;
+        private volatile byte[] cachedServerIcon;
+        private volatile List<String> cachedServerMOTD;
         private CompoundRateLimiterMap rateLimiter;
 
         EaglerListener(EaglerXServer<?> server, ConfigDataListener listenerConf) throws SSLException, IOException {
@@ -92,8 +92,7 @@ public class EaglerListener implements IEaglerListenerInfo, IEaglerXServerListen
                                 server.logger().error("Could not load server icon: " + iconName + " (not found)");
                                 cachedServerIcon = null;
                         } catch (IOException ex) {
-                                // Don't print full stack trace for common "can't read file" errors.
-                                // Just log the message — the operator can fix the file path.
+                                // No stack trace for common file errors, just the message
                                 server.logger().error("Could not load server icon: " + iconName + " (" + ex.getMessage() + ")");
                                 cachedServerIcon = null;
                         } catch (Throwable t) {

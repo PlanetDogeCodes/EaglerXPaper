@@ -59,18 +59,24 @@ public class WebSocketInitialHandler extends ChannelInboundHandlerAdapter {
                                 pipeline.fireUserEventTriggered(EnumPipelineEvent.EAGLER_STATE_WEBSOCKET_PLAYER);
                                 pipeline.replace(PipelineTransformer.HANDLER_WS_INITIAL, PipelineTransformer.HANDLER_FRAME_CODEC,
                                                 WebSocketEaglerFrameCodec.INSTANCE);
-                                // Add adaptive packet batcher AFTER the frame codec (between frame codec and handshake).
-                                // In Netty, outbound writes travel tail→head, so this positions the batcher
-                                // BEFORE the frame codec in the outbound direction — it receives raw ByteBufs,
-                                // batches them, then passes them to the frame codec which wraps them in
-                                // BinaryWebSocketFrame. This is what actually reduces frame count.
+                                // Watch for the vanilla server enabling MC-level compression on this
+                                // connection and swap the compression codecs back out for no-op
+                                // placeholders. Eaglercraft clients speak one raw packet per WebSocket
+                                // frame and cannot parse the [uncompressedSize] prefix that
+                                // CompressionEncoder prepends to every packet.
+                                pipeline.addAfter(PipelineTransformer.HANDLER_FRAME_CODEC, EaglerCompressionGuardHandler.HANDLER_NAME,
+                                                new EaglerCompressionGuardHandler(pipelineData));
+                                // Adaptive packet batcher — coalesces flushes (not frames) under
+                                // load: each buffered packet is still written as its own WebSocket
+                                // frame downstream of the frame codec, the flushes just happen
+                                // together.
                                 if (net.lax1dude.eaglercraft.backend.server.base.config.EaglerXPaperConfig.enableAdaptiveBatching) {
                                         try {
-                                                pipeline.addAfter(PipelineTransformer.HANDLER_FRAME_CODEC,
+                                                pipeline.addAfter(EaglerCompressionGuardHandler.HANDLER_NAME,
                                                                 AdaptivePacketBatcher.HANDLER_NAME,
                                                                 new AdaptivePacketBatcher());
                                         } catch (Exception e) {
-                                                // If the batcher can't be added (e.g., handler name conflict), continue without it
+                                                pipelineData.server.logger().warn("Could not install the adaptive packet batcher", e);
                                         }
                                 }
                                 pipeline.fireUserEventTriggered(EnumPipelineEvent.EAGLER_INJECTED_FRAME_HANDLERS);

@@ -56,6 +56,9 @@ public class SPacketVCPlayerList implements EaglerVCPacket {
 	@Override
 	public void readPacket(DataInput buffer) throws IOException {
 		int cnt = buffer.readInt();
+		if (cnt < 0 || cnt > 0x10000) {
+			throw new IOException("Voice player list count out of range: " + cnt);
+		}
 		List<UserData> userList = (List<UserData>) (users = new ArrayList<>(cnt));
 		if (cnt > 0) {
 			for (int i = 0; i < cnt; ++i) {
@@ -70,7 +73,7 @@ public class SPacketVCPlayerList implements EaglerVCPacket {
 	@Override
 	public void writePacket(DataOutput buffer) throws IOException {
 		if (users == null || users.size() == 0) {
-			buffer.writeByte(0);
+			buffer.writeInt(0);
 		} else {
 			if (users instanceof RandomAccess) {
 				List<UserData> userList = (List<UserData>) users;

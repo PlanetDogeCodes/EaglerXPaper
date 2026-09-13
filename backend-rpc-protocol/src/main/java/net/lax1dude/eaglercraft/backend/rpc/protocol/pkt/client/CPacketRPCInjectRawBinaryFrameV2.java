@@ -25,6 +25,8 @@ import net.lax1dude.eaglercraft.backend.rpc.protocol.pkt.EaglerBackendRPCPacket;
 
 public class CPacketRPCInjectRawBinaryFrameV2 implements EaglerBackendRPCPacket {
 
+	public static final int MAX_MESSAGE_DATA = 0x400000;
+
 	public byte[] messageData;
 
 	public CPacketRPCInjectRawBinaryFrameV2() {
@@ -36,7 +38,11 @@ public class CPacketRPCInjectRawBinaryFrameV2 implements EaglerBackendRPCPacket 
 
 	@Override
 	public void readPacket(DataInput buffer) throws IOException {
-		messageData = new byte[buffer.readInt()];
+		int len = buffer.readInt();
+		if (len < 0 || len > MAX_MESSAGE_DATA) {
+			throw new IOException("Raw binary frame length out of range: " + len);
+		}
+		messageData = new byte[len];
 		buffer.readFully(messageData);
 	}
 

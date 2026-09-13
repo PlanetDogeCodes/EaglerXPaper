@@ -168,8 +168,6 @@ public class EaglerXSupervisorServer implements Runnable {
 
 		logger.info("Starting listeners...");
 
-		eventLoopGroup = PipelineFactory.createEventLoopGroup();
-
 		CountDownLatch cnt = new CountDownLatch(2);
 		AtomicBoolean issues = new AtomicBoolean(false);
 
@@ -219,7 +217,7 @@ public class EaglerXSupervisorServer implements Runnable {
 		try {
 			cnt.await();
 		} catch (InterruptedException e) {
-			e.printStackTrace();
+			logger.error("Interrupted while binding listeners!", e);
 			stopListeners();
 			running = false;
 			return;

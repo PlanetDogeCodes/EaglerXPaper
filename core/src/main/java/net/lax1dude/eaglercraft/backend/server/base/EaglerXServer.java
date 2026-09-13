@@ -94,11 +94,13 @@ import net.lax1dude.eaglercraft.backend.server.base.nbt.NBTHelper;
 import net.lax1dude.eaglercraft.backend.server.base.notifications.NotificationService;
 import net.lax1dude.eaglercraft.backend.server.base.pause_menu.PauseMenuService;
 import net.lax1dude.eaglercraft.backend.server.base.config.EaglerConfigLoader;
+import net.lax1dude.eaglercraft.backend.server.base.config.EaglerXPaperConfig;
 import net.lax1dude.eaglercraft.backend.server.base.pipeline.PipelineTransformer;
 import net.lax1dude.eaglercraft.backend.server.base.query.QueryServer;
 import net.lax1dude.eaglercraft.backend.server.base.rpc.BackendChannelHelper;
 import net.lax1dude.eaglercraft.backend.server.base.rpc.BackendRPCService;
 import net.lax1dude.eaglercraft.backend.server.base.skins.ProfileResolver;
+import net.lax1dude.eaglercraft.backend.server.base.skins.SkinCachePrewarmer;
 import net.lax1dude.eaglercraft.backend.server.base.skins.SimpleProfileCache;
 import net.lax1dude.eaglercraft.backend.server.base.skins.SkinService;
 import net.lax1dude.eaglercraft.backend.server.base.supervisor.ISupervisorServiceImpl;
@@ -153,14 +155,14 @@ public class EaglerXServer<PlayerObject> implements IEaglerXServerImpl<PlayerObj
         private ExtCapabilityMap extCapabilityMap;
         private SSLCertificateManager certificateManager;
         private IPlatformTask certificateRefreshTask;
-        private String serverListConfirmCode;
+        private volatile String serverListConfirmCode;
         private Class<?> componentType;
         private Set<Class<?>> componentTypeSet;
         private ComponentHelper<?> componentHelper;
         private IHTTPClient httpClient;
         private BinaryHTTPClient httpClientAPI;
         private ProfileResolver profileResolver;
-        private TexturesProperty eaglerPlayersVanillaSkin;
+        private volatile TexturesProperty eaglerPlayersVanillaSkin;
         private boolean isEaglerPlayerProperyEnabled;
         private SkinService<PlayerObject> skinService;
         private DeferredStartSkinCache skinCacheService;
@@ -448,10 +450,8 @@ public class EaglerXServer<PlayerObject> implements IEaglerXServerImpl<PlayerObj
                         skinCacheService.setDelegate(new SkinCacheService(
                                         new SkinCacheDownloader(httpClient, skinConf.getValidSkinDownloadURLs()), datastore,
                                         skinConf.getSkinCacheMemoryKeepSeconds(), skinConf.getSkinCacheMemoryMaxObjects(), logger()));
-                        
-                        // Pre-warm the skin cache for recently-seen players
-                        // This eliminates first-join skin download latency
-                        if (net.lax1dude.eaglercraft.backend.server.base.config.EaglerXPaperConfig.enableSkinPrewarm) {
+
+                        if (EaglerXPaperConfig.enableSkinPrewarm) {
                                 try {
                                         prewarmSkinCache(skinConf);
                                 } catch (Exception e) {
@@ -474,14 +474,14 @@ public class EaglerXServer<PlayerObject> implements IEaglerXServerImpl<PlayerObj
         }
 
         /**
-         * Starts asynchronous skin cache pre-warming. Reads usercache.json and
-         * pre-loads skins for recently-seen players so first-join has zero latency.
+         * Pre-loads skins for recently-seen players from usercache.json
+         * so first-joins have zero skin download latency.
          */
         private void prewarmSkinCache(ConfigDataSkinService skinConf) {
-                java.io.File usercache = new java.io.File("usercache.json");
-                int maxPlayers = net.lax1dude.eaglercraft.backend.server.base.config.EaglerXPaperConfig.prewarmMaxPlayers;
+                File usercache = new File("usercache.json");
+                int maxPlayers = EaglerXPaperConfig.prewarmMaxPlayers;
                 int threads = Math.max(1, Math.min(4, Runtime.getRuntime().availableProcessors() / 2));
-                skinCachePrewarmer = new net.lax1dude.eaglercraft.backend.server.base.skins.SkinCachePrewarmer(
+                skinCachePrewarmer = new SkinCachePrewarmer(
                                 skinCacheService, logger(), usercache, maxPlayers, threads);
                 skinCachePrewarmer.startAsync();
         }
@@ -500,19 +500,13 @@ public class EaglerXServer<PlayerObject> implements IEaglerXServerImpl<PlayerObj
 
                 skinService.handleDisabled();
 
-                // Stop skin cache pre-warming if active
                 if (skinCachePrewarmer != null) {
                         skinCachePrewarmer.shutdown();
                         skinCachePrewarmer = null;
                 }
 
                 if (skinCacheService != null) {
-                        // CRITICAL: dispose the SkinCacheService BEFORE closing the JDBC connection.
-                        // dispose() terminates the SkinCacheDatastore worker threads, releases the
-                        // native Deflater/Inflater state, and disposes the PreparedStatements.
-                        // Without this, every /reload or PlugMan toggle leaks N worker threads plus
-                        // ~64 KB of native zlib state per thread, and the workers' PreparedStatements
-                        // stay bound to a closed JDBC connection (will throw on next use).
+                        // dispose() must run before the JDBC handle is closed
                         ISkinCacheService delegate = skinCacheService.getDelegate();
                         if (delegate instanceof SkinCacheService) {
                                 try {
@@ -666,17 +660,12 @@ public class EaglerXServer<PlayerObject> implements IEaglerXServerImpl<PlayerObj
                                         .handleDestroyPlayer(playerInstance.getRewindAttachment());
                 }
 
-                // CRITICAL: dispose the MessageController so its scheduled flush task is cancelled
-                // and the pending sendQueue is cleared. Without this, players who disconnect
-                // immediately after joining leave behind a futureSendTask scheduled to fire after
-                // defragSendDelay ms (default 50 ms), holding up to maxPackets (default 64) pending
-                // GameMessagePacket objects. During disconnect storms this creates transient memory
-                // pressure.
+                // cancel the flush task and clear any pending packets
                 if (playerInstance.messageController != null) {
                         try {
                                 playerInstance.messageController.dispose();
                         } catch (Throwable t) {
-                                // Best effort — don't crash on unregister
+                                // best effort
                         }
                         playerInstance.messageController = null;
                 }

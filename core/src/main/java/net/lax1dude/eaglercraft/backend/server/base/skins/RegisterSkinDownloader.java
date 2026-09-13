@@ -87,7 +87,8 @@ class RegisterSkinDownloader {
 	}
 
 	private void countDown() {
-		if ((int) COUNT_DOWN_HANDLE.getAndAdd(this, -1) == 0) {
+		// 2 countdowns total (skin + cape), trigger on the second one
+		if ((int) COUNT_DOWN_HANDLE.getAndAdd(this, -1) == 1) {
 			state.handleComplete(player, skinResult, capeResult, onComplete);
 		}
 	}

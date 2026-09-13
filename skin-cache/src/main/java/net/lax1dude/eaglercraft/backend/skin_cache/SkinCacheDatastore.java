@@ -25,6 +25,7 @@ import java.util.Arrays;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.zip.DataFormatException;
 import java.util.zip.Deflater;
@@ -51,6 +52,8 @@ public class SkinCacheDatastore implements ISkinCacheDatastore {
 
 	protected final SkinCacheTable skin;
 	protected final SkinCacheTable cape;
+	// serializes transaction state changes on the (possibly shared) JDBC connection
+	protected final Object dbWriteLock = new Object();
 
 	private class SkinCacheDatastoreThreadEnv {
 
@@ -120,8 +123,8 @@ public class SkinCacheDatastore implements ISkinCacheDatastore {
 		this.maxObjects = maxObjects;
 		this.sqliteCompatible = sqliteCompatible;
 		this.logger = logger;
-		skin = new SkinCacheTable("eagler_skins", conn[0], sqliteCompatible, logger);
-		cape = new SkinCacheTable("eagler_capes", conn[0], sqliteCompatible, logger);
+		skin = new SkinCacheTable("eagler_skins", conn[0], sqliteCompatible, logger, dbWriteLock);
+		cape = new SkinCacheTable("eagler_capes", conn[0], sqliteCompatible, logger, dbWriteLock);
 		disposeLatch = new CountDownLatch(threadCount);
 		threads = new SkinCacheDatastoreThreadEnv[threadCount];
 		for (int i = 0; i < threadCount; ++i) {
@@ -263,8 +266,14 @@ public class SkinCacheDatastore implements ISkinCacheDatastore {
 	private synchronized void runCleanup() throws SQLException {
 		long millis = System.currentTimeMillis();
 		long expiry = millis - keepObjectsDays * 86400000l;
-		skin.runCleanup(maxObjects, expiry);
-		cape.runCleanup(maxObjects, expiry);
+		// The DELETE statements execute on the shared JDBC connection, so this
+		// write path needs the same lock as the storeSkin transactions - an
+		// unlocked DELETE could land inside a worker's transaction and get
+		// committed or rolled back by it.
+		synchronized (dbWriteLock) {
+			skin.runCleanup(maxObjects, expiry);
+			cape.runCleanup(maxObjects, expiry);
+		}
 	}
 
 	@Override
@@ -273,8 +282,12 @@ public class SkinCacheDatastore implements ISkinCacheDatastore {
 			databaseQueue.add(TERMINATE);
 		}
 		try {
-			disposeLatch.await();
+			// bounded so a hung worker can't block plugin disable forever
+			if (!disposeLatch.await(10, TimeUnit.SECONDS)) {
+				logger.warn("Skin cache datastore workers did not terminate in time");
+			}
 		} catch (InterruptedException e) {
+			Thread.currentThread().interrupt();
 		}
 		skin.dispose();
 		cape.dispose();

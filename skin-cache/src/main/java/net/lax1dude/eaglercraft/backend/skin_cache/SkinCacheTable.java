@@ -63,6 +63,7 @@ class SkinCacheTable {
         protected final String name;
         protected final boolean sqlite;
         protected final ILoggerAdapter logger;
+        protected final Object writeLock;
 
         protected final PreparedStatement statementCount;
 
@@ -76,10 +77,11 @@ class SkinCacheTable {
         protected final PreparedStatement statementDeleteExpired;
         protected final PreparedStatement statementDeleteOld;
 
-        SkinCacheTable(String name, Connection conn, boolean sqlite, ILoggerAdapter logger) throws SQLException {
+        SkinCacheTable(String name, Connection conn, boolean sqlite, ILoggerAdapter logger, Object writeLock) throws SQLException {
                 this.name = name;
                 this.sqlite = sqlite;
                 this.logger = logger;
+                this.writeLock = writeLock;
                 try (Statement stmt = conn.createStatement()) {
                         if (sqlite) {
                                 // TextureID will be used by SQLite as rowid
@@ -145,38 +147,34 @@ class SkinCacheTable {
         }
 
         void storeSkin(SkinCacheTableThreadEnv env, String skinURL, byte[] hash, byte[] data) throws SQLException {
-                // CRITICAL: wrap both inserts in a transaction so a JVM crash or JDBC
-                // connection drop between the two statements can't leave an orphan row
-                // in _objects with no matching _indices entry. Previously, a crash
-                // between statementStore.executeUpdate() and statementStoreIndex.executeUpdate()
-                // would leave an orphan blob that would only be cleaned up by LRU/expiry
-                // (default 45 days), accumulating bloat in the SQLite file.
-                Connection conn = env.statementStore.getConnection();
-                boolean prevAutoCommit = conn.getAutoCommit();
-                conn.setAutoCommit(false);
-                try {
-                        PreparedStatement stmt = env.statementStore;
-                        stmt.setDate(1, new Date(System.currentTimeMillis()));
-                        stmt.setBytes(2, hash);
-                        stmt.setBytes(3, data);
-                        stmt.executeUpdate();
-                        stmt = env.statementStoreIndex;
-                        stmt.setString(1, skinURL);
-                        stmt.setBytes(2, hash);
-                        stmt.executeUpdate();
-                        conn.commit();
-                } catch (SQLException e) {
+                // both tables can share one JDBC connection across several worker
+                // threads, so the transaction state changes must be serialized
+                synchronized (writeLock) {
+                        Connection conn = env.statementStore.getConnection();
+                        boolean prevAutoCommit = conn.getAutoCommit();
+                        conn.setAutoCommit(false);
                         try {
-                                conn.rollback();
-                        } catch (SQLException re) {
-                                // best effort
-                        }
-                        throw e;
-                } finally {
-                        try {
-                                conn.setAutoCommit(prevAutoCommit);
-                        } catch (SQLException ae) {
-                                // best effort — connection may already be closed
+                                PreparedStatement stmt = env.statementStore;
+                                stmt.setDate(1, new Date(System.currentTimeMillis()));
+                                stmt.setBytes(2, hash);
+                                stmt.setBytes(3, data);
+                                stmt.executeUpdate();
+                                stmt = env.statementStoreIndex;
+                                stmt.setString(1, skinURL);
+                                stmt.setBytes(2, hash);
+                                stmt.executeUpdate();
+                                conn.commit();
+                        } catch (SQLException e) {
+                                try {
+                                        conn.rollback();
+                                } catch (SQLException re) {
+                                }
+                                throw e;
+                        } finally {
+                                try {
+                                        conn.setAutoCommit(prevAutoCommit);
+                                } catch (SQLException ae) {
+                                }
                         }
                 }
         }

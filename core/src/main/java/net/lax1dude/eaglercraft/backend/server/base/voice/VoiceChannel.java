@@ -110,14 +110,9 @@ class VoiceChannel<PlayerObject> implements IVoiceChannel {
                         if (!mgr.ratelimitCon()) {
                                 return;
                         }
-                        // CRITICAL: don't precompute "empty" before putIfAbsent — two players
-                        // A and B joining concurrently when the channel is empty will both see
-                        // empty=true (before either has put), both put, and both skip the broadcast.
-                        // The result: neither A nor B receives the global player list, and they
-                        // only discover each other when one manually sends a Request packet.
-                        // Fix: put first, then re-check the resulting set's size to decide
-                        // whether to broadcast. (We will broadcast to all players including
-                        // ourselves so that a 2-player channel sees each other immediately.)
+                        // put first, then check the size: computing "empty" before
+                        // putIfAbsent would let two concurrent joiners both skip the
+                        // broadcast and never learn about each other
                         if (connectedPlayers.putIfAbsent(selfUUID, this) != null) {
                                 return;
                         }
@@ -125,7 +120,6 @@ class VoiceChannel<PlayerObject> implements IVoiceChannel {
                         Object[] allPlayers = connectedPlayers.values().toArray();
                         int len = allPlayers.length;
                         if (len <= 1) {
-                                // We're the only one — no one to broadcast to.
                                 return;
                         }
                         SPacketVoiceSignalGlobalEAG.UserData[] userDatas = new SPacketVoiceSignalGlobalEAG.UserData[len];

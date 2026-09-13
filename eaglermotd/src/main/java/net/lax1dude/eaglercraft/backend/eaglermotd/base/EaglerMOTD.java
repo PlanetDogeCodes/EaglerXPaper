@@ -77,9 +77,7 @@ public class EaglerMOTD<PlayerObject> implements IEaglerMOTDImpl<PlayerObject> {
                 }
                 platform.setOnMOTD(null);
                 platform.setOnReload(null);
-                // CRITICAL: close any active MOTD connections during disable. Previously these
-                // remained open until the player disconnected or the read timeout fired —
-                // leaving players with a frozen MOTD screen during plugin reload.
+                // close live MOTD connections so players don't sit on a frozen MOTD screen
                 synchronized (activeConnections) {
                         if (!activeConnections.isEmpty()) {
                                 Iterator<EaglerMOTDConnectionUpdater> itr = activeConnections.iterator();
@@ -89,13 +87,14 @@ public class EaglerMOTD<PlayerObject> implements IEaglerMOTDImpl<PlayerObject> {
                                         try {
                                                 c.close();
                                         } catch (Throwable ignored) {
-                                                // best effort — don't crash on disable
                                         }
                                 }
                         }
                 }
-                for (String etr : config.queryTypes.keySet()) {
-                        server.getQueryServer().unregisterQueryType(this, etr);
+                if (config != null) {
+                        for (String etr : config.queryTypes.keySet()) {
+                                server.getQueryServer().unregisterQueryType(this, etr);
+                        }
                 }
                 config = null;
         }

@@ -81,7 +81,7 @@ public class CPacketRPCNotifIconRelease implements EaglerBackendRPCPacket {
 
 	@Override
 	public int length() {
-		return 1 + (iconsToRelease.size() << 4);
+		return iconsToRelease != null ? 1 + (iconsToRelease.size() << 4) : 1;
 	}
 
 }

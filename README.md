@@ -71,14 +71,12 @@ skin_cache_prewarm:
 
 ### Adaptive Packet Batching
 
-EaglerXPaper automatically batches outbound packets for Eaglercraft connections that are sending many packets rapidly (e.g. during chunk loading or heavy entity updates). This reduces the number of WebSocket frames sent, which cuts bandwidth usage and per-frame overhead — especially helpful for mobile/slow connections.
+EaglerXPaper automatically coalesces outbound flushes for Eaglercraft connections that are sending many packets rapidly (e.g. during chunk loading or heavy entity updates). Each packet is still written as its own WebSocket frame — the wire format is untouched — but the flushes happen together, which cuts per-flush syscall, TCP-segment and TLS-record overhead. This helps most on mobile/slow connections and servers with `TCP_NODELAY` (the usual default for Minecraft).
 
 The batcher is self-adaptive:
 - **Idle connections** (few packets per second) — packets pass through immediately with zero added latency
-- **Burst connections** (20+ packets in 100ms) — packets are buffered for up to 20ms and flushed as a batch
-- **Sustained bursts** — forced flush every 200ms to cap latency
-
-It sits between the frame codec and the handshake handler in the Netty pipeline, so it batches raw ByteBufs before they get wrapped into WebSocket frames. This is what actually reduces frame count and saves bandwidth.
+- **Burst connections** (16+ packets in a 100ms window) — packets are buffered for up to 2ms and flushed together (at most 16 per batch)
+- **Sustained bursts** — a forced flush every 200ms caps added latency, and the burst timer resets so batching stays effective
 
 **Config** (`settings.yml`):
 ```yaml
@@ -87,6 +85,17 @@ adaptive_packet_batching:
 ```
 
 Both features are enabled by default and require no configuration.
+
+## v1.1.1 Hotfix 25
+
+**Fixed the game-phase packet corruption** that hit Eaglercraft 1.12.2 clients (EaglerLite, gx-launcher and other 1.12.2 distributions) on servers with `network-compression-threshold >= 0`:
+
+- The vanilla login listener enables MC-level compression through a send listener on the login compression packet. The handshake layer already swallows the packet itself, but the listener still fired and the vanilla `compress`/`decompress` codecs still landed in the Netty pipeline - quietly rewriting every outbound packet as `[uncompressedSize][data]` and desynchronizing the raw per-frame WebSocket stream the Eaglercraft protocol uses. A new `EaglerCompressionGuardHandler` now rips the codecs back out the moment the server announces compression (Paper's `ConnectionEvent.COMPRESSION_THRESHOLD_SET`), inside the same event-loop task, so not a single framed packet can escape.
+- The no-op splitter/prepender swap is now deferred until a connection is actually identified as HTTP/WebSocket. On dual-stack ports this restores correct framing for vanilla Java clients, which were getting the no-op placeholders too.
+- The MC 1.20.2+ post-login flow is alive again: the NetworkManager is intentionally not wrapped on 1.20.2+ (wrapping it breaks the login/configuration state machine), so the UUID-to-context registration the `PlayerLoginEvent` handler depends on is now performed by a small play-state listener. Skins, voice, RPC and the other Eagler player features initialize on modern Paper again, and the second-layer compression cleanup at `PlayerLoginEvent` runs with it.
+- The `PlayerLoginEvent` cleanup no longer removes the no-op `splitter`/`prepender` placeholders. Keeping them means `addAfter("splitter")`-style anchoring from vanilla code or plugins (ViaVersion, PacketEvents) keeps working on Eagler connections.
+
+This release also lands a full audit pass over every module (codec read/write symmetry, refcounting, thread-safety, bounds checks, event-loop leaks, busy-waits and logging).
 
 ## Installation
 
@@ -151,11 +160,16 @@ EaglerXPaper injects into Paper's Netty channel pipeline via Paper's `ChannelIni
 | `core/src/main/java/.../base/handshake/HandshakerInstance.java` | Null-check UUID from auth events |
 | `core/src/main/java/.../base/pipeline/HTTPInitialInboundHandler.java` | Proper error logging + channel close |
 | `core/src/main/java/.../base/pipeline/AdaptivePacketBatcher.java` | **NEW** — adaptive outbound packet batching |
-| `core/src/main/java/.../base/pipeline/WebSocketInitialHandler.java` | Insert `AdaptivePacketBatcher` into pipeline |
+| `core/src/main/java/.../base/pipeline/EaglerCompressionGuardHandler.java` | **NEW** — strips vanilla MC compression codecs off Eagler connections (Hotfix 25 packet-corruption fix) |
+| `core/src/main/java/.../base/pipeline/PipelineTransformer.java` | Defers the splitter/prepender no-op swap until a connection is identified as HTTP/WebSocket (Hotfix 25) |
+| `core/src/main/java/.../base/pipeline/MultiStackInitialInboundHandler.java` | Applies the deferred no-op swap on the HTTP path (Hotfix 25) |
+| `core/src/main/java/.../base/pipeline/WebSocketInitialHandler.java` | Insert `AdaptivePacketBatcher` and `EaglerCompressionGuardHandler` into pipeline |
+| `core/src/main/java/.../base/handshake/VanillaInitializer.java` | 1.20.2+ login-success parsing, LoginAcknowledged, buffered replay of login-phase packets |
+| `core/core-platform-bukkit/.../bukkit/PlatformPluginBukkit.java` | Play-state UUID registrar for the 1.20.2+ post-login flow; try/catch around `updateRealAddress`; EventLoopGroup ownership tracking + shutdown |
+| `core/core-platform-bukkit/.../bukkit/async/PlayerPostLoginInjector.java` | MC 1.20.2+ natural login flow, compression cleanup at `PlayerLoginEvent`, marker-based post-login handoff |
 | `core/src/main/java/.../base/config/EaglerXPaperConfig.java` | **NEW** — config holder for EaglerXPaper features |
 | `core/src/main/java/.../base/config/EaglerConfigLoader.java` | Added `skin_cache_prewarm` and `adaptive_packet_batching` config sections |
 | `core/src/main/java/.../base/DeferredStartSkinCache.java` | Made `service` field volatile for thread safety |
-| `core/core-platform-bukkit/.../bukkit/PlatformPluginBukkit.java` | Try/catch around `updateRealAddress`; EventLoopGroup ownership tracking + shutdown |
 | `core/build.gradle` | JAR renamed to `EaglerXPaper.jar` |
 | `core/core-platform-bukkit/build.gradle` | Added `api-version: '1.21'` merge task |
 

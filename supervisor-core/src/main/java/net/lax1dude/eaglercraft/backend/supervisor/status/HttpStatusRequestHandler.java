@@ -103,7 +103,7 @@ public class HttpStatusRequestHandler extends ChannelInboundHandlerAdapter {
 					HttpResponseStatus.UNAUTHORIZED);
 			HttpHeaders responseHeaders = response.headers();
 			responseHeaders.add(HttpHeaderNames.WWW_AUTHENTICATE, "Basic realm=\"you eagler\" charset=\"utf-8\"");
-			responseHeaders.add(HttpHeaderNames.DATE, gmt.format(new Date()));
+			responseHeaders.add(HttpHeaderNames.DATE, gmt.get().format(new Date()));
 			responseHeaders.add(HttpHeaderNames.SERVER, server.getServerString());
 			ctx.writeAndFlush(response).addListener(ChannelFutureListener.CLOSE);
 			return false;
@@ -111,12 +111,15 @@ public class HttpStatusRequestHandler extends ChannelInboundHandlerAdapter {
 		return true;
 	}
 
-	public static final SimpleDateFormat gmt;
+	private static final ThreadLocal<SimpleDateFormat> gmt = ThreadLocal.withInitial(() -> {
+		SimpleDateFormat fmt = new SimpleDateFormat();
+		fmt.setTimeZone(new SimpleTimeZone(0, "GMT"));
+		fmt.applyPattern("dd MMM yyyy HH:mm:ss z");
+		return fmt;
+	});
 
-	static {
-		gmt = new SimpleDateFormat();
-		gmt.setTimeZone(new SimpleTimeZone(0, "GMT"));
-		gmt.applyPattern("dd MMM yyyy HH:mm:ss z");
+	static String formatGMT(Date date) {
+		return gmt.get().format(date);
 	}
 
 	private void sendResponse(ChannelHandlerContext ctx, HttpResponseStatus code, String contentType, String markup) {
@@ -126,7 +129,7 @@ public class HttpStatusRequestHandler extends ChannelInboundHandlerAdapter {
 		HttpHeaders responseHeaders = response.headers();
 		responseHeaders.add(HttpHeaderNames.CONTENT_TYPE, contentType);
 		responseHeaders.add(HttpHeaderNames.CONTENT_LENGTH, buffer.readableBytes());
-		responseHeaders.add(HttpHeaderNames.DATE, gmt.format(new Date()));
+		responseHeaders.add(HttpHeaderNames.DATE, gmt.get().format(new Date()));
 		responseHeaders.add(HttpHeaderNames.SERVER, server.getServerString());
 		ctx.writeAndFlush(response).addListener(ChannelFutureListener.CLOSE);
 	}

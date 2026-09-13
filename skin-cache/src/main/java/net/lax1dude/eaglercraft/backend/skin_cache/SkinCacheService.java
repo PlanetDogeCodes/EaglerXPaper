@@ -247,45 +247,29 @@ public class SkinCacheService implements ISkinCacheService {
         }
 
         /**
-         * Disposes of the underlying datastore (terminates worker threads, ends
-         * Deflater/Inflater native state, disposes PreparedStatements). Must be
-         * called BEFORE the JDBC connection is closed, so the worker threads can
-         * drain their queues cleanly.
-         *
-         * Without this call, every {@code /reload} or PlugMan toggle spawns a
-         * new set of {@code SkinCacheDatastore Thread #i} daemon threads that
-         * remain blocked forever on {@code databaseQueue.take()}, each holding
-         * native zlib state (~64 KB) and live PreparedStatements against a
-         * closed JDBC connection.
+         * Disposes the datastore (worker threads, zlib state, PreparedStatements).
+         * Must be called BEFORE the JDBC connection is closed. Without this, every
+         * /reload or PlugMan toggle leaks the datastore worker threads.
          */
         public void dispose() {
                 try {
                         datastore.dispose();
                 } catch (Throwable t) {
-                        // Log and continue — we still need to close the JDBC handles below.
-                        System.err.println("[EaglerXServer] SkinCacheService.dispose() failed: " + t);
+                        logger.error("SkinCacheService.dispose() failed", t);
                 }
                 skinCache.invalidateAll();
                 capeCache.invalidateAll();
-                // Acquire write locks for consistency with the lock discipline used everywhere
-                // else that touches these maps. Without the locks, a concurrent resolveSkinByURL
-                // call (unlikely during disable, but possible) could see an inconsistent state.
-                if (failedSkinLookupsLock != null) {
-                        failedSkinLookupsLock.writeLock().lock();
-                        try {
-                                failedSkinLookups.clear();
-                        } finally {
-                                failedSkinLookupsLock.writeLock().unlock();
-                        }
+                failedSkinLookupsLock.writeLock().lock();
+                try {
+                        failedSkinLookups.clear();
+                } finally {
+                        failedSkinLookupsLock.writeLock().unlock();
                 }
-                if (failedCapeLookupsLock != null) {
-                        failedCapeLookupsLock.writeLock().lock();
-                        try {
-                                failedCapeLookups.clear();
-                        } finally {
-                                failedCapeLookupsLock.writeLock().unlock();
-                        }
+                failedCapeLookupsLock.writeLock().lock();
+                try {
+                        failedCapeLookups.clear();
+                } finally {
+                        failedCapeLookupsLock.writeLock().unlock();
                 }
         }
-
 }

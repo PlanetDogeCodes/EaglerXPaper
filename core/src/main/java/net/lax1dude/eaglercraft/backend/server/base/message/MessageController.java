@@ -144,16 +144,8 @@ public abstract class MessageController {
         }
 
         /**
-         * Disposes of this controller's scheduled flush task and clears the send queue.
-         * Should be called when the player is destroyed or the channel is closed, to
-         * avoid the scheduled future firing on a dead channel and to release the
-         * pending GameMessagePacket objects in the sendQueue.
-         *
-         * Without this, players who disconnect immediately after joining leave behind
-         * a {@code futureSendTask} scheduled to fire after {@code defragSendDelay} ms
-         * (default 50 ms), holding up to {@code maxPackets} (default 64) pending
-         * GameMessagePacket objects. During disconnect storms this creates transient
-         * memory pressure.
+         * Cancels the scheduled flush task and clears the send queue. Call on player
+         * destroy or channel close.
          */
         public synchronized void dispose() {
                 if (futureSendTask != null) {

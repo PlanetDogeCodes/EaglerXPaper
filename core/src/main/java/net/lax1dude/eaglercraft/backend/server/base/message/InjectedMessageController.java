@@ -51,16 +51,7 @@ public class InjectedMessageController extends MessageController {
                         ServerMessageHandler handler, Channel channel, int defragSendDelay, int maxPackets) {
                 final InjectedMessageController controller = new InjectedMessageController(protocol, handler, channel,
                                 defragSendDelay, maxPackets);
-                // CRITICAL: pipeline.addAfter() MUST run on the channel's EventLoop.
-                // This method is invoked from BukkitListener.onPlayerPostLoginEvent (Bukkit main thread)
-                // -> plugin.initializePlayer -> EaglerXServerPlayerInitializer.acceptPlayer
-                // -> EaglerXServer.registerEaglerPlayer -> MessageControllerFactory.initializePlayer
-                // -> injectEagler.
-                // Without this wrap, Netty defers the addAfter to the EventLoop's task queue, but the
-                // surrounding code does not wait for it. If a BinaryWebSocketFrame arrives in the
-                // meantime, the frame codec will fire channelRead past the position where the
-                // injected handler should have been — packets are silently dropped, and the player
-                // sees "Disconnected from Server".
+                // pipeline mutation must happen on the channel's event loop
                 Runnable r = () -> {
                         try {
                                 channel.pipeline().addAfter(PipelineTransformer.HANDLER_FRAME_CODEC,
@@ -68,11 +59,9 @@ public class InjectedMessageController extends MessageController {
                                                 new EaglerInjectedMessageHandler(controller));
                                 channel.pipeline().fireUserEventTriggered(EnumPipelineEvent.EAGLER_INJECTED_MESSAGE_CONTROLLER);
                         } catch (Throwable t) {
-                                // NoSuchElementException if HANDLER_FRAME_CODEC was removed/renamed by another plugin.
-                                // IllegalArgumentException if HANDLER_INJECTED is already in the pipeline (double-init).
-                                // Either way, log and don't kill the channel — Eagler features will be unavailable
-                                // but the player can still join.
-                                System.err.println("[EaglerXServer] injectEagler failed for channel " + channel + ": " + t);
+                                // frame codec missing or handler already injected, keep the connection alive
+                                handler.getServer().logger()
+                                                .warn("Could not inject the Eagler message handler on channel " + channel, t);
                         }
                 };
                 if (channel.eventLoop().inEventLoop()) {
@@ -81,9 +70,9 @@ public class InjectedMessageController extends MessageController {
                         try {
                                 channel.eventLoop().submit(r);
                         } catch (Throwable t) {
-                                System.err.println(
-                                                "[EaglerXServer] injectEagler failed to schedule on event loop for channel "
-                                                                + channel + ": " + t);
+                                handler.getServer().logger().warn(
+                                                "Could not schedule the Eagler message handler injection on channel "
+                                                                + channel, t);
                         }
                 }
                 return controller;
@@ -114,7 +103,7 @@ public class InjectedMessageController extends MessageController {
                                                         }
                                                         j = is.readVarInt();
                                                         k = (buffer.readerIndex() - start) + j;
-                                                        if (j > is.available()) {
+                                                        if (j < 0 || j > is.available()) {
                                                                 throw new IOException("Packet fragment is too long: " + j + " > " + is.available());
                                                         }
                                                         pkt = protocol.readPacketV5(GamePluginMessageConstants.CLIENT_TO_SERVER, is);

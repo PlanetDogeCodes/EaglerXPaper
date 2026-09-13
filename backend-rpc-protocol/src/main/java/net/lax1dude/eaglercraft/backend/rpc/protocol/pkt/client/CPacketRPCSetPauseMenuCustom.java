@@ -206,9 +206,11 @@ public class CPacketRPCSetPauseMenuCustom implements EaglerBackendRPCPacket {
 					}
 					PacketImageData.writeRGB16(buffer, etr);
 				}
+			} else {
+				buffer.writeShort(0);
 			}
 		} else {
-			buffer.writeByte(0);
+			buffer.writeShort(0);
 		}
 	}
 

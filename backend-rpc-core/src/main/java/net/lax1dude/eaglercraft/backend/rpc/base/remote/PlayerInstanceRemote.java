@@ -66,7 +66,7 @@ public class PlayerInstanceRemote<PlayerObject> extends RPCAttributeHolder
 	protected final IPlatformPlayer<PlayerObject> player;
 	protected final IPlatformSubLogger logger;
 	protected final VoiceManagerRemote<PlayerObject> voiceManager;
-	protected boolean eaglerPlayer;
+	protected volatile boolean eaglerPlayer;
 	private volatile int ready = 0;
 	private volatile BasePlayerRPC<PlayerObject> context;
 	private RPCActiveFuture<IBasePlayerRPC<PlayerObject>> future;

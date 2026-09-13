@@ -45,12 +45,7 @@ class DeferredStartSkinCache implements ISkinCacheService {
                 }
         }
 
-        /**
-         * Returns the current delegate, or {@code null} if no delegate has been set
-         * (or has been cleared). Used by {@link EaglerXServer#disableHandler()} to
-         * retrieve the active SkinCacheService so it can be properly disposed before
-         * the JDBC connection is closed.
-         */
+        // used by disableHandler to dispose the service before closing JDBC
         ISkinCacheService getDelegate() {
                 return service;
         }

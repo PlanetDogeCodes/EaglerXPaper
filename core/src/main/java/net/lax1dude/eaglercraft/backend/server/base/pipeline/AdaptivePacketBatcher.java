@@ -103,6 +103,16 @@ public class AdaptivePacketBatcher extends ChannelDuplexHandler {
     @Override
     public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception {
         if (!(msg instanceof ByteBuf)) {
+            // Flush anything buffered first so the packet stream stays ordered
+            // around non-ByteBuf writes that bypass the buffer
+            if (batchingActive && !buffer.isEmpty() && ctx.channel().eventLoop().inEventLoop()) {
+                cancelFlushTask();
+                flushBuffer(ctx, false);
+                if (ctx.channel().isActive()) {
+                    batchingStartedMs = System.currentTimeMillis();
+                    scheduleFlush(ctx);
+                }
+            }
             // Non-ByteBuf writes (like BinaryWebSocketFrame) pass through immediately
             ctx.write(msg, promise);
             return;
@@ -174,6 +184,12 @@ public class AdaptivePacketBatcher extends ChannelDuplexHandler {
         flushTask = channel.eventLoop().schedule(() -> {
             flushTask = null;
             flushBuffer(ctx, false);
+            // Reset the burst timer here too, otherwise every write after
+            // maxBurstDurationMs of sustained traffic force-flushes and
+            // batching degenerates into pass-through
+            if (batchingActive) {
+                batchingStartedMs = System.currentTimeMillis();
+            }
             // If still in batching mode, schedule the next flush
             if (batchingActive && channel.isActive() && !buffer.isEmpty()) {
                 scheduleFlush(ctx);
@@ -193,12 +209,9 @@ public class AdaptivePacketBatcher extends ChannelDuplexHandler {
     }
 
     /**
-     * Flushes all buffered packets. If discardPromises is true (channel inactive
-     * or handler removed), the buffer is cleared without writing and all promises
-     * are failed.
-     *
-     * Uses try/finally to guarantee buffer/promises are cleared even if
-     * ctx.write throws — prevents ByteBuf leaks and hung promises.
+     * Writes all buffered packets, then flushes once. If a write throws, the
+     * remaining buffers are released and their promises are failed so nothing
+     * leaks and no listener hangs.
      */
     private void flushBuffer(ChannelHandlerContext ctx, boolean discardPromises) {
         if (buffer.isEmpty()) {
@@ -222,15 +235,32 @@ public class AdaptivePacketBatcher extends ChannelDuplexHandler {
             return;
         }
 
-        // Write all buffered packets, then flush once.
-        // try/finally ensures buffer/promises are cleared even if write throws.
         try {
-            int size = buffer.size();
-            for (int i = 0; i < size; i++) {
-                ctx.write(buffer.get(i), promises.get(i));
+            while (!buffer.isEmpty()) {
+                ByteBuf buf = buffer.remove(0);
+                ChannelPromise promise = promises.remove(0);
+                try {
+                    ctx.write(buf, promise);
+                } catch (Throwable t) {
+                    ReferenceCountUtil.release(buf);
+                    try {
+                        promise.setFailure(t);
+                    } catch (Exception ignored) {
+                    }
+                }
             }
             ctx.flush();
         } finally {
+            // Anything still left here was never handed downstream
+            for (ByteBuf buf : buffer) {
+                ReferenceCountUtil.release(buf);
+            }
+            for (ChannelPromise promise : promises) {
+                try {
+                    promise.setFailure(new java.nio.channels.ClosedChannelException());
+                } catch (Exception ignored) {
+                }
+            }
             buffer.clear();
             promises.clear();
         }

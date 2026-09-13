@@ -102,11 +102,15 @@ public final class SHA1Sum {
 	}
 
 	public void asBytes(@Nonnull byte[] dst, int off) {
-		byteHelper(dst, a, 0);
-		byteHelper(dst, b, 4);
-		byteHelper(dst, c, 8);
-		byteHelper(dst, d, 12);
-		byteHelper(dst, e, 16);
+		if (off < 0)
+			throw new ArrayIndexOutOfBoundsException(off);
+		if (off + 20 > dst.length)
+			throw new ArrayIndexOutOfBoundsException(off + 20);
+		byteHelper(dst, a, off);
+		byteHelper(dst, b, off + 4);
+		byteHelper(dst, c, off + 8);
+		byteHelper(dst, d, off + 12);
+		byteHelper(dst, e, off + 16);
 	}
 
 	private static int intHelper(byte[] src, int off) {

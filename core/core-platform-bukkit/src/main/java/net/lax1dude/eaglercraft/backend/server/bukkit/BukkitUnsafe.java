@@ -1076,7 +1076,10 @@ public class BukkitUnsafe {
         }
 
         private static EventLoopGroup createOwnEventLoopGroup(boolean enableNativeTransport) {
-                java.util.concurrent.ThreadFactory tf = createDefaultThreadFactory("Netty Server IO");
+                // The prefix must stay unique: isOwnEventLoopGroup in PlatformPluginBukkit
+                // decides whether this group may be shut down on plugin disable by checking
+                // for it, and the vanilla server names its own IO threads "Netty Server IO".
+                java.util.concurrent.ThreadFactory tf = createDefaultThreadFactory("EaglerXPaper IO");
                 if (enableNativeTransport) {
                         try {
                                 Class<?> epollCls = Class.forName("io.netty.channel.epoll.EpollEventLoopGroup");

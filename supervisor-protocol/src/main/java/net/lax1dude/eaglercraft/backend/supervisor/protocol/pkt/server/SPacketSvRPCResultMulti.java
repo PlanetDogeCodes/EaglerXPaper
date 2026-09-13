@@ -71,6 +71,9 @@ public class SPacketSvRPCResultMulti extends AbstractReferenceCounted implements
 	public void readPacket(ByteBuf buffer) {
 		requestUUID = new UUID(buffer.readLong(), buffer.readLong());
 		int cnt = EaglerSupervisorPacket.readVarInt(buffer);
+		if (cnt < 0 || cnt > 0x10000) {
+			throw new IllegalArgumentException("RPC multi result count out of range: " + cnt);
+		}
 		results = new ArrayList<>(cnt);
 		for (int i = 0; i < cnt; ++i) {
 			int nodeId = EaglerSupervisorPacket.readVarInt(buffer);

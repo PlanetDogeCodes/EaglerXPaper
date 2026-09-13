@@ -134,7 +134,7 @@ public class StatusRendererHTML {
 			ret.append("</td><td>");
 			ret.append(htmlEntities(proxy.getPluginVersion()));
 			ret.append("</td><td>");
-			ret.append(HttpStatusRequestHandler.gmt.format(new Date(proxy.getProxySystemTime())));
+			ret.append(HttpStatusRequestHandler.formatGMT(new Date(proxy.getProxySystemTime())));
 			ret.append("</td><td>");
 			ret.append(proxy.getPlayerCount());
 			ret.append("</td><td>");

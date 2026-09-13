@@ -20,7 +20,6 @@ import java.io.IOException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.URI;
-import java.net.URISyntaxException;
 import java.net.UnknownHostException;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
@@ -103,14 +102,16 @@ public class HTTPClient implements IHTTPClient {
                 protected final boolean ssl;
                 protected final String host;
                 protected final int port;
+                protected final URI requestURI;
 
                 protected NettyHttpChannelInitializer(Consumer<Response> responseCallback, RedirectTracker redirectTracker,
-                                boolean ssl, String host, int port) {
+                                boolean ssl, String host, int port, URI requestURI) {
                         this.responseCallback = responseCallback;
                         this.redirectTracker = redirectTracker;
                         this.ssl = ssl;
                         this.host = host;
                         this.port = port;
+                        this.requestURI = requestURI;
                 }
 
                 @Override
@@ -122,7 +123,7 @@ public class HTTPClient implements IHTTPClient {
                         }
 
                         ch.pipeline().addLast("http", new HttpClientCodec());
-                        ch.pipeline().addLast("handler", new NettyHttpResponseHandler(responseCallback, redirectTracker));
+                        ch.pipeline().addLast("handler", new NettyHttpResponseHandler(responseCallback, redirectTracker, requestURI));
                 }
 
         }
@@ -131,12 +132,15 @@ public class HTTPClient implements IHTTPClient {
 
                 protected final Consumer<Response> responseCallback;
                 protected final RedirectTracker redirectTracker;
+                protected final URI requestURI;
                 protected int responseCode = -1;
                 protected ByteBuf buffer = null;
 
-                protected NettyHttpResponseHandler(Consumer<Response> responseCallback, RedirectTracker redirectTracker) {
+                protected NettyHttpResponseHandler(Consumer<Response> responseCallback, RedirectTracker redirectTracker,
+                                URI requestURI) {
                         this.responseCallback = responseCallback;
                         this.redirectTracker = redirectTracker;
+                        this.requestURI = requestURI;
                 }
 
                 @Override
@@ -170,10 +174,7 @@ public class HTTPClient implements IHTTPClient {
 
                 @Override
                 public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
-                        // CRITICAL: Release the accumulated buffer to avoid direct ByteBuf leaks
-                        // when ReadTimeoutHandler (or any other pipeline exception) fires after
-                        // some body bytes have already been buffered. Without this release, every
-                        // timeout during skin downloads steadily leaks direct memory over days.
+                        // release any partially buffered body to avoid a direct ByteBuf leak
                         if (buffer != null) {
                                 try {
                                         buffer.release();
@@ -182,13 +183,11 @@ public class HTTPClient implements IHTTPClient {
                                 buffer = null;
                         }
                         responseCallback.accept(new Response(cause));
+                        ctx.close();
                 }
 
                 private void redirect(HttpResponse response) {
-                        // Defensive: release any partial buffer before redirecting. (Current code
-                        // detects redirect on HttpResponse before any HttpContent arrives, so buffer
-                        // is null here, but if a misbehaving server sends body bytes alongside the 3xx,
-                        // we'd leak them without this guard.)
+                        // release any partial body sent with the 3xx
                         if (buffer != null) {
                                 try {
                                         buffer.release();
@@ -203,8 +202,9 @@ public class HTTPClient implements IHTTPClient {
                                 if (target != null) {
                                         URI uri;
                                         try {
-                                                uri = new URI(target.toString());
-                                        } catch (URISyntaxException ex) {
+                                                // resolve relative Location headers against the request URI
+                                                uri = requestURI.resolve(target.toString());
+                                        } catch (IllegalArgumentException ex) {
                                                 responseCallback.accept(new Response(
                                                                 new IllegalStateException("Invalid redirect address in 3xx response!", ex)));
                                                 return;
@@ -246,6 +246,10 @@ public class HTTPClient implements IHTTPClient {
                 int port = uri.getPort();
                 boolean ssl = false;
                 String scheme = uri.getScheme();
+                if (scheme == null) {
+                        responseCallback.accept(new Response(new UnsupportedOperationException("URI is missing a scheme: " + uri)));
+                        return;
+                }
                 switch (scheme) {
                 case "http":
                         if (port == -1) {
@@ -275,7 +279,7 @@ public class HTTPClient implements IHTTPClient {
                         addressCache.put(host, inetHost);
                 }
                 InetSocketAddress addr = new InetSocketAddress(inetHost, port);
-                bootstrapper.get().handler(new NettyHttpChannelInitializer(responseCallback, redirectTracker, ssl, host, port))
+                bootstrapper.get().handler(new NettyHttpChannelInitializer(responseCallback, redirectTracker, ssl, host, port, uri))
                                 .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 5000).option(ChannelOption.TCP_NODELAY, true)
                                 .remoteAddress(addr).connect()
                                 .addListener(new NettyHttpChannelFutureListener(redirectTracker.method, uri, responseCallback));

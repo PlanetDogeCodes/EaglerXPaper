@@ -57,8 +57,8 @@ public class SupervisorPlayerInstance {
 	private final ConcurrentLazyLoader<PlayerSkinData> skinData;
 	private final ConcurrentLazyLoader<PlayerCapeData> capeData;
 
-	private Consumer<PlayerSkinData> skinDataWaiting = null;
-	private Consumer<PlayerCapeData> capeDataWaiting = null;
+	private volatile Consumer<PlayerSkinData> skinDataWaiting = null;
+	private volatile Consumer<PlayerCapeData> capeDataWaiting = null;
 
 	public SupervisorPlayerInstance(SupervisorClientInstance owner, UUID playerUUID, UUID brandUUID, int gameProtocol,
 			int eaglerProtocol, String username) {
@@ -210,7 +210,7 @@ public class SupervisorPlayerInstance {
 		Consumer<PlayerSkinData> consumer = skinDataWaiting;
 		if (consumer != null) {
 			skinDataWaiting = null;
-			logger.warn("Received error response for eagler skin lookup of player {}");
+			logger.warn("Received error response for eagler skin lookup of player {}", playerUUID);
 			consumer.accept(PlayerSkinData.ERROR);
 		} else {
 			logger.warn("Received unsolicited skin data for player {}", playerUUID);
@@ -251,7 +251,7 @@ public class SupervisorPlayerInstance {
 		Consumer<PlayerCapeData> consumer = capeDataWaiting;
 		if (consumer != null) {
 			capeDataWaiting = null;
-			logger.warn("Received error response for eagler cape lookup of player {}");
+			logger.warn("Received error response for eagler cape lookup of player {}", playerUUID);
 			consumer.accept(PlayerCapeData.ERROR);
 		} else {
 			logger.warn("Received unsolicited cape data for player {}", playerUUID);

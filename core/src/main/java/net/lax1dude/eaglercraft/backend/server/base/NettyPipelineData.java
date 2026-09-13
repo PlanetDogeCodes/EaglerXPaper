@@ -148,15 +148,9 @@ public class NettyPipelineData extends IIdentifiedConnection.Base
         public EaglerPendingStateAdapter pendingConnection;
         public EaglerLoginStateAdapter loginConnection;
 
-        /**
-         * CRITICAL: must be volatile. scheduleLoginTimeoutHelper() may be invoked
-         * from the EventLoop (after WS handshake) while cancelLoginTimeoutHelper()
-         * may be invoked from a different thread (post-login callback running on
-         * Bukkit main). Without volatile, the double-check idiom below is broken
-         * and the cancel may not see the scheduled task, leaving a dangling
-         * timer that closes the channel long after login has succeeded.
-         */
+        // volatile: scheduled from the event loop, cancelled from the main thread
         private volatile IPlatformTask disconnectTask = null;
+        private volatile int loginTimeoutGeneration = 0;
 
         private static final Runnable REACHED = () -> {
         };
@@ -260,8 +254,16 @@ public class NettyPipelineData extends IIdentifiedConnection.Base
                                 if (disconnectTask != null) {
                                         return;
                                 }
+                                // Generation counter: the timeout task only closes the channel if
+                                // it is still the one it was scheduled with. Cancelling alone does
+                                // not stop a task that is already running on the scheduler thread,
+                                // and a login completing at the same instant would otherwise close
+                                // a perfectly healthy connection.
+                                final int scheduledGeneration = ++loginTimeoutGeneration;
                                 disconnectTask = server.getPlatform().getScheduler().executeAsyncDelayedTask(() -> {
-                                        channel.close();
+                                        if (scheduledGeneration == loginTimeoutGeneration) {
+                                                channel.close();
+                                        }
                                 }, server.getConfig().getSettings().getEaglerLoginTimeout());
                         }
                 }
@@ -276,6 +278,7 @@ public class NettyPipelineData extends IIdentifiedConnection.Base
                                         return;
                                 }
                                 disconnectTask = null;
+                                ++loginTimeoutGeneration;
                         }
                         task.cancel();
                 }
@@ -300,14 +303,12 @@ public class NettyPipelineData extends IIdentifiedConnection.Base
                                 brandUUID = server.getBrandService().getBrandUUIDClientLegacy(eaglerBrandString);
                         }
                         ImmutableMap.Builder<String, byte[]> ret = null;
-                        if (profileDatas != null) {
-                                for (Entry<String, byte[]> extra : profileDatas.entrySet()) {
-                                        if (!profileDataStandard.contains(extra.getKey())) {
-                                                if (ret == null) {
-                                                        ret = ImmutableMap.builder();
-                                                }
-                                                ret.put(extra.getKey(), extra.getValue());
+                        for (Entry<String, byte[]> extra : profileDatas.entrySet()) {
+                                if (!profileDataStandard.contains(extra.getKey())) {
+                                        if (ret == null) {
+                                                ret = ImmutableMap.builder();
                                         }
+                                        ret.put(extra.getKey(), extra.getValue());
                                 }
                         }
                         return new ProfileDataHolder(skinV1, skinV2, cape, updateCert, brandUUID, ret != null ? ret.build() : null);

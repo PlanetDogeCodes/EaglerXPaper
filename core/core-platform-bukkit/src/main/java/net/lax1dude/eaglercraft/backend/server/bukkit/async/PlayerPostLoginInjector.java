@@ -168,6 +168,19 @@ public class PlayerPostLoginInjector {
         }
 
         /**
+         * Maps the final (server-assigned) player UUID to its login context so
+         * {@link #handleLoginEvent} can find the channel during PlayerLoginEvent
+         * on MC 1.20.2+, where the NetworkManager is not wrapped and the player
+         * entity does not carry its connection yet at that point. Registered by
+         * the platform's play-state listener once the Eagler handshake finishes.
+         */
+        public void registerCtxByUUID(java.util.UUID uuid, LoginEventContext ctx) {
+                if (uuid != null && ctx != null) {
+                        ctxByUUID.put(uuid, ctx);
+                }
+        }
+
+        /**
          * Removes the (marker, player) entry from the entityPlayers weak map. Called by
          * {@link BukkitListener#onQuitEvent} after the marker Property is removed from
          * the GameProfile. Without this, the entry stays alive until GC reclaims both
@@ -1170,25 +1183,30 @@ public class PlayerPostLoginInjector {
                         // voice, RPC, etc.).
                         if (setupInboundMethod != null) {
                                 LoginEventContext ctx = ctxByUUID.get(event.getPlayer().getUniqueId());
+                                if (ctx == null) {
+                                        plugin.logger().warn("EaglerXServer: no login context found for Eagler player "
+                                                        + event.getPlayer().getName()
+                                                        + " — post-login Eagler features will be unavailable for this connection");
+                                }
                                 if (ctx != null) {
                                         ctxByUUID.remove(event.getPlayer().getUniqueId());
                                         final Object nm = ctx.originalNetworkManager;
                                         final Channel ch = ctx.channel;
                                         Runnable cleanupTask = () -> {
                                                 try {
-                                                        // Call setupCompression(-1, false) via reflection to
-                                                        // remove compression handlers added by the server.
-                                                        // This prevents CompressionDecoder/Encoder from
-                                                        // corrupting Eaglercraft packets.
+                                                        // Second layer of defense (EaglerCompressionGuardHandler in
+                                                        // the pipeline is the first): make sure the server never
+                                                        // compresses this channel. The no-op splitter/prepender
+                                                        // placeholders are deliberately kept in place so any
+                                                        // addAfter("splitter")/addBefore("prepender") anchoring from
+                                                        // vanilla code or plugins (Via, PacketEvents) keeps working.
                                                         try {
                                                                 java.lang.reflect.Method m = nm.getClass().getMethod("setupCompression", int.class, boolean.class);
                                                                 m.invoke(nm, -1, false);
                                                         } catch (Throwable ignored) {
-                                                                try { ch.pipeline().remove("decompress"); } catch (Throwable ignored2) {}
-                                                                try { ch.pipeline().remove("compress"); } catch (Throwable ignored2) {}
+                                                                swapCompressionNOP(ch, "decompress");
+                                                                swapCompressionNOP(ch, "compress");
                                                         }
-                                                        try { ch.pipeline().remove("splitter"); } catch (Throwable ignored) {}
-                                                        try { ch.pipeline().remove("prepender"); } catch (Throwable ignored) {}
                                                 } catch (Throwable e) {
                                                         plugin.logger().error("EaglerXServer: compression cleanup failed", e);
                                                 }
@@ -1218,7 +1236,7 @@ public class PlayerPostLoginInjector {
                 }
         }
 
-        private void fireEventLoginInit(Channel channel) {
+        public void fireEventLoginInit(Channel channel) {
                 plugin.getServer().getPluginManager().callEvent(new PlayerLoginInitEventImpl(channel));
         }
 
@@ -1226,6 +1244,17 @@ public class PlayerPostLoginInjector {
                 PlayerLoginPostEventImpl evt = new PlayerLoginPostEventImpl(player, ctx, callback);
                 plugin.getServer().getPluginManager().callEvent(evt);
                 evt.complete();
+        }
+
+        private static void swapCompressionNOP(Channel ch, String name) {
+                io.netty.channel.ChannelHandler handler = ch.pipeline().get(name);
+                if (handler != null && handler.getClass().getSimpleName().contains("ompress")) {
+                        try {
+                                ch.pipeline().replace(name, name,
+                                                net.lax1dude.eaglercraft.backend.server.base.pipeline.NOPDummyHandler.INSTANCE);
+                        } catch (Throwable ignored) {
+                        }
+                }
         }
 
         public static void setPlayState(PlayerLoginPostEvent evt) {

@@ -74,7 +74,7 @@ public class CPacketSvRPCExecuteNode implements EaglerSupervisorPacket, IRefCoun
 		}
 		EaglerSupervisorPacket.writeVarInt(buffer, nodeId);
 		if (injected != null) {
-			buffer.writeMedium(0);
+			buffer.writeIntLE(0);
 			int pos = buffer.writerIndex();
 			buffer.setByte(pos - 4, injected.writePayload(buffer));
 			buffer.setMedium(pos - 3, buffer.writerIndex() - pos);

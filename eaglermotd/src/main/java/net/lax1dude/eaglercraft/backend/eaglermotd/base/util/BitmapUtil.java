@@ -36,6 +36,9 @@ public class BitmapUtil {
 		Bitmap ret = bitmapCache.get(name);
 		if (ret == null) {
 			BufferedImage img = ImageIO.read(new File(name));
+			if (img == null) {
+				throw new IOException("Could not load icon (not an image or missing): " + name);
+			}
 			int w = img.getWidth();
 			int h = img.getHeight();
 			int[] arr = new int[w * h];

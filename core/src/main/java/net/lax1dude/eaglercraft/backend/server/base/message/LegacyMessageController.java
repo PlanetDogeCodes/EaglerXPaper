@@ -143,6 +143,9 @@ public class LegacyMessageController extends MessageController {
                                                                         "Packet fragment is too long: " + j + " > " + inputBuffer.available());
                                                 }
                                                 pkt = protocol.readPacket(channel, GamePluginMessageConstants.CLIENT_TO_SERVER, inputBuffer);
+                                                if (pkt == null) {
+                                                        throw new IOException("Unknown packet type in fragment!");
+                                                }
                                                 if (inputStream.getReaderIndex() != k) {
                                                         throw new IOException("Packet fragment was the wrong length: "
                                                                         + (j + inputStream.getReaderIndex() - k) + " != " + j);
@@ -281,9 +284,7 @@ public class LegacyMessageController extends MessageController {
                                 player.getPlatformPlayer().sendDataClient(modernChannelNames ? MODERN_V4_CHANNEL : LEGACY_V4_CHANNEL,
                                                 toSend);
                         } finally {
-                                // CRITICAL: release the ByteBuf wrapper. Unpooled.wrappedBuffer creates a
-                                // heap ByteBuf with refCnt=1; previously it was never released, generating
-                                // ResourceLeakDetector warnings on every multi-packet send.
+                                // wrappedBuffer has refCnt=1, release the wrapper
                                 sendBuffer.release();
                         }
                 }

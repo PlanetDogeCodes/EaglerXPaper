@@ -52,6 +52,8 @@ import io.netty.bootstrap.Bootstrap;
 import io.netty.bootstrap.ServerBootstrap;
 import io.netty.channel.Channel;
 import io.netty.channel.ChannelHandler;
+import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.ChannelInboundHandlerAdapter;
 import io.netty.channel.ChannelPipeline;
 import io.netty.channel.EventLoopGroup;
 import io.netty.channel.ServerChannel;
@@ -87,6 +89,8 @@ import net.lax1dude.eaglercraft.backend.server.adapter.JavaLogger;
 import net.lax1dude.eaglercraft.backend.server.adapter.PipelineAttributes;
 import net.lax1dude.eaglercraft.backend.server.adapter.IPipelineComponent.EnumPipelineComponent;
 import net.lax1dude.eaglercraft.backend.server.adapter.IPipelineData;
+import net.lax1dude.eaglercraft.backend.server.api.EnumPipelineEvent;
+import net.lax1dude.eaglercraft.backend.server.base.NettyPipelineData;
 import net.lax1dude.eaglercraft.backend.server.adapter.event.IEventDispatchAdapter;
 import net.lax1dude.eaglercraft.backend.server.api.bukkit.EaglerXServerAPI;
 import net.lax1dude.eaglercraft.backend.server.base.EaglerXServer;
@@ -368,6 +372,13 @@ public class PlatformPluginBukkit extends JavaPlugin implements IPlatform<Player
                                                         (ChannelHandler) postLoginInjector.wrapNetworkManager(networkManager, channel));
                                 } else {
                                         postLoginInjector.storeContext(networkManager, channel);
+                                        // MC 1.20.2+: the NetworkManager is not wrapped (wrapping it
+                                        // breaks the natural login/configuration state machine), so the
+                                        // UUID -> LoginEventContext mapping that handleLoginEvent needs
+                                        // during PlayerLoginEvent is registered here instead, once the
+                                        // Eagler handshake reaches the play state and the final
+                                        // server-assigned UUID is known.
+                                        pipeline.addLast("eagler-login-uuid-registrar", new PlayStateUUIDRegistrar());
                                 }
                         }
 
@@ -503,22 +514,13 @@ public class PlatformPluginBukkit extends JavaPlugin implements IPlatform<Player
         private static boolean isOwnEventLoopGroup(EventLoopGroup group) {
                 if (group == null) return false;
                 try {
-                        // Our createOwnEventLoopGroup uses "Netty Server IO" as the thread name prefix.
-                        // Check if the group contains threads with that prefix.
-                        java.util.Set<io.netty.util.concurrent.EventExecutor> executors = new java.util.HashSet<>();
-                        group.forEach(executors::add);
-                        for (io.netty.util.concurrent.EventExecutor exec : executors) {
-                                if (exec instanceof java.util.concurrent.ExecutorService) {
-                                        // Can't easily enumerate threads, so check the class name
-                                        // Our created groups are EpollEventLoopGroup or NioEventLoopGroup
-                                        // instantiated directly by us (not the server's).
-                                        // The server's groups are also these classes, so this check
-                                        // is imperfect. Fall back to checking thread name.
-                                }
-                        }
-                        // Best-effort: check if the group's toString contains our prefix
+                        // Our createOwnEventLoopGroup names its threads "EaglerXPaper IO",
+                        // a prefix the vanilla server never uses (its own groups are
+                        // "Netty Server IO"), so this check cannot mistake a borrowed
+                        // group for one of ours and shut down the server's IO loop on
+                        // plugin disable.
                         String str = group.toString();
-                        if (str != null && str.contains("Netty Server IO")) {
+                        if (str != null && str.contains("EaglerXPaper IO")) {
                                 return true;
                         }
                 } catch (Exception e) {
@@ -691,6 +693,54 @@ public class PlatformPluginBukkit extends JavaPlugin implements IPlatform<Player
         @Override
         public EventLoopGroup getWorkerEventLoopGroup() {
                 return eventLoopGroup;
+        }
+
+        /**
+         * One-shot pipeline listener (MC 1.20.2+ only) that maps the player's final
+         * UUID to the LoginEventContext stored on the channel when the Eagler
+         * handshake reaches the play state. This is what lets
+         * PlayerPostLoginInjector.handleLoginEvent find the channel during
+         * PlayerLoginEvent without wrapping the NetworkManager, which on 1.20.2+
+         * breaks the natural login/configuration state machine. Removes itself
+         * after firing; inert on vanilla connections that never enter the play
+         * state through the Eagler pipeline.
+         */
+        private final class PlayStateUUIDRegistrar extends ChannelInboundHandlerAdapter {
+
+                @Override
+                public void userEventTriggered(ChannelHandlerContext ctx, Object evt) throws Exception {
+                        if (evt == EnumPipelineEvent.EAGLER_ENTERED_PLAY_STATE) {
+                                try {
+                                        NettyPipelineData pipelineData = ctx.channel()
+                                                        .attr(PipelineAttributes.<NettyPipelineData>pipelineData()).get();
+                                        PlayerPostLoginInjector.LoginEventContext loginCtx = ctx.channel()
+                                                        .attr(PlayerPostLoginInjector.attr).get();
+                                        if (pipelineData != null && loginCtx != null) {
+                                                loginCtx.markCompressionDisable(true);
+                                                postLoginInjector.registerCtxByUUID(pipelineData.uuid, loginCtx);
+                                        }
+                                        // MC 1.20.2+ never fires PlayerLoginInitEvent through the wrapped
+                                        // NetworkManager path (there is no wrapper), so fire it here to
+                                        // keep the public API contract intact for listeners. The event is
+                                        // async-only (Event(true)), so it must be dispatched from an
+                                        // asynchronous task, never the main thread.
+                                        final Channel channel = ctx.channel();
+                                        getServer().getScheduler().runTaskAsynchronously(PlatformPluginBukkit.this, () -> {
+                                                try {
+                                                        postLoginInjector.fireEventLoginInit(channel);
+                                                } catch (Throwable t) {
+                                                        loggerImpl.warn("EaglerXServer: PlayerLoginInitEvent dispatch failed", t);
+                                                }
+                                        });
+                                } catch (Throwable t) {
+                                        loggerImpl.warn("EaglerXServer: failed to register login context by UUID", t);
+                                } finally {
+                                        ctx.pipeline().remove(this);
+                                }
+                        }
+                        super.userEventTriggered(ctx, evt);
+                }
+
         }
 
         private static class CloseRedirector implements Consumer<Object> {

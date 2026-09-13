@@ -99,7 +99,7 @@ public class SPacketRPCEnabledSuccessEaglerV2 implements EaglerBackendRPCPacket 
 	@Override
 	public void writePacket(DataOutput buffer) throws IOException {
 		int cnt = Integer.bitCount(eaglerStandardCaps);
-		if (!(cnt == 0 && eaglerStandardCapsVersions == null) && cnt != eaglerStandardCapsVersions.length) {
+		if (eaglerStandardCapsVersions != null ? cnt != eaglerStandardCapsVersions.length : cnt != 0) {
 			throw new IOException("Refusing to write an invalid number of standard capabilities");
 		}
 		buffer.writeShort(selectedRPCProtocol);
@@ -109,7 +109,9 @@ public class SPacketRPCEnabledSuccessEaglerV2 implements EaglerBackendRPCPacket 
 		buffer.writeShort(eaglerProtocol);
 		buffer.writeByte(eaglerRewindProtocol);
 		buffer.writeInt(eaglerStandardCaps);
-		buffer.write(eaglerStandardCapsVersions);
+		if (eaglerStandardCapsVersions != null) {
+			buffer.write(eaglerStandardCapsVersions);
+		}
 		if (eaglerExtendedCaps != null) {
 			int cnt2 = eaglerExtendedCaps.size();
 			buffer.writeByte(cnt2);

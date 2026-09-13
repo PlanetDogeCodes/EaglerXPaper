@@ -270,13 +270,8 @@ public class WebViewManager<PlayerObject> implements IWebViewManager<PlayerObjec
         }
 
         private void sendDataToPlayer(List<SPacketServerInfoDataChunkV4EAG> list) {
-                long rate;
-                try {
-                        rate = 250l
-                                        / service.getEaglerXServer().getConfig().getPauseMenu().getServerInfoButtonEmbedSendChunkRate();
-                } catch (Exception ex) {
-                        rate = 250l;
-                }
+                int chunkRate = service.getEaglerXServer().getConfig().getPauseMenu().getServerInfoButtonEmbedSendChunkRate();
+                long rate = chunkRate > 0 ? 250l / chunkRate : 250l;
                 if (rate < 20l) {
                         rate = 20l;
                 }

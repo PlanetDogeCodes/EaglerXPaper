@@ -66,6 +66,9 @@ public class EaglerWebConfig {
 			logger.info("Writing default config: " + settings.getAbsolutePath());
 			try (InputStream is = EaglerWebConfig.class.getResourceAsStream("default_settings.json");
 					OutputStream os = new FileOutputStream(settings)) {
+				if (is == null) {
+					throw new IOException("Default settings.json is missing from the jar!");
+				}
 				ByteStreams.copy(is, os);
 			}
 		}
@@ -75,6 +78,9 @@ public class EaglerWebConfig {
 			logger.info("Writing default config: " + mimetypes.getAbsolutePath());
 			try (InputStream is = EaglerWebConfig.class.getResourceAsStream("default_mimetypes.json");
 					OutputStream os = new FileOutputStream(mimetypes)) {
+				if (is == null) {
+					throw new IOException("Default mimetypes.json is missing from the jar!");
+				}
 				ByteStreams.copy(is, os);
 			}
 		}

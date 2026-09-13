@@ -68,7 +68,7 @@ public class VoiceManagerRemote<PlayerObject> extends SerializationContext imple
 	final VoiceServiceRemote<PlayerObject> voice;
 
 	private boolean isAlive = true;
-	private boolean isManaged = true;
+	private volatile boolean isManaged = true;
 	private volatile int isServerEnable = 0;
 	private volatile EnumVoiceState lastVoiceState = EnumVoiceState.SERVER_DISABLE;
 	private volatile VoiceChannel<PlayerObject>.Context activeChannel = null;

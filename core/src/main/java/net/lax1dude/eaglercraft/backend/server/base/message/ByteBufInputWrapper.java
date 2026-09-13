@@ -155,7 +155,11 @@ public class ByteBufInputWrapper implements GamePacketInputBuffer {
 	@Override
 	@Deprecated(forRemoval = true)
 	public byte[] readByteArrayMC() throws IOException {
-		byte[] abyte = new byte[BufferUtils.readVarInt(buffer, 5)];
+		int i = BufferUtils.readVarInt(buffer, 5);
+		if (i < 0 || i > buffer.readableBytes()) {
+			throw new IOException("Byte array has an invalid length: " + i);
+		}
+		byte[] abyte = new byte[i];
 		buffer.readBytes(abyte);
 		return abyte;
 	}
@@ -163,7 +167,7 @@ public class ByteBufInputWrapper implements GamePacketInputBuffer {
 	@Override
 	public byte[] readByteArrayMC(int maxLen) throws IOException {
 		int i = BufferUtils.readVarInt(buffer, 5);
-		if (i > maxLen) {
+		if (i < 0 || i > maxLen) {
 			throw new IOException("Byte array is too long: " + i + " > " + maxLen);
 		}
 		byte[] abyte = new byte[i];

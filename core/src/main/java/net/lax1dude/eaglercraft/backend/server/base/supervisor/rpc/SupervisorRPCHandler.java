@@ -442,7 +442,7 @@ public class SupervisorRPCHandler implements ISupervisorRPCHandler {
 					+ procedure.inputType.clazz.getName());
 		}
 		SupervisorConnection handler = service.getConnection();
-		int selfId = handler.getNodeId();
+		int selfId = handler != null ? handler.getNodeId() : -1;
 		if (output != null) {
 			InvokeAllNodesHelper<Out> invokeAll = new InvokeAllNodesHelper<Out>(output,
 					service.getEaglerXServer().getPlatform().getScheduler(), service.logger());

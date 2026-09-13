@@ -103,7 +103,7 @@ public class SLF4JLogger implements IRewindLogger {
 
 		@Override
 		public IRewindSubLogger createSubLogger(String name) {
-			return new SubLogger(name + "|" + name, this);
+			return new SubLogger(this.name + "|" + name, this);
 		}
 
 		@Override

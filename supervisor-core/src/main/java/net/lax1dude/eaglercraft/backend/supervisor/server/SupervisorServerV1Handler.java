@@ -387,7 +387,7 @@ public class SupervisorServerV1Handler implements EaglerSupervisorHandler {
 						new RPCPending(pkt.requestUUID, System.nanoTime() + pkt.timeout * 1000000l) {
 					@Override
 					protected void onSuccess(ByteBuf dataBuffer) {
-						handler.channelWrite(new SPacketSvRPCResultSuccess(pkt.requestUUID, dataBuffer));
+						handler.channelWrite(new SPacketSvRPCResultSuccess(pkt.requestUUID, dataBuffer.retain()));
 					}
 					@Override
 					protected void onFailure(int type) {

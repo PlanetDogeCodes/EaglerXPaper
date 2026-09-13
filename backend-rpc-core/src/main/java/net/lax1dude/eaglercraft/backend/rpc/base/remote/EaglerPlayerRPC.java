@@ -79,8 +79,8 @@ public class EaglerPlayerRPC<PlayerObject> extends BasePlayerRPC<PlayerObject>
 	protected final int eaglerStandardCaps;
 	protected final byte[] eaglerStandardCapsVersions;
 	protected final Map<UUID, Byte> eaglerExtendedCapsVersions;
-	protected RPCEventBus<PlayerObject> eventBus;
-	protected int subscribedEvents;
+	protected volatile RPCEventBus<PlayerObject> eventBus;
+	protected volatile int subscribedEvents;
 	protected final boolean webviewCap;
 
 	public EaglerPlayerRPC(PlayerInstanceRemote<PlayerObject> player, EaglerBackendRPCProtocol protocol,
@@ -491,7 +491,7 @@ public class EaglerPlayerRPC<PlayerObject> extends BasePlayerRPC<PlayerObject>
 				printClosedError();
 			}
 		} else {
-			logger().error("Tried to send webview message to an unsupported client");
+			logger().error("Tried to set cookie data on an unsupported client");
 		}
 	}
 
@@ -500,16 +500,20 @@ public class EaglerPlayerRPC<PlayerObject> extends BasePlayerRPC<PlayerObject>
 		if (state == null) {
 			throw new NullPointerException("state");
 		}
-		switch (state) {
-		case DISABLED:
-			writeOutboundPacket(new CPacketRPCSetPlayerFNAWEn(false, false));
-			break;
-		case ENABLED:
-			writeOutboundPacket(new CPacketRPCSetPlayerFNAWEn(true, false));
-			break;
-		case FORCED:
-			writeOutboundPacket(new CPacketRPCSetPlayerFNAWEn(true, true));
-			break;
+		if (open) {
+			switch (state) {
+			case DISABLED:
+				writeOutboundPacket(new CPacketRPCSetPlayerFNAWEn(false, false));
+				break;
+			case ENABLED:
+				writeOutboundPacket(new CPacketRPCSetPlayerFNAWEn(true, false));
+				break;
+			case FORCED:
+				writeOutboundPacket(new CPacketRPCSetPlayerFNAWEn(true, true));
+				break;
+			}
+		} else {
+			printClosedError();
 		}
 	}
 

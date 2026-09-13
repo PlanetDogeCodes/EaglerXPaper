@@ -27,25 +27,25 @@ import io.netty.handler.ssl.SslHandler;
 
 public class SSLContextHolderBuiltin implements ISSLContextProvider {
 
-	protected final String name;
-	protected final String password;
-	protected byte[] pubKey;
-	protected byte[] privKey;
-	protected SslContext ctx;
+        protected final String name;
+        protected final String password;
+        protected byte[] pubKey;
+        protected byte[] privKey;
+        protected volatile SslContext ctx;
 
-	protected SSLContextHolderBuiltin(String name, String password) {
-		this.name = name;
-		this.password = password;
-	}
+        protected SSLContextHolderBuiltin(String name, String password) {
+                this.name = name;
+                this.password = password;
+        }
 
-	@Override
-	public SslHandler newHandler(ByteBufAllocator alloc) {
-		return ctx.newHandler(alloc);
-	}
+        @Override
+        public SslHandler newHandler(ByteBufAllocator alloc) {
+                return ctx.newHandler(alloc);
+        }
 
-	protected void refresh() throws SSLException {
-		ctx = SslContextBuilder.forServer(new ByteArrayInputStream(pubKey), new ByteArrayInputStream(privKey), password)
-				.build();
-	}
+        protected void refresh() throws SSLException {
+                ctx = SslContextBuilder.forServer(new ByteArrayInputStream(pubKey), new ByteArrayInputStream(privKey), password)
+                                .build();
+        }
 
 }

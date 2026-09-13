@@ -44,7 +44,7 @@ public class SkinsRestorerHelper {
 	private static class Impl<PlayerObject> implements ISkinsRestorerHelper<PlayerObject> {
 
 		private final EaglerXServer<PlayerObject> server;
-		private ISkinsRestorerListener<PlayerObject> listener;
+		private volatile ISkinsRestorerListener<PlayerObject> listener;
 
 		private Impl(EaglerXServer<PlayerObject> server) {
 			this.server = server;

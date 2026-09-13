@@ -202,8 +202,11 @@ public class EaglerXSupervisorConsole implements Runnable {
 						}
 					}
 				}
+				// stdin is closed, nothing more to read
+				return;
 			} catch (IOException e) {
 				logger.error("Caught IOException reading console input", e);
+				return;
 			}
 		}
 	}

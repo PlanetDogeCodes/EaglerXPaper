@@ -175,7 +175,7 @@ public class EaglerConfigLoader {
                         );
                         int protocolV4DefragSendDelay = config.getInteger(
                                 "protocol_v4_defrag_send_delay", 0,
-                                "Default value is 10, the number of milliseconds to wait before flushing all "
+                                "Default value is 0, the number of milliseconds to wait before flushing all "
                                 + "pending EaglercraftX plugin message packets, saves bandwidth by combining "
                                 + "multiple messages into a single plugin message packet. Setting this to 0 has "
                                 + "the same effect on clientbound packets as setting eaglerNoDelay to true does "

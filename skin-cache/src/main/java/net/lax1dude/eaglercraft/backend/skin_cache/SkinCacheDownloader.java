@@ -62,11 +62,8 @@ public class SkinCacheDownloader implements ISkinCacheDownloader {
                                                         img = ImageIO.read(new ByteBufInputStream(res.data));
                                                 }
                                         } catch (IOException e) {
-                                                // CRITICAL: Previously this was an empty catch — operators had no
-                                                // visibility into why skin downloads fail. A 200-OK response with
-                                                // a malformed PNG/JPG (e.g., a skins server returning an HTML
-                                                // error page with 200 status) is now logged to stderr so the
-                                                // underlying upstream issue is debuggable.
+                                                // 200 response with a broken image body — log it so
+                                                // it's visible why the download failed
                                                 System.err.println("[EaglerXServer] Failed to decode skin image from "
                                                                 + skinURL + ": " + e.getMessage());
                                         } finally {

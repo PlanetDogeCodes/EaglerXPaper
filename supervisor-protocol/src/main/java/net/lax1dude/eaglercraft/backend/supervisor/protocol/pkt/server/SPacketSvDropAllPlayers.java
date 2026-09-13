@@ -33,12 +33,12 @@ public class SPacketSvDropAllPlayers implements EaglerSupervisorPacket {
 
 	@Override
 	public void readPacket(ByteBuf buffer) {
-		EaglerSupervisorPacket.writeVarInt(buffer, nodeId);
+		nodeId = EaglerSupervisorPacket.readVarInt(buffer);
 	}
 
 	@Override
 	public void writePacket(ByteBuf buffer) {
-		nodeId = EaglerSupervisorPacket.readVarInt(buffer);
+		EaglerSupervisorPacket.writeVarInt(buffer, nodeId);
 	}
 
 	@Override

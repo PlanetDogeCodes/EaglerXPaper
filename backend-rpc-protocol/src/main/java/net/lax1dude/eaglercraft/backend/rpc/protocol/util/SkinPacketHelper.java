@@ -25,6 +25,22 @@ import javax.imageio.ImageIO;
 
 public class SkinPacketHelper {
 
+	private static BufferedImage readImage(File input) throws IOException {
+		BufferedImage img = ImageIO.read(input);
+		if (img == null) {
+			throw new IOException("Could not decode image file: " + input);
+		}
+		return img;
+	}
+
+	private static BufferedImage readImage(InputStream input) throws IOException {
+		BufferedImage img = ImageIO.read(input);
+		if (img == null) {
+			throw new IOException("Could not decode image stream");
+		}
+		return img;
+	}
+
 	public static byte[] writePresetSkinPacket(int presetId) {
 		byte[] tex = new byte[5];
 		tex[0] = (byte) 1;
@@ -36,11 +52,11 @@ public class SkinPacketHelper {
 	}
 
 	public static byte[] loadCustomSkin(File texture64x64) throws IOException {
-		return loadCustomSkin(ImageIO.read(texture64x64));
+		return loadCustomSkin(readImage(texture64x64));
 	}
 
 	public static byte[] loadCustomSkin(InputStream texture64x64) throws IOException {
-		return loadCustomSkin(ImageIO.read(texture64x64));
+		return loadCustomSkin(readImage(texture64x64));
 	}
 
 	public static byte[] loadCustomSkin(BufferedImage texture64x64) {
@@ -73,11 +89,11 @@ public class SkinPacketHelper {
 	}
 
 	public static byte[] writeCustomSkinPacket(int modelId, File texture64x64) throws IOException {
-		return writeCustomSkinPacket(modelId, ImageIO.read(texture64x64));
+		return writeCustomSkinPacket(modelId, readImage(texture64x64));
 	}
 
 	public static byte[] writeCustomSkinPacket(int modelId, InputStream texture64x64) throws IOException {
-		return writeCustomSkinPacket(modelId, ImageIO.read(texture64x64));
+		return writeCustomSkinPacket(modelId, readImage(texture64x64));
 	}
 
 	public static byte[] writeCustomSkinPacket(int modelId, BufferedImage texture64x64) {
@@ -111,11 +127,11 @@ public class SkinPacketHelper {
 	}
 
 	public static byte[] loadCustomCape(File textureNx32) throws IOException {
-		return loadCustomCape(ImageIO.read(textureNx32));
+		return loadCustomCape(readImage(textureNx32));
 	}
 
 	public static byte[] loadCustomCape(InputStream textureNx32) throws IOException {
-		return loadCustomCape(ImageIO.read(textureNx32));
+		return loadCustomCape(readImage(textureNx32));
 	}
 
 	public static byte[] loadCustomCape(BufferedImage textureNx32) {
@@ -137,11 +153,11 @@ public class SkinPacketHelper {
 	}
 
 	public static byte[] writeCustomCapePacket(File textureNx32) throws IOException {
-		return writeCustomCapePacket(ImageIO.read(textureNx32));
+		return writeCustomCapePacket(readImage(textureNx32));
 	}
 
 	public static byte[] writeCustomCapePacket(InputStream textureNx32) throws IOException {
-		return writeCustomCapePacket(ImageIO.read(textureNx32));
+		return writeCustomCapePacket(readImage(textureNx32));
 	}
 
 	public static byte[] writeCustomCapePacket(BufferedImage textureNx32) {

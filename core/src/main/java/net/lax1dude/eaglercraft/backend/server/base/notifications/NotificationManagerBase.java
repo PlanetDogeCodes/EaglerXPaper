@@ -109,7 +109,7 @@ public abstract class NotificationManagerBase<PlayerObject> implements INotifica
 			if (i >= l) {
 				break;
 			}
-			arr[i] = etr.toPacket();
+			arr[i++] = etr.toPacket();
 		}
 		if (i != l) {
 			throw new IllegalStateException();
@@ -144,7 +144,7 @@ public abstract class NotificationManagerBase<PlayerObject> implements INotifica
 			if (i >= l) {
 				break;
 			}
-			arr[i] = new SPacketNotifIconsReleaseV4EAG.DestroyIcon(etr.getMostSignificantBits(),
+			arr[i++] = new SPacketNotifIconsReleaseV4EAG.DestroyIcon(etr.getMostSignificantBits(),
 					etr.getLeastSignificantBits());
 		}
 		if (i != l) {
