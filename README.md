@@ -1,6 +1,6 @@
 # EaglerXPaper
 
-> Paper 1.17.x to 26.x port of [EaglerXServer](https://github.com/lax1dude/eaglerxserver) — run Eaglercraft (browser) clients on modern Paper servers.
+> Paper 1.17.x to 26.x port of [EaglerXServer](https://github.com/lax1dude/eaglerxserver) 
 
 [![Paper](https://img.shields.io/badge/Paper-1.17+-blue)](https://papermc.io)
 [![Java](https://img.shields.io/badge/Java-25%2B-orange)](https://adoptium.net)
@@ -10,7 +10,7 @@ EaglerXPaper is a fork of lax1dude's EaglerXServer that extends Bukkit/Spigot/Pa
 
 **This is largely the same project as EaglerXServer** — it only changes a few minor things to ensure 1.17+ compatibility, plus adds a couple of small features. All credit for the actual plugin goes to lax1dude.
 
-Based on EaglerXServer **v1.1.1** (includes the LimboAPI compression fix, reduced default WebSocket frame size, empty ByteBuf handshake fix, and RateLimiterLocking ternary fix from upstream).
+Based on EaglerXServer **v1.1.1**
 
 ## Compatibility
 
@@ -28,7 +28,7 @@ Based on EaglerXServer **v1.1.1** (includes the LimboAPI compression fix, reduce
 
 ## How 1.17+ Compatibility Was Achieved
 
-Paper 1.17 switched the runtime NMS from CraftBukkit names (`EntityPlayer`, `PlayerConnection`, `NetworkManager`) to Mojang names (`ServerPlayer`, `ServerGamePacketListenerImpl`, `Connection`). EaglerXServer's Bukkit platform uses just reflection, but anchored every reflection on NMS types. Those names changed in 1.17, breaking every reflection site.
+Paper 1.17 switched the runtime NMS from CraftBukkit names (`EntityPlayer`, `PlayerConnection`, `NetworkManager`) to Mojang names (`ServerPlayer`, `ServerGamePacketListenerImpl`, `Connection`). EaglerXServer anchored every reflection on NMS. Those names changed in 1.17, breaking everything.
 
 EaglerXPaper fixes this with a **multi-version reflection name table** (`NmsNames.java`) that maps each NMS symbol to the set of simple names it has been known by across all supported versions. It's not perfect or efficient, but it works.
 
@@ -48,7 +48,7 @@ where `NmsNames.PLAYER_CONNECTION = Set.of("ServerGamePacketListenerImpl", "Play
 
 - **Config structure** — identical to regular EaglerXServer. Existing `plugins/EaglercraftXServer/` configs work without any changes.
 - **Plugin name** — still technically `"EaglercraftXServer"` internally, mostly to maintain compatibility with the base EaglerXServer API.
-- **BungeeCord/Velocity modules** — untouched (it already supports 1.21 on those platforms, so no need to change any of that).
+- **BungeeCord/Velocity support** — untouched (it already supports 1.21 on those platforms, so no need to change any of that).
 
 ## EaglerXPaper-Exclusive Features
 
@@ -56,55 +56,30 @@ These are features added by EaglerXPaper that are not in upstream EaglerXServer:
 
 ### Skin Cache Pre-warming
 
-On server start, EaglerXPaper reads `usercache.json` and asynchronously pre-downloads skins for recently-seen players from Mojang's sessionserver API. This means when a player joins for the first time, their skin is already cached and displays instantly — no 2-3 second stall on first connect.
-
-The prewarmer is conservative about Mojang's API rate limits (max 2 concurrent requests, 500ms minimum between fetches) and runs on low-priority background threads so it won't slow down server startup. If Mojang's API is unreachable, it silently skips those players.
-
-**Config** (`settings.yml`):
-```yaml
-skin_cache_prewarm:
-  enable: true          # Set to false to disable
-  max_players: 50       # Max players to pre-warm (limits API calls)
-```
+On server start, EaglerXPaper pre-downloads skins for recently-seen players from Mojang's sessionserver API. This means when a player joins for the first time, their skin is already cached and displays instantly — however, it is unreliable and often doesn't work. It's cool when it does work though.
 
 ### Adaptive Packet Batching
 
-EaglerXPaper automatically coalesces outbound flushes for Eaglercraft connections that are sending many packets rapidly (e.g. during chunk loading or heavy entity updates). Each packet is still written as its own WebSocket frame — the wire format is untouched — but the flushes happen together, which cuts per-flush syscall, TCP-segment and TLS-record overhead. This helps most on mobile/slow connections and servers with `TCP_NODELAY` (the usual default for Minecraft).
+EaglerXPaper automatically batches data to and from connections that are sending many packets per flush (e.g. during chunk loading). Each packet is still technically its own WebSocket frame but the flushes happen together, which cuts resource usage and channel flood.
 
-The batcher is self-adaptive:
-- **Idle connections** (few packets per second) — packets pass through immediately with zero added latency
-- **Burst connections** (16+ packets in a 100ms window) — packets are buffered for up to 2ms and flushed together (at most 16 per batch)
-- **Sustained bursts** — a forced flush every 200ms caps added latency, and the burst timer resets so batching stays effective
+The batcher has 3 "modes":
+- **Idle connections** - packets pass through immediately with zero added latency
+- **Burst connections** (16+ packets in a 100ms window) — packets are buffered for ~2ms and flushed together 
+- **Sustained bursts** — a forced flush every 200ms caps added latency, and the timer resets after each flush so batching stays working.
 
-**Config** (`settings.yml`):
-```yaml
-adaptive_packet_batching:
-  enable: true           # Set to false to disable
-```
+Both features are enabled by default and require no extra config.
 
-Both features are enabled by default and require no configuration.
-
-## v1.1.1 Hotfix 25
-
-**Fixed the game-phase packet corruption** that hit Eaglercraft 1.12.2 clients (EaglerLite, gx-launcher and other 1.12.2 distributions) on servers with `network-compression-threshold >= 0`:
-
-- The vanilla login listener enables MC-level compression through a send listener on the login compression packet. The handshake layer already swallows the packet itself, but the listener still fired and the vanilla `compress`/`decompress` codecs still landed in the Netty pipeline - quietly rewriting every outbound packet as `[uncompressedSize][data]` and desynchronizing the raw per-frame WebSocket stream the Eaglercraft protocol uses. A new `EaglerCompressionGuardHandler` now rips the codecs back out the moment the server announces compression (Paper's `ConnectionEvent.COMPRESSION_THRESHOLD_SET`), inside the same event-loop task, so not a single framed packet can escape.
-- The no-op splitter/prepender swap is now deferred until a connection is actually identified as HTTP/WebSocket. On dual-stack ports this restores correct framing for vanilla Java clients, which were getting the no-op placeholders too.
-- The MC 1.20.2+ post-login flow is alive again: the NetworkManager is intentionally not wrapped on 1.20.2+ (wrapping it breaks the login/configuration state machine), so the UUID-to-context registration the `PlayerLoginEvent` handler depends on is now performed by a small play-state listener. Skins, voice, RPC and the other Eagler player features initialize on modern Paper again, and the second-layer compression cleanup at `PlayerLoginEvent` runs with it.
-- The `PlayerLoginEvent` cleanup no longer removes the no-op `splitter`/`prepender` placeholders. Keeping them means `addAfter("splitter")`-style anchoring from vanilla code or plugins (ViaVersion, PacketEvents) keeps working on Eagler connections.
-
-This release also lands a full audit pass over every module (codec read/write symmetry, refcounting, thread-safety, bounds checks, event-loop leaks, busy-waits and logging).
 
 ## Installation
 
 1. Download `EaglerXPaper.jar`
-2. Place in your Paper 1.21.x server's `plugins/` folder
+2. Place in your Paper 1.17+ server's `plugins/` folder
 3. Start the server — config files generate in `plugins/EaglercraftXServer/`
 4. OPTIONAL (only needed if you use BungeeCord or Velocity) — Configure your reverse proxy / tunnel. See [the regular EaglerXServer setup guide](https://github.com/lax1dude/eaglerxserver/blob/main/CONFIG.md) for details.
-5. Connect with an Eaglercraft client to `ws://yourserver:25565/` (or `wss://` if using a reverse proxy such as Caddy, Nginx, or EaglerXServer's built-in TLS)
+5. Connect with an Eaglercraft client to `ws://yourserver:25565/` (or `wss://` if using a reverse proxy)
 6. That's it! You can configure extra options if needed, but you really don't have to if all you wanted to do was "just get it working".
 
-**Dual-stack mode** is enabled by default — EaglerXPaper shares the main server port (25565) and auto-detects whether each connection is vanilla Minecraft TCP or an Eaglercraft WebSocket.
+**Dual-stack mode** is enabled by default so EaglerXPaper shares the main server port (25565) and auto-detects whether each connection is vanilla Minecraft TCP or an Eaglercraft WebSocket.
 
 ## Building from source
 
@@ -115,7 +90,7 @@ cd eaglerxpaper
 # Output: core/build/libs/EaglerXPaper.jar
 ```
 
-Requires Java 17+ and Gradle 8.5+ (wrapper included). The build compiles with the Paper 1.12.2 stub; compatibility with 1.21.x is done via reflection, not compile-time stuff.
+Requires Java 25 and Gradle 8.5+ (wrapper included). The build compiles with the Paper 1.12.2 stub but will still work with 1.21.11
 
 ## Architecture
 
@@ -137,39 +112,6 @@ Eaglercraft Client (ws:// or wss://)
 
 EaglerXPaper injects into Paper's Netty channel pipeline via Paper's `ChannelInitializeListener` API (the supported, stable injection method). It inspects the first bytes of each connection to determine whether it's an HTTP/WebSocket upgrade request (Eaglercraft) or a raw Minecraft handshake (vanilla), and routes accordingly.
 
-## Files modified vs regular EaglerXServer
-
-| File | Change |
-|------|--------|
-| `core/core-platform-bukkit/.../bukkit/NmsNames.java` | **NEW** — multi-version reflection name table |
-| `core/core-platform-bukkit/.../bukkit/BukkitUnsafe.java` | Ported all reflection anchors; added `findGameProfileGetter`, `createOwnEventLoopGroup`; synchronized `PropertyInjector` |
-| `core/core-platform-bukkit/.../bukkit/async/PlayerPostLoginInjector.java` | Ported reflection anchors; 3-arg constructor support; `findEnumValueByName`; `convertToComponent` for disconnect; GameProfile sync; transferred flag passthrough |
-| `core/core-platform-bukkit/.../bukkit/BukkitListener.java` | Clean up orphaned `$eaglerMarker` properties on player quit |
-| `core/src/main/java/.../base/EaglerXServer.java` | Removed "modern server version" warning; added prewarmer lifecycle |
-| `core/src/main/java/.../base/EaglerListener.java` | `catch (Throwable)` for icon loading; clean error messages |
-| `core/src/main/java/.../base/ServerIconLoader.java` | Null-check `ImageIO.read()` |
-| `core/src/main/java/.../base/skins/SkinImageLoaderImpl.java` | Null-check `ImageIO.read()` |
-| `core/src/main/java/.../base/skins/SkinManagerHelper.java` | Null guard for `getServer()` |
-| `core/src/main/java/.../base/skins/SkinCachePrewarmer.java` | **NEW** — skin cache pre-warming on server start |
-| `core/src/main/java/.../base/query/MOTDConnectionWrapper.java` | Null-check MOTD list |
-| `core/src/main/java/.../base/webview/WebViewManager.java` | Null-check config; bounds-check `DataRunnable` |
-| `core/src/main/java/.../base/voice/VoiceManagerLocal.java` | Null-check ICE servers |
-| `core/src/main/java/.../base/voice/VoiceManagerRemote.java` | Null-check handler |
-| `core/src/main/java/.../base/handshake/HandshakerInstance.java` | Null-check UUID from auth events |
-| `core/src/main/java/.../base/pipeline/HTTPInitialInboundHandler.java` | Proper error logging + channel close |
-| `core/src/main/java/.../base/pipeline/AdaptivePacketBatcher.java` | **NEW** — adaptive outbound packet batching |
-| `core/src/main/java/.../base/pipeline/EaglerCompressionGuardHandler.java` | **NEW** — strips vanilla MC compression codecs off Eagler connections (Hotfix 25 packet-corruption fix) |
-| `core/src/main/java/.../base/pipeline/PipelineTransformer.java` | Defers the splitter/prepender no-op swap until a connection is identified as HTTP/WebSocket (Hotfix 25) |
-| `core/src/main/java/.../base/pipeline/MultiStackInitialInboundHandler.java` | Applies the deferred no-op swap on the HTTP path (Hotfix 25) |
-| `core/src/main/java/.../base/pipeline/WebSocketInitialHandler.java` | Insert `AdaptivePacketBatcher` and `EaglerCompressionGuardHandler` into pipeline |
-| `core/src/main/java/.../base/handshake/VanillaInitializer.java` | 1.20.2+ login-success parsing, LoginAcknowledged, buffered replay of login-phase packets |
-| `core/core-platform-bukkit/.../bukkit/PlatformPluginBukkit.java` | Play-state UUID registrar for the 1.20.2+ post-login flow; try/catch around `updateRealAddress`; EventLoopGroup ownership tracking + shutdown |
-| `core/core-platform-bukkit/.../bukkit/async/PlayerPostLoginInjector.java` | MC 1.20.2+ natural login flow, compression cleanup at `PlayerLoginEvent`, marker-based post-login handoff |
-| `core/src/main/java/.../base/config/EaglerXPaperConfig.java` | **NEW** — config holder for EaglerXPaper features |
-| `core/src/main/java/.../base/config/EaglerConfigLoader.java` | Added `skin_cache_prewarm` and `adaptive_packet_batching` config sections |
-| `core/src/main/java/.../base/DeferredStartSkinCache.java` | Made `service` field volatile for thread safety |
-| `core/build.gradle` | JAR renamed to `EaglerXPaper.jar` |
-| `core/core-platform-bukkit/build.gradle` | Added `api-version: '1.21'` merge task |
 
 ## Addon compatibility
 
@@ -179,13 +121,12 @@ EaglerXPaper injects into Paper's Netty channel pipeline via Paper's `ChannelIni
 | [EaglerWeb](https://github.com/lax1dude/eaglerxserver/tree/main/eaglerweb) (HTTP file hosting) | ⚠️ Should work but not runtime-tested on 1.21 |
 | [EaglerMOTD](https://github.com/lax1dude/eaglerxserver/tree/main/eaglermotd) | ⚠️ Kind of works; runtime-tested on 1.21, but had some issues that are too minor to fix right now |
 
-The addon JARs from upstream EaglerXServer releases use the same reflection-based architecture. They *may* work as-is on 1.21, but if they throw reflection errors, the same `NmsNames`-style porting technique applies. The source for all addons is included in this repo under their respective directories.
-
 ## Credits
 
 - **Original EaglerXServer:** [lax1dude](https://github.com/lax1dude) — the entire plugin architecture, Eaglercraft protocol implementation, and dual-stack design.
 
-EaglerXPaper is a derivative work of EaglerXServer. All credit for the plugin's core functionality goes to lax1dude. This fork only adds version compatibility for Paper 1.17+, and is not a substantial change or rewrite.
+
+EaglerXPaper is a derivative work of EaglerXServer. All credit for the plugin's core functionality goes to lax1dude. This fork only adds version compatibility for Paper 1.17+, and is not a big change or rewrite.
 
 ## License
 
@@ -198,4 +139,5 @@ If you find a bug on a specific Paper version, please open an issue and include:
 2. The full stack trace from `logs/latest.log`
 3. The output of `java -version`
 
-The reflection-based architecture means most version-specific bugs are fixable by adding a new candidate name to `NmsNames.java` or a new fallback path in `BukkitUnsafe.java` / `PlayerPostLoginInjector.java` — no API changes needed.
+## LLM Usage Disclaimer 
+GLM 5.3 was used to generate portions of this README that I was too lazy to make myself, and also helped with code checks to eliminate some of my stupid mistakes (like forgetting to include connection headers or accidentally breaking the timer for all packet batching tasks). It is my personal belief that AI is best used as a code reviewer and not writer, so I have acted in accordance to that belief. This project is 100% still managed by a human.
