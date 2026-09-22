@@ -1,6 +1,6 @@
 # EaglerXPaper
 
-[![Paper](https://img.shields.io/badge/Paper-1.17+-blue)](https://papermc.io)
+[![Paper](https://img.shields.io/badge/Paper-1.8+-blue)](https://papermc.io)
 [![Java](https://img.shields.io/badge/Java-25%2B-orange)](https://adoptium.net)
 [![License](https://img.shields.io/badge/license-BSD--3--Clause-green)](LICENSE)
 
