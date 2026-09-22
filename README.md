@@ -4,7 +4,7 @@
 [![Java](https://img.shields.io/badge/Java-25%2B-orange)](https://adoptium.net)
 [![License](https://img.shields.io/badge/license-BSD--3--Clause-green)](LICENSE)
 
-EaglerXPaper is a forward port of lax1dude's EaglerXServer Spigot functionalities that extends Bukkit/Spigot/Paper support from 1.12.2–1.17 **up to 26.x** and **down to 1.8.x**
+EaglerXPaper is a forward port of lax1dude's EaglerXServer Spigot functionalities that extends Bukkit/Spigot/Paper support **up to 26.x** and **down to 1.8.x**
 
 **This is largely the same project as EaglerXServer** — it only changes a few minor things to ensure 1.17+ and 1.8.x compatibility, plus adds a couple of small features. All credit for the actual plugin goes to lax1dude.
 
@@ -15,7 +15,7 @@ Currently based on EaglerXServer **v1.1.1**
 | Platform | Version Range | Status |
 |----------|--------------|--------|
 | **Paper** | 1.12.2 – 1.21.11+ | ✅ Fully supported |
-| **Paper** | 1.8.x | ⚠️ Currently in Beta |
+| **Paper** | 1.8.x | ⚠️ Currently in Beta - should work |
 | **Spigot** | 1.12.2 – 1.21.x | ⚠️ Should work (uses NMS reflection fallback) |
 | **Folia** | Any | ❌ Not supported |
 | **BungeeCord** | 1.21+ | ✅ Use upstream EaglerXServer (already supported) |
