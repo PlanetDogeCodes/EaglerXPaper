@@ -1,35 +1,24 @@
 /*
- * Copyright (c) 2025 lax1dude. All Rights Reserved.
+ * Decompiled with CFR 0.152.
  * 
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
- * IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT,
- * INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
- * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
- * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
- * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
- * 
+ * Could not load the following classes:
+ *  io.netty.channel.Channel
  */
-
 package net.lax1dude.eaglercraft.backend.server.base.webview;
 
-import java.lang.invoke.MethodHandles;
-import java.lang.invoke.VarHandle;
+import io.netty.channel.Channel;
 import java.util.Collections;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 import java.util.function.Consumer;
-
-import io.netty.channel.Channel;
-import net.lax1dude.eaglercraft.backend.server.adapter.IPlatformComponentBuilder.EnumChatColor;
+import net.lax1dude.eaglercraft.backend.server.adapter.IPlatformComponentBuilder;
 import net.lax1dude.eaglercraft.backend.server.api.IEaglerPlayer;
 import net.lax1dude.eaglercraft.backend.server.api.SHA1Sum;
-import net.lax1dude.eaglercraft.backend.server.api.event.IEaglercraftWebViewChannelEvent.EnumEventType;
-import net.lax1dude.eaglercraft.backend.server.api.event.IEaglercraftWebViewMessageEvent.EnumMessageType;
+import net.lax1dude.eaglercraft.backend.server.api.event.IEaglercraftWebViewChannelEvent;
+import net.lax1dude.eaglercraft.backend.server.api.event.IEaglercraftWebViewMessageEvent;
+import net.lax1dude.eaglercraft.backend.server.api.pause_menu.IPauseMenuManager;
 import net.lax1dude.eaglercraft.backend.server.api.webview.EnumWebViewPerms;
 import net.lax1dude.eaglercraft.backend.server.api.webview.IWebViewBlob;
 import net.lax1dude.eaglercraft.backend.server.api.webview.IWebViewManager;
@@ -37,357 +26,326 @@ import net.lax1dude.eaglercraft.backend.server.api.webview.IWebViewProvider;
 import net.lax1dude.eaglercraft.backend.server.api.webview.IWebViewService;
 import net.lax1dude.eaglercraft.backend.server.base.EaglerPlayerInstance;
 import net.lax1dude.eaglercraft.backend.server.base.pause_menu.PauseMenuManager;
-import net.lax1dude.eaglercraft.backend.server.base.rpc.EaglerPlayerRPCManager;
+import net.lax1dude.eaglercraft.backend.server.base.rpc.BasePlayerRPCManager;
+import net.lax1dude.eaglercraft.backend.server.base.webview.WebViewBlob;
+import net.lax1dude.eaglercraft.backend.server.base.webview.WebViewService;
 import net.lax1dude.eaglercraft.v1_8.socket.protocol.pkt.server.SPacketDisplayWebViewBlobV5EAG;
 import net.lax1dude.eaglercraft.v1_8.socket.protocol.pkt.server.SPacketDisplayWebViewURLV5EAG;
 import net.lax1dude.eaglercraft.v1_8.socket.protocol.pkt.server.SPacketServerInfoDataChunkV4EAG;
 import net.lax1dude.eaglercraft.v1_8.socket.protocol.pkt.server.SPacketWebViewMessageV4EAG;
 
-public class WebViewManager<PlayerObject> implements IWebViewManager<PlayerObject> {
+public class WebViewManager<PlayerObject>
+implements IWebViewManager<PlayerObject> {
+    private static final AtomicReferenceFieldUpdater<WebViewManager, String> CHANNEL_NAME_HANDLE = AtomicReferenceFieldUpdater.newUpdater(WebViewManager.class, String.class, "channelName");
+    private final EaglerPlayerInstance<PlayerObject> player;
+    private final WebViewService<PlayerObject> service;
+    private IWebViewProvider<PlayerObject> provider = null;
+    private volatile String channelName = null;
 
-        private static final VarHandle CHANNEL_NAME_HANDLE;
+    public WebViewManager(EaglerPlayerInstance<PlayerObject> player, WebViewService<PlayerObject> service) {
+        this.player = player;
+        this.service = service;
+        this.provider = service.getDefaultProvider();
+    }
 
-        static {
-                try {
-                        MethodHandles.Lookup l = MethodHandles.lookup();
-                        CHANNEL_NAME_HANDLE = l.findVarHandle(WebViewManager.class, "channelName", String.class);
-                } catch (ReflectiveOperationException e) {
-                        throw new ExceptionInInitializerError(e);
-                }
+    @Override
+    public IEaglerPlayer<PlayerObject> getPlayer() {
+        return this.player;
+    }
+
+    @Override
+    public IWebViewService<PlayerObject> getWebViewService() {
+        return this.service;
+    }
+
+    @Override
+    public boolean isChannelAllowed() {
+        IWebViewProvider<PlayerObject> provider = this.provider;
+        return provider != null && provider.isChannelAllowed(this);
+    }
+
+    @Override
+    public boolean isRequestAllowed() {
+        IWebViewProvider<PlayerObject> provider = this.provider;
+        return provider != null && provider.isRequestAllowed(this);
+    }
+
+    public boolean isChannelAllowedDefault() {
+        IPauseMenuManager mgr = this.player.getPauseMenuManager();
+        return mgr != null && ((PauseMenuManager)mgr).isWebViewChannelAllowedDefault();
+    }
+
+    public boolean isRequestAllowedDefault() {
+        IPauseMenuManager mgr = this.player.getPauseMenuManager();
+        return mgr != null && ((PauseMenuManager)mgr).isWebViewRequestAllowedDefault();
+    }
+
+    public void handleRequestDefault(SHA1Sum hash, Consumer<IWebViewBlob> callback) {
+        IWebViewBlob tmp;
+        IPauseMenuManager mgr = this.player.getPauseMenuManager();
+        if (mgr != null && (tmp = ((PauseMenuManager)mgr).getWebViewBlobDefault()) != null && hash.equals(tmp.getHash())) {
+            callback.accept(tmp);
+            return;
         }
+        callback.accept(this.service.getGlobalBlob(hash));
+    }
 
-        private final EaglerPlayerInstance<PlayerObject> player;
-        private final WebViewService<PlayerObject> service;
+    public SHA1Sum handleAliasDefault(String alias) {
+        return this.service.getBlobFromAlias(alias);
+    }
 
-        private IWebViewProvider<PlayerObject> provider = null;
-        private volatile String channelName = null;
+    @Override
+    public IWebViewProvider<PlayerObject> getProvider() {
+        return this.provider;
+    }
 
-        public WebViewManager(EaglerPlayerInstance<PlayerObject> player, WebViewService<PlayerObject> service) {
-                this.player = player;
-                this.service = service;
-                this.provider = service.getDefaultProvider();
+    @Override
+    public void setProvider(IWebViewProvider<PlayerObject> func) {
+        if (func == null) {
+            throw new NullPointerException("func");
         }
+        this.provider = func;
+    }
 
-        @Override
-        public IEaglerPlayer<PlayerObject> getPlayer() {
-                return player;
+    public boolean isChannelOpen() {
+        return this.getOpenChannel() != null;
+    }
+
+    @Override
+    public boolean isChannelOpen(String channelName) {
+        if (channelName == null) {
+            throw new NullPointerException("channelName");
         }
+        String str = this.getOpenChannel();
+        return str != null && channelName.equals(str);
+    }
 
-        @Override
-        public IWebViewService<PlayerObject> getWebViewService() {
-                return service;
+    @Override
+    public Set<String> getOpenChannels() {
+        String str = this.getOpenChannel();
+        if (str != null) {
+            return Collections.singleton(str);
         }
+        return Collections.emptySet();
+    }
 
-        @Override
-        public boolean isChannelAllowed() {
-                IWebViewProvider<PlayerObject> provider = this.provider;
-                return provider != null && provider.isChannelAllowed(this);
+    public final String getOpenChannel() {
+        return this.channelName;
+    }
+
+    private boolean validateChannel(String channelName) {
+        if (channelName == null) {
+            throw new NullPointerException("channelName");
         }
-
-        @Override
-        public boolean isRequestAllowed() {
-                IWebViewProvider<PlayerObject> provider = this.provider;
-                return provider != null && provider.isRequestAllowed(this);
+        String str = this.getOpenChannel();
+        if (str != null && channelName.equals(str)) {
+            return true;
         }
+        this.player.logger().warn("Attempted to send web view message on closed channel: " + channelName);
+        return false;
+    }
 
-        public boolean isChannelAllowedDefault() {
-                PauseMenuManager<PlayerObject> mgr = player.getPauseMenuManager();
-                return mgr != null && mgr.isWebViewChannelAllowedDefault();
+    @Override
+    public void sendMessageString(String channelName, String contents) {
+        if (this.validateChannel(channelName)) {
+            if (contents == null) {
+                throw new NullPointerException("contents");
+            }
+            this.player.sendEaglerMessage(new SPacketWebViewMessageV4EAG(contents));
         }
+    }
 
-        public boolean isRequestAllowedDefault() {
-                PauseMenuManager<PlayerObject> mgr = player.getPauseMenuManager();
-                return mgr != null && mgr.isWebViewRequestAllowedDefault();
+    @Override
+    public void sendMessageString(String channelName, byte[] contents) {
+        if (this.validateChannel(channelName)) {
+            if (contents == null) {
+                throw new NullPointerException("contents");
+            }
+            this.player.sendEaglerMessage(new SPacketWebViewMessageV4EAG(0, contents));
         }
+    }
 
-        public void handleRequestDefault(SHA1Sum hash, Consumer<IWebViewBlob> callback) {
-                PauseMenuManager<PlayerObject> mgr = player.getPauseMenuManager();
-                if (mgr != null) {
-                        IWebViewBlob tmp = mgr.getWebViewBlobDefault();
-                        if (tmp != null && hash.equals(tmp.getHash())) {
-                                callback.accept(tmp);
-                                return;
-                        }
-                }
-                callback.accept(service.getGlobalBlob(hash));
+    @Override
+    public void sendMessageBinary(String channelName, byte[] contents) {
+        if (this.validateChannel(channelName)) {
+            if (contents == null) {
+                throw new NullPointerException("contents");
+            }
+            this.player.sendEaglerMessage(new SPacketWebViewMessageV4EAG(contents));
         }
+    }
 
-        public SHA1Sum handleAliasDefault(String alias) {
-                return service.getBlobFromAlias(alias);
+    @Override
+    public boolean isDisplayWebViewSupported() {
+        return this.player.getEaglerProtocol().ver >= 5;
+    }
+
+    @Override
+    public void displayWebViewURL(String title, String url, Set<EnumWebViewPerms> permissions) {
+        if (title == null) {
+            throw new NullPointerException("title");
         }
-
-        @Override
-        public IWebViewProvider<PlayerObject> getProvider() {
-                return provider;
+        if (url == null) {
+            throw new NullPointerException("url");
         }
-
-        @Override
-        public void setProvider(IWebViewProvider<PlayerObject> func) {
-                if (func == null) {
-                        throw new NullPointerException("func");
-                }
-                provider = func;
+        if (this.player.getEaglerProtocol().ver >= 5) {
+            this.player.sendEaglerMessage(new SPacketDisplayWebViewURLV5EAG(permissions != null ? EnumWebViewPerms.toBits(permissions) : 0, title, url));
+        } else {
+            this.player.logger().warn("Attempted to display web view on an unsupported client");
         }
+    }
 
-        public boolean isChannelOpen() {
-                return getOpenChannel() != null;
+    @Override
+    public void displayWebViewBlob(String title, SHA1Sum hash, Set<EnumWebViewPerms> permissions) {
+        if (title == null) {
+            throw new NullPointerException("title");
         }
-
-        @Override
-        public boolean isChannelOpen(String channelName) {
-                if (channelName == null) {
-                        throw new NullPointerException("channelName");
-                }
-                String str = getOpenChannel();
-                return str != null && channelName.equals(str);
+        if (hash == null) {
+            throw new NullPointerException("hash");
         }
-
-        @Override
-        public Set<String> getOpenChannels() {
-                String str = getOpenChannel();
-                if (str != null) {
-                        return Collections.singleton(str);
-                } else {
-                        return Collections.emptySet();
-                }
+        if (this.player.getEaglerProtocol().ver >= 5) {
+            this.player.sendEaglerMessage(new SPacketDisplayWebViewBlobV5EAG(permissions != null ? EnumWebViewPerms.toBits(permissions) : 0, title, hash.asBytes()));
+        } else {
+            this.player.logger().warn("Attempted to display web view on an unsupported client");
         }
+    }
 
-        public final String getOpenChannel() {
-                return (String) CHANNEL_NAME_HANDLE.getOpaque(this);
+    public void handlePacketRequestData(byte[] hash) {
+        if (!this.player.getRateLimits().ratelimitWebViewData()) {
+            this.player.disconnect(((IPlatformComponentBuilder.IBuilderComponentText)this.service.getEaglerXServer().componentBuilder().buildTextComponent().beginStyle().color(IPlatformComponentBuilder.EnumChatColor.RED).end()).text("Too many WebView data requests!").end());
+            return;
         }
-
-        private boolean validateChannel(String channelName) {
-                if (channelName == null) {
-                        throw new NullPointerException("channelName");
-                }
-                String str = getOpenChannel();
-                if (str != null && channelName.equals(str)) {
-                        return true;
-                } else {
-                        player.logger().warn("Attempted to send web view message on closed channel: " + channelName);
-                        return false;
-                }
-        }
-
-        @Override
-        public void sendMessageString(String channelName, String contents) {
-                if (validateChannel(channelName)) {
-                        if (contents == null) {
-                                throw new NullPointerException("contents");
-                        }
-                        player.sendEaglerMessage(new SPacketWebViewMessageV4EAG(contents));
-                }
-        }
-
-        @Override
-        public void sendMessageString(String channelName, byte[] contents) {
-                if (validateChannel(channelName)) {
-                        if (contents == null) {
-                                throw new NullPointerException("contents");
-                        }
-                        player.sendEaglerMessage(new SPacketWebViewMessageV4EAG(SPacketWebViewMessageV4EAG.TYPE_STRING, contents));
-                }
-        }
-
-        @Override
-        public void sendMessageBinary(String channelName, byte[] contents) {
-                if (validateChannel(channelName)) {
-                        if (contents == null) {
-                                throw new NullPointerException("contents");
-                        }
-                        player.sendEaglerMessage(new SPacketWebViewMessageV4EAG(contents));
-                }
-        }
-
-        @Override
-        public boolean isDisplayWebViewSupported() {
-                return player.getEaglerProtocol().ver >= 5;
-        }
-
-        @Override
-        public void displayWebViewURL(String title, String url, Set<EnumWebViewPerms> permissions) {
-                if (title == null) {
-                        throw new NullPointerException("title");
-                }
-                if (url == null) {
-                        throw new NullPointerException("url");
-                }
-                if (player.getEaglerProtocol().ver >= 5) {
-                        player.sendEaglerMessage(new SPacketDisplayWebViewURLV5EAG(
-                                        permissions != null ? EnumWebViewPerms.toBits(permissions) : 0, title, url));
-                } else {
-                        player.logger().warn("Attempted to display web view on an unsupported client");
-                }
-        }
-
-        @Override
-        public void displayWebViewBlob(String title, SHA1Sum hash, Set<EnumWebViewPerms> permissions) {
-                if (title == null) {
-                        throw new NullPointerException("title");
-                }
-                if (hash == null) {
-                        throw new NullPointerException("hash");
-                }
-                if (player.getEaglerProtocol().ver >= 5) {
-                        player.sendEaglerMessage(new SPacketDisplayWebViewBlobV5EAG(
-                                        permissions != null ? EnumWebViewPerms.toBits(permissions) : 0, title, hash.asBytes()));
-                } else {
-                        player.logger().warn("Attempted to display web view on an unsupported client");
-                }
-        }
-
-        public void handlePacketRequestData(byte[] hash) {
-                if (!player.getRateLimits().ratelimitWebViewData()) {
-                        player.disconnect(service.getEaglerXServer().componentBuilder().buildTextComponent().beginStyle()
-                                        .color(EnumChatColor.RED).end().text("Too many WebView data requests!").end());
-                        return;
-                }
-                IWebViewProvider<PlayerObject> provider = this.provider;
-                if (provider != null && provider.isRequestAllowed(this)) {
-                        SHA1Sum sum = SHA1Sum.create(hash);
+        IWebViewProvider<PlayerObject> provider = this.provider;
+        if (provider != null && provider.isRequestAllowed(this)) {
+            SHA1Sum sum = SHA1Sum.create(hash);
+            try {
+                provider.handleRequest(this, sum, data -> {
+                    if (data != null) {
+                        this.sendDataToPlayer(((WebViewBlob)data).list);
+                    } else {
                         try {
-                                provider.handleRequest(this, sum, (data) -> {
-                                        if (data != null) {
-                                                sendDataToPlayer(((WebViewBlob) data).list);
-                                        } else {
-                                                try {
-                                                        player.disconnect(service.getEaglerXServer().componentBuilder().buildTextComponent()
-                                                                        .beginStyle().color(EnumChatColor.RED).end()
-                                                                        .text("WebView content could not be found!").end());
-                                                } catch (Exception ex) {
-                                                }
-                                        }
-                                });
-                        } catch (Exception ex) {
-                                player.logger().error("Could not handle WebView data request for: " + sum, ex);
-                                player.disconnect(service.getEaglerXServer().componentBuilder().buildTextComponent().beginStyle()
-                                                .color(EnumChatColor.RED).end().text("Error handling webview data request!").end());
+                            this.player.disconnect(((IPlatformComponentBuilder.IBuilderComponentText)this.service.getEaglerXServer().componentBuilder().buildTextComponent().beginStyle().color(IPlatformComponentBuilder.EnumChatColor.RED).end()).text("WebView content could not be found!").end());
                         }
-                } else {
-                        player.disconnect(service.getEaglerXServer().componentBuilder().buildTextComponent().beginStyle()
-                                        .color(EnumChatColor.RED).end().text("Unexpected WebView data request!").end());
+                        catch (Exception exception) {
+                            // empty catch block
+                        }
+                    }
+                });
+            }
+            catch (Exception ex) {
+                this.player.logger().error("Could not handle WebView data request for: " + sum, ex);
+                this.player.disconnect(((IPlatformComponentBuilder.IBuilderComponentText)this.service.getEaglerXServer().componentBuilder().buildTextComponent().beginStyle().color(IPlatformComponentBuilder.EnumChatColor.RED).end()).text("Error handling webview data request!").end());
+            }
+        } else {
+            this.player.disconnect(((IPlatformComponentBuilder.IBuilderComponentText)this.service.getEaglerXServer().componentBuilder().buildTextComponent().beginStyle().color(IPlatformComponentBuilder.EnumChatColor.RED).end()).text("Unexpected WebView data request!").end());
+        }
+    }
+
+    private void sendDataToPlayer(List<SPacketServerInfoDataChunkV4EAG> list) {
+        Channel ch;
+        long rate;
+        int chunkRate = this.service.getEaglerXServer().getConfig().getPauseMenu().getServerInfoButtonEmbedSendChunkRate();
+        long l = rate = chunkRate > 0 ? 250L / (long)chunkRate : 250L;
+        if (rate < 20L) {
+            rate = 20L;
+        }
+        if ((ch = this.player.getChannel()).isActive()) {
+            ch.eventLoop().execute((Runnable)new DataRunnable(list, rate, ch));
+        }
+    }
+
+    public void handlePacketChannel(String channel, boolean open) {
+        BasePlayerRPCManager rpcMgr;
+        String prevChannel;
+        String nextChannel;
+        if (!this.player.getRateLimits().ratelimitWebViewMsg()) {
+            this.player.disconnect(((IPlatformComponentBuilder.IBuilderComponentText)this.service.getEaglerXServer().componentBuilder().buildTextComponent().beginStyle().color(IPlatformComponentBuilder.EnumChatColor.RED).end()).text("Too many WebView messages!").end());
+            return;
+        }
+        boolean allowed = open && this.isChannelAllowed();
+        while (true) {
+            nextChannel = null;
+            prevChannel = this.channelName;
+            if (open) {
+                if (channel.equals(prevChannel)) {
+                    prevChannel = null;
+                    break;
                 }
+                nextChannel = channel;
+                if (allowed && !CHANNEL_NAME_HANDLE.compareAndSet(this, prevChannel, channel)) continue;
+                break;
+            }
+            if (CHANNEL_NAME_HANDLE.compareAndSet(this, prevChannel, null)) break;
+        }
+        if (prevChannel != null) {
+            this.service.getEaglerXServer().eventDispatcher().dispatchWebViewChannelEvent(this.player, IEaglercraftWebViewChannelEvent.EnumEventType.CHANNEL_CLOSE, prevChannel, null);
+            rpcMgr = this.player.getPlayerRPCManager();
+            if (rpcMgr != null) {
+                rpcMgr.fireWebViewOpenClose(false, prevChannel);
+            }
+        }
+        if (nextChannel != null) {
+            if (allowed) {
+                this.service.getEaglerXServer().eventDispatcher().dispatchWebViewChannelEvent(this.player, IEaglercraftWebViewChannelEvent.EnumEventType.CHANNEL_OPEN, nextChannel, null);
+                rpcMgr = this.player.getPlayerRPCManager();
+                if (rpcMgr != null) {
+                    rpcMgr.fireWebViewOpenClose(true, nextChannel);
+                }
+            } else {
+                this.player.disconnect(((IPlatformComponentBuilder.IBuilderComponentText)this.service.getEaglerXServer().componentBuilder().buildTextComponent().beginStyle().color(IPlatformComponentBuilder.EnumChatColor.RED).end()).text("Unexpected WebView channel opened!").end());
+            }
+        }
+    }
+
+    public void handlePacketMessage(byte[] data, boolean binary) {
+        if (!this.player.getRateLimits().ratelimitWebViewMsg()) {
+            this.player.disconnect(((IPlatformComponentBuilder.IBuilderComponentText)this.service.getEaglerXServer().componentBuilder().buildTextComponent().beginStyle().color(IPlatformComponentBuilder.EnumChatColor.RED).end()).text("Too many WebView messages!").end());
+            return;
+        }
+        String channel = this.getOpenChannel();
+        if (channel != null) {
+            this.service.getEaglerXServer().eventDispatcher().dispatchWebViewMessageEvent(this.player, channel, binary ? IEaglercraftWebViewMessageEvent.EnumMessageType.BINARY : IEaglercraftWebViewMessageEvent.EnumMessageType.STRING, data, null);
+            BasePlayerRPCManager rpcMgr = this.player.getPlayerRPCManager();
+            if (rpcMgr != null) {
+                rpcMgr.fireWebViewMessage(channel, binary, data);
+            }
+        } else {
+            this.player.disconnect(((IPlatformComponentBuilder.IBuilderComponentText)this.service.getEaglerXServer().componentBuilder().buildTextComponent().beginStyle().color(IPlatformComponentBuilder.EnumChatColor.RED).end()).text("Unexpected WebView packet!").end());
+        }
+    }
+
+    private class DataRunnable
+    implements Runnable {
+        private final List<SPacketServerInfoDataChunkV4EAG> list;
+        private final long rate;
+        private final Channel chRef;
+        private int chunk;
+
+        protected DataRunnable(List<SPacketServerInfoDataChunkV4EAG> list, long rate, Channel chRef) {
+            this.list = list;
+            this.rate = rate;
+            this.chRef = chRef;
         }
 
-        private void sendDataToPlayer(List<SPacketServerInfoDataChunkV4EAG> list) {
-                int chunkRate = service.getEaglerXServer().getConfig().getPauseMenu().getServerInfoButtonEmbedSendChunkRate();
-                long rate = chunkRate > 0 ? 250l / chunkRate : 250l;
-                if (rate < 20l) {
-                        rate = 20l;
+        @Override
+        public void run() {
+            try {
+                int c;
+                if (!this.chRef.isActive()) {
+                    return;
                 }
-                Channel ch = player.getChannel();
-                if (ch.isActive()) {
-                        ch.eventLoop().execute(new DataRunnable(list, rate, ch));
+                if ((c = this.chunk++) >= this.list.size()) {
+                    return;
                 }
+                WebViewManager.this.player.sendEaglerMessage(this.list.get(c));
+                if (c + 1 < this.list.size()) {
+                    this.chRef.eventLoop().schedule((Runnable)this, this.rate, TimeUnit.MILLISECONDS);
+                }
+            }
+            catch (Exception ex) {
+                WebViewManager.this.player.logger().warn("Failed to send server-info data chunk", ex);
+            }
         }
-
-        private class DataRunnable implements Runnable {
-
-                private final List<SPacketServerInfoDataChunkV4EAG> list;
-                private final long rate;
-                private final Channel chRef;
-                private int chunk;
-
-                protected DataRunnable(List<SPacketServerInfoDataChunkV4EAG> list, long rate, Channel chRef) {
-                        this.list = list;
-                        this.rate = rate;
-                        this.chRef = chRef;
-                }
-
-                @Override
-                public void run() {
-                        try {
-                                if (!chRef.isActive()) {
-                                        return;
-                                }
-                                int c = chunk++;
-                                if (c >= list.size()) {
-                                        return;
-                                }
-                                player.sendEaglerMessage(list.get(c));
-                                if (c + 1 < list.size()) {
-                                        chRef.eventLoop().schedule(this, rate, TimeUnit.MILLISECONDS);
-                                }
-                        } catch (Exception ex) {
-                                player.logger().warn("Failed to send server-info data chunk", ex);
-                        }
-                }
-
-        }
-
-        public void handlePacketChannel(String channel, boolean open) {
-                if (!player.getRateLimits().ratelimitWebViewMsg()) {
-                        player.disconnect(service.getEaglerXServer().componentBuilder().buildTextComponent().beginStyle()
-                                        .color(EnumChatColor.RED).end().text("Too many WebView messages!").end());
-                        return;
-                }
-                String nextChannel;
-                String prevChannel;
-                boolean allowed = open && isChannelAllowed();
-                for (;;) {
-                        nextChannel = null;
-                        prevChannel = (String) CHANNEL_NAME_HANDLE.getOpaque(this);
-                        if (open) {
-                                if (channel.equals(prevChannel)) {
-                                        prevChannel = null;
-                                        break;
-                                } else {
-                                        nextChannel = channel;
-                                        if (allowed) {
-                                                if (CHANNEL_NAME_HANDLE.compareAndExchange(this, prevChannel, channel) == prevChannel) {
-                                                        break;
-                                                }
-                                        } else {
-                                                break;
-                                        }
-                                }
-                        } else {
-                                if (CHANNEL_NAME_HANDLE.compareAndExchange(this, prevChannel, null) == prevChannel) {
-                                        break;
-                                }
-                        }
-                }
-                if (prevChannel != null) {
-                        service.getEaglerXServer().eventDispatcher().dispatchWebViewChannelEvent(player,
-                                        EnumEventType.CHANNEL_CLOSE, prevChannel, null);
-                        EaglerPlayerRPCManager<PlayerObject> rpcMgr = player.getPlayerRPCManager();
-                        if (rpcMgr != null) {
-                                rpcMgr.fireWebViewOpenClose(false, prevChannel);
-                        }
-                }
-                if (nextChannel != null) {
-                        if (allowed) {
-                                service.getEaglerXServer().eventDispatcher().dispatchWebViewChannelEvent(player,
-                                                EnumEventType.CHANNEL_OPEN, nextChannel, null);
-                                EaglerPlayerRPCManager<PlayerObject> rpcMgr = player.getPlayerRPCManager();
-                                if (rpcMgr != null) {
-                                        rpcMgr.fireWebViewOpenClose(true, nextChannel);
-                                }
-                        } else {
-                                player.disconnect(service.getEaglerXServer().componentBuilder().buildTextComponent().beginStyle()
-                                                .color(EnumChatColor.RED).end().text("Unexpected WebView channel opened!").end());
-                        }
-                }
-        }
-
-        public void handlePacketMessage(byte[] data, boolean binary) {
-                if (!player.getRateLimits().ratelimitWebViewMsg()) {
-                        player.disconnect(service.getEaglerXServer().componentBuilder().buildTextComponent().beginStyle()
-                                        .color(EnumChatColor.RED).end().text("Too many WebView messages!").end());
-                        return;
-                }
-                String channel = getOpenChannel();
-                if (channel != null) {
-                        service.getEaglerXServer().eventDispatcher().dispatchWebViewMessageEvent(player, channel,
-                                        binary ? EnumMessageType.BINARY : EnumMessageType.STRING, data, null);
-                        EaglerPlayerRPCManager<PlayerObject> rpcMgr = player.getPlayerRPCManager();
-                        if (rpcMgr != null) {
-                                rpcMgr.fireWebViewMessage(channel, binary, data);
-                        }
-                } else {
-                        player.disconnect(service.getEaglerXServer().componentBuilder().buildTextComponent().beginStyle()
-                                        .color(EnumChatColor.RED).end().text("Unexpected WebView packet!").end());
-                }
-        }
-
+    }
 }
+

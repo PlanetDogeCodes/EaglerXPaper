@@ -22,7 +22,7 @@ import javax.net.ssl.SSLException;
 
 import io.netty.buffer.ByteBufAllocator;
 import io.netty.handler.ssl.SslContext;
-import io.netty.handler.ssl.SslContextBuilder;
+import net.lax1dude.eaglercraft.backend.server.base.SslCompat;
 import io.netty.handler.ssl.SslHandler;
 
 public class SSLContextHolderBuiltin implements ISSLContextProvider {
@@ -44,8 +44,7 @@ public class SSLContextHolderBuiltin implements ISSLContextProvider {
         }
 
         protected void refresh() throws SSLException {
-                ctx = SslContextBuilder.forServer(new ByteArrayInputStream(pubKey), new ByteArrayInputStream(privKey), password)
-                                .build();
+                ctx = SslCompat.forServer(new ByteArrayInputStream(pubKey), new ByteArrayInputStream(privKey), password);
         }
 
 }

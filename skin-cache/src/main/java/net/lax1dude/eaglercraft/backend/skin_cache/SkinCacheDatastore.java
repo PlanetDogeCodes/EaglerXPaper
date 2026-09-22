@@ -1,19 +1,6 @@
 /*
- * Copyright (c) 2025 lax1dude. All Rights Reserved.
- * 
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
- * IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT,
- * INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
- * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
- * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
- * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
- * 
+ * Decompiled with CFR 0.152.
  */
-
 package net.lax1dude.eaglercraft.backend.skin_cache;
 
 import java.security.MessageDigest;
@@ -30,286 +17,291 @@ import java.util.function.Consumer;
 import java.util.zip.DataFormatException;
 import java.util.zip.Deflater;
 import java.util.zip.Inflater;
-
-import net.lax1dude.eaglercraft.backend.skin_cache.SkinCacheTable.SkinCacheTableThreadEnv;
+import net.lax1dude.eaglercraft.backend.skin_cache.ISkinCacheDatastore;
+import net.lax1dude.eaglercraft.backend.skin_cache.SkinCacheTable;
 import net.lax1dude.eaglercraft.backend.util.ILoggerAdapter;
 import net.lax1dude.eaglercraft.backend.util.SteadyTime;
 
-public class SkinCacheDatastore implements ISkinCacheDatastore {
+public class SkinCacheDatastore
+implements ISkinCacheDatastore {
+    public static final int SKIN_LENGTH = 12288;
+    public static final int CAPE_LENGTH = 1173;
+    protected final ILoggerAdapter logger;
+    protected final SkinCacheDatastoreThreadEnv[] threads;
+    protected final BlockingQueue<SkinCacheDatastoreRunnable> databaseQueue = new LinkedBlockingQueue<SkinCacheDatastoreRunnable>();
+    protected final CountDownLatch disposeLatch;
+    protected long lastCleanup = 0L;
+    protected int keepObjectsDays;
+    protected int maxObjects;
+    protected final boolean sqliteCompatible;
+    protected final SkinCacheTable skin;
+    protected final SkinCacheTable cape;
+    protected final Object dbWriteLock = new Object();
+    private static final SkinCacheDatastoreRunnable TERMINATE = env -> {};
 
-	public static final int SKIN_LENGTH = 12288;
-	public static final int CAPE_LENGTH = 1173;
+    public SkinCacheDatastore(Connection[] conn, int threadCount, int keepObjectsDays, int maxObjects, int compressionLevel, boolean sqliteCompatible, ILoggerAdapter logger) throws SQLException {
+        this.keepObjectsDays = keepObjectsDays;
+        this.maxObjects = maxObjects;
+        this.sqliteCompatible = sqliteCompatible;
+        this.logger = logger;
+        this.skin = new SkinCacheTable("eagler_skins", conn[0], sqliteCompatible, logger, this.dbWriteLock);
+        this.cape = new SkinCacheTable("eagler_capes", conn[0], sqliteCompatible, logger, this.dbWriteLock);
+        this.disposeLatch = new CountDownLatch(threadCount);
+        this.threads = new SkinCacheDatastoreThreadEnv[threadCount];
+        for (int i = 0; i < threadCount; ++i) {
+            this.threads[i] = new SkinCacheDatastoreThreadEnv(i, compressionLevel, conn[conn.length > 1 ? i : 0]);
+        }
+    }
 
-	protected final ILoggerAdapter logger;
-	protected final SkinCacheDatastoreThreadEnv[] threads;
-	protected final BlockingQueue<SkinCacheDatastoreRunnable> databaseQueue = new LinkedBlockingQueue<>();
-	protected final CountDownLatch disposeLatch;
+    private void execute(SkinCacheDatastoreRunnable runnable) {
+        this.databaseQueue.add(runnable);
+    }
 
-	protected long lastCleanup = 0l;
-	protected int keepObjectsDays;
-	protected int maxObjects;
-	protected final boolean sqliteCompatible;
+    @Override
+    public void loadSkin(String skinURL, Consumer<byte[]> callback) {
+        this.execute(env -> {
+            byte[] result;
+            try {
+                result = this.skin.loadSkin(env.skinEnv, skinURL);
+            }
+            catch (SQLException ex) {
+                this.logger.error("Could not load skin \"" + skinURL + "\" from database!");
+                callback.accept(null);
+                return;
+            }
+            if (result != null) {
+                byte[] res;
+                try {
+                    res = this.decompressSkin(env, result, 12288);
+                }
+                catch (DataFormatException ex) {
+                    this.logger.warn("Skin \"" + skinURL + "\" could not be decompressed!");
+                    callback.accept(null);
+                    return;
+                }
+                callback.accept(res);
+            } else {
+                callback.accept(null);
+            }
+        });
+    }
 
-	protected final SkinCacheTable skin;
-	protected final SkinCacheTable cape;
-	// serializes transaction state changes on the (possibly shared) JDBC connection
-	protected final Object dbWriteLock = new Object();
+    @Override
+    public void loadCape(String capeURL, Consumer<byte[]> callback) {
+        this.execute(env -> {
+            byte[] result;
+            try {
+                result = this.cape.loadSkin(env.capeEnv, capeURL);
+            }
+            catch (SQLException ex) {
+                this.logger.error("Could not load cape \"" + capeURL + "\" from database!");
+                callback.accept(null);
+                return;
+            }
+            if (result != null) {
+                byte[] res;
+                try {
+                    res = this.decompressSkin(env, result, 1173);
+                }
+                catch (DataFormatException ex) {
+                    this.logger.warn("Cape \"" + capeURL + "\" could not be decompressed!");
+                    callback.accept(null);
+                    return;
+                }
+                callback.accept(res);
+            } else {
+                callback.accept(null);
+            }
+        });
+    }
 
-	private class SkinCacheDatastoreThreadEnv {
+    private byte[] decompressSkin(SkinCacheDatastoreThreadEnv env, byte[] input, int len) throws DataFormatException {
+        if (env.inflater == null && input.length == len) {
+            return input;
+        }
+        byte[] ret = new byte[len];
+        env.inflater.reset();
+        env.inflater.setInput(input, 0, input.length);
+        if (env.inflater.inflate(ret, 0, len) != len) {
+            throw new DataFormatException();
+        }
+        return ret;
+    }
 
-		protected final Thread thread;
-		protected final SkinCacheTableThreadEnv skinEnv;
-		protected final SkinCacheTableThreadEnv capeEnv;
-		protected final byte[] compressionTmp;
-		protected final Deflater deflater;
-		protected final Inflater inflater;
-		protected final MessageDigest sha1Digest;
+    @Override
+    public void storeSkin(String skinURL, byte[] data) {
+        if (data.length != 12288) {
+            throw new IllegalArgumentException("Skin length is not 12288 bytes!");
+        }
+        this.execute(env -> {
+            try {
+                this.skin.storeSkin(env.skinEnv, skinURL, this.sha1Digest(env, data), this.compressSkin(env, data));
+            }
+            catch (IllegalStateException | SQLException e) {
+                this.logger.error("Skin \"" + skinURL + "\" could not be stored in the database!", e);
+            }
+        });
+    }
 
-		protected SkinCacheDatastoreThreadEnv(int i, int compressionLevel, Connection conn) throws SQLException {
-			skinEnv = skin.createThreadEnv(conn);
-			capeEnv = cape.createThreadEnv(conn);
-			compressionTmp = new byte[65535];
-			deflater = compressionLevel > 0 ? new Deflater(compressionLevel) : null;
-			inflater = compressionLevel > 0 ? new Inflater() : null;
-			try {
-				sha1Digest = MessageDigest.getInstance("SHA-1");
-			} catch (NoSuchAlgorithmException ex) {
-				throw new RuntimeException("This JRE does not support SHA-1!", ex);
-			}
-			thread = new Thread(() -> {
-				for (;;) {
-					try {
-						SkinCacheDatastoreRunnable runnable = databaseQueue.take();
-						if (runnable == TERMINATE) {
-							break;
-						}
-						runnable.run(this);
-					} catch (Throwable ex) {
-						if (ex instanceof ThreadDeath exx) {
-							throw exx;
-						}
-						logger.error("Caught exception in worker thread #" + (i + 1), ex);
-					}
-				}
-				dispose();
-				disposeLatch.countDown();
-			}, "SkinCacheDatastore Thread #" + (i + 1));
-			thread.setDaemon(true);
-			thread.start();
-		}
+    @Override
+    public void storeCape(String capeURL, byte[] data) {
+        if (data.length != 1173) {
+            throw new IllegalArgumentException("Cape length is not 1173 bytes!");
+        }
+        this.execute(env -> {
+            try {
+                this.cape.storeSkin(env.capeEnv, capeURL, this.sha1Digest(env, data), this.compressSkin(env, data));
+            }
+            catch (IllegalStateException | SQLException e) {
+                this.logger.error("Cape \"" + capeURL + "\" could not be stored in the database!", e);
+            }
+        });
+    }
 
-		public void dispose() {
-			skinEnv.dispose();
-			capeEnv.dispose();
-			if (deflater != null) {
-				deflater.end();
-			}
-			if (inflater != null) {
-				inflater.end();
-			}
-		}
+    private byte[] compressSkin(SkinCacheDatastoreThreadEnv env, byte[] data) {
+        if (env.deflater == null) {
+            return data;
+        }
+        env.deflater.reset();
+        env.deflater.setInput(data, 0, data.length);
+        env.deflater.finish();
+        int i = env.deflater.deflate(env.compressionTmp, 0, env.compressionTmp.length);
+        if (i <= 0) {
+            throw new IllegalStateException();
+        }
+        return Arrays.copyOf(env.compressionTmp, i);
+    }
 
-	}
+    private byte[] sha1Digest(SkinCacheDatastoreThreadEnv env, byte[] data) {
+        env.sha1Digest.update(data);
+        return env.sha1Digest.digest();
+    }
 
-	private interface SkinCacheDatastoreRunnable {
-		void run(SkinCacheDatastoreThreadEnv env);
-	}
+    @Override
+    public void tick() {
+        long millisSteady = SteadyTime.millis();
+        if (millisSteady - this.lastCleanup > 600000L) {
+            this.lastCleanup = millisSteady;
+            try {
+                this.runCleanup();
+            }
+            catch (SQLException ex) {
+                this.logger.error("Could not clean up skin cache!", ex);
+            }
+        }
+    }
 
-	private static final SkinCacheDatastoreRunnable TERMINATE = (env) -> {};
+    /*
+     * WARNING - Removed try catching itself - possible behaviour change.
+     */
+    private synchronized void runCleanup() throws SQLException {
+        long millis = System.currentTimeMillis();
+        long expiry = millis - (long)this.keepObjectsDays * 86400000L;
+        Object object = this.dbWriteLock;
+        synchronized (object) {
+            this.skin.runCleanup(this.maxObjects, expiry);
+            this.cape.runCleanup(this.maxObjects, expiry);
+        }
+    }
 
-	public SkinCacheDatastore(Connection[] conn, int threadCount, int keepObjectsDays, int maxObjects,
-			int compressionLevel, boolean sqliteCompatible, ILoggerAdapter logger) throws SQLException {
-		this.keepObjectsDays = keepObjectsDays;
-		this.maxObjects = maxObjects;
-		this.sqliteCompatible = sqliteCompatible;
-		this.logger = logger;
-		skin = new SkinCacheTable("eagler_skins", conn[0], sqliteCompatible, logger, dbWriteLock);
-		cape = new SkinCacheTable("eagler_capes", conn[0], sqliteCompatible, logger, dbWriteLock);
-		disposeLatch = new CountDownLatch(threadCount);
-		threads = new SkinCacheDatastoreThreadEnv[threadCount];
-		for (int i = 0; i < threadCount; ++i) {
-			threads[i] = new SkinCacheDatastoreThreadEnv(i, compressionLevel, conn[conn.length > 1 ? i : 0]);
-		}
-	}
+    @Override
+    public void dispose() {
+        for (int i = 0; i < this.threads.length; ++i) {
+            this.databaseQueue.add(TERMINATE);
+        }
+        try {
+            if (!this.disposeLatch.await(10L, TimeUnit.SECONDS)) {
+                this.logger.warn("Skin cache datastore workers did not terminate in time");
+            }
+        }
+        catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
+        this.skin.dispose();
+        this.cape.dispose();
+    }
 
-	private void execute(SkinCacheDatastoreRunnable runnable) {
-		databaseQueue.add(runnable);
-	}
+    static void disposeStmt(PreparedStatement stmt) {
+        if (stmt != null) {
+            try {
+                stmt.close();
+            }
+            catch (SQLException sQLException) {
+                // empty catch block
+            }
+        }
+    }
 
-	@Override
-	public void loadSkin(String skinURL, Consumer<byte[]> callback) {
-		execute((env) -> {
-			byte[] result;
-			try {
-				result = skin.loadSkin(env.skinEnv, skinURL);
-			} catch (SQLException ex) {
-				logger.error("Could not load skin \"" + skinURL + "\" from database!");
-				callback.accept(null);
-				return;
-			}
-			if (result != null) {
-				byte[] res;
-				try {
-					res = decompressSkin(env, result, SKIN_LENGTH);
-				} catch (DataFormatException ex) {
-					logger.warn("Skin \"" + skinURL + "\" could not be decompressed!");
-					callback.accept(null);
-					return;
-				}
-				callback.accept(res);
-			} else {
-				callback.accept(null);
-			}
-		});
-	}
+    @Override
+    public synchronized int getTotalStoredSkins() {
+        return this.skin.countSkins();
+    }
 
-	@Override
-	public void loadCape(String capeURL, Consumer<byte[]> callback) {
-		execute((env) -> {
-			byte[] result;
-			try {
-				result = cape.loadSkin(env.capeEnv, capeURL);
-			} catch (SQLException ex) {
-				logger.error("Could not load cape \"" + capeURL + "\" from database!");
-				callback.accept(null);
-				return;
-			}
-			if (result != null) {
-				byte[] res;
-				try {
-					res = decompressSkin(env, result, CAPE_LENGTH);
-				} catch (DataFormatException ex) {
-					logger.warn("Cape \"" + capeURL + "\" could not be decompressed!");
-					callback.accept(null);
-					return;
-				}
-				callback.accept(res);
-			} else {
-				callback.accept(null);
-			}
-		});
-	}
+    @Override
+    public synchronized int getTotalStoredCapes() {
+        return this.cape.countSkins();
+    }
 
-	private byte[] decompressSkin(SkinCacheDatastoreThreadEnv env, byte[] input, int len) throws DataFormatException {
-		if (env.inflater == null && input.length == len) {
-			return input;
-		}
-		byte[] ret = new byte[len];
-		env.inflater.reset();
-		env.inflater.setInput(input, 0, input.length);
-		if (env.inflater.inflate(ret, 0, len) != len) {
-			throw new DataFormatException();
-		}
-		return ret;
-	}
+    private static interface SkinCacheDatastoreRunnable {
+        public void run(SkinCacheDatastoreThreadEnv var1);
+    }
 
-	@Override
-	public void storeSkin(String skinURL, byte[] data) {
-		if (data.length != SKIN_LENGTH) {
-			throw new IllegalArgumentException("Skin length is not " + SKIN_LENGTH + " bytes!");
-		}
-		execute((env) -> {
-			try {
-				skin.storeSkin(env.skinEnv, skinURL, sha1Digest(env, data), compressSkin(env, data));
-			} catch (IllegalStateException | SQLException e) {
-				logger.error("Skin \"" + skinURL + "\" could not be stored in the database!", e);
-			}
-		});
-	}
+    private class SkinCacheDatastoreThreadEnv {
+        protected final Thread thread;
+        protected final SkinCacheTable.SkinCacheTableThreadEnv skinEnv;
+        protected final SkinCacheTable.SkinCacheTableThreadEnv capeEnv;
+        protected final byte[] compressionTmp;
+        protected final Deflater deflater;
+        protected final Inflater inflater;
+        protected final MessageDigest sha1Digest;
 
-	@Override
-	public void storeCape(String capeURL, byte[] data) {
-		if (data.length != CAPE_LENGTH) {
-			throw new IllegalArgumentException("Cape length is not " + CAPE_LENGTH + " bytes!");
-		}
-		execute((env) -> {
-			try {
-				cape.storeSkin(env.capeEnv, capeURL, sha1Digest(env, data), compressSkin(env, data));
-			} catch (IllegalStateException | SQLException e) {
-				logger.error("Cape \"" + capeURL + "\" could not be stored in the database!", e);
-			}
-		});
-	}
+        protected SkinCacheDatastoreThreadEnv(int i, int compressionLevel, Connection conn) throws SQLException {
+            this.skinEnv = SkinCacheDatastore.this.skin.createThreadEnv(conn);
+            this.capeEnv = SkinCacheDatastore.this.cape.createThreadEnv(conn);
+            this.compressionTmp = new byte[65535];
+            this.deflater = compressionLevel > 0 ? new Deflater(compressionLevel) : null;
+            this.inflater = compressionLevel > 0 ? new Inflater() : null;
+            try {
+                this.sha1Digest = MessageDigest.getInstance("SHA-1");
+            }
+            catch (NoSuchAlgorithmException ex) {
+                throw new RuntimeException("This JRE does not support SHA-1!", ex);
+            }
+            this.thread = new Thread(() -> {
+                while (true) {
+                    try {
+                        SkinCacheDatastoreRunnable runnable;
+                        while ((runnable = SkinCacheDatastore.this.databaseQueue.take()) != TERMINATE) {
+                            runnable.run(this);
+                        }
+                    }
+                    catch (Throwable ex) {
+                        if (ex instanceof ThreadDeath) {
+                            ThreadDeath exx = (ThreadDeath)ex;
+                            throw exx;
+                        }
+                        SkinCacheDatastore.this.logger.error("Caught exception in worker thread #" + (i + 1), ex);
+                        continue;
+                    }
+                    break;
+                }
+                this.dispose();
+                SkinCacheDatastore.this.disposeLatch.countDown();
+            }, "SkinCacheDatastore Thread #" + (i + 1));
+            this.thread.setDaemon(true);
+            this.thread.start();
+        }
 
-	private byte[] compressSkin(SkinCacheDatastoreThreadEnv env, byte[] data) {
-		if (env.deflater == null) {
-			return data;
-		}
-		env.deflater.reset();
-		env.deflater.setInput(data, 0, data.length);
-		env.deflater.finish();
-		int i = env.deflater.deflate(env.compressionTmp, 0, env.compressionTmp.length);
-		if (i <= 0) {
-			throw new IllegalStateException();
-		}
-		return Arrays.copyOf(env.compressionTmp, i);
-	}
-
-	private byte[] sha1Digest(SkinCacheDatastoreThreadEnv env, byte[] data) {
-		env.sha1Digest.update(data);
-		return env.sha1Digest.digest();
-	}
-
-	@Override
-	public void tick() {
-		long millisSteady = SteadyTime.millis();
-		if (millisSteady - lastCleanup > (600l * 1000l)) {
-			lastCleanup = millisSteady;
-			try {
-				runCleanup();
-			} catch (SQLException ex) {
-				logger.error("Could not clean up skin cache!", ex);
-			}
-		}
-	}
-
-	private synchronized void runCleanup() throws SQLException {
-		long millis = System.currentTimeMillis();
-		long expiry = millis - keepObjectsDays * 86400000l;
-		// The DELETE statements execute on the shared JDBC connection, so this
-		// write path needs the same lock as the storeSkin transactions - an
-		// unlocked DELETE could land inside a worker's transaction and get
-		// committed or rolled back by it.
-		synchronized (dbWriteLock) {
-			skin.runCleanup(maxObjects, expiry);
-			cape.runCleanup(maxObjects, expiry);
-		}
-	}
-
-	@Override
-	public void dispose() {
-		for (int i = 0; i < threads.length; ++i) {
-			databaseQueue.add(TERMINATE);
-		}
-		try {
-			// bounded so a hung worker can't block plugin disable forever
-			if (!disposeLatch.await(10, TimeUnit.SECONDS)) {
-				logger.warn("Skin cache datastore workers did not terminate in time");
-			}
-		} catch (InterruptedException e) {
-			Thread.currentThread().interrupt();
-		}
-		skin.dispose();
-		cape.dispose();
-	}
-
-	static void disposeStmt(PreparedStatement stmt) {
-		if (stmt != null) {
-			try {
-				stmt.close();
-			} catch (SQLException e) {
-			}
-		}
-	}
-
-	@Override
-	public synchronized int getTotalStoredSkins() {
-		return skin.countSkins();
-	}
-
-	@Override
-	public synchronized int getTotalStoredCapes() {
-		return cape.countSkins();
-	}
-
+        public void dispose() {
+            this.skinEnv.dispose();
+            this.capeEnv.dispose();
+            if (this.deflater != null) {
+                this.deflater.end();
+            }
+            if (this.inflater != null) {
+                this.inflater.end();
+            }
+        }
+    }
 }
+

@@ -1,270 +1,259 @@
 /*
- * Copyright (c) 2025 lax1dude. All Rights Reserved.
+ * Decompiled with CFR 0.152.
  * 
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
- * IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT,
- * INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
- * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
- * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
- * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
- * 
+ * Could not load the following classes:
+ *  com.electronwill.nightconfig.core.CommentedConfig
+ *  com.google.common.collect.ImmutableList
  */
-
 package net.lax1dude.eaglercraft.backend.server.config.nightconfig;
 
+import com.electronwill.nightconfig.core.CommentedConfig;
+import com.google.common.collect.ImmutableList;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
-
-import com.electronwill.nightconfig.core.CommentedConfig;
-import com.google.common.collect.ImmutableList;
-
 import net.lax1dude.eaglercraft.backend.server.config.IEaglerConfList;
 import net.lax1dude.eaglercraft.backend.server.config.IEaglerConfSection;
+import net.lax1dude.eaglercraft.backend.server.config.nightconfig.NightConfigBase;
+import net.lax1dude.eaglercraft.backend.server.config.nightconfig.NightConfigList;
+import net.lax1dude.eaglercraft.backend.server.config.nightconfig.NightConfigLoader;
 
-public class NightConfigSection implements IEaglerConfSection {
+public class NightConfigSection
+implements IEaglerConfSection {
+    private final NightConfigBase owner;
+    final CommentedConfig config;
+    private final Consumer<String> commentSetter;
+    private final boolean exists;
+    private boolean initialized;
 
-	private final NightConfigBase owner;
-	final CommentedConfig config;
-	private final Consumer<String> commentSetter;
-	private final boolean exists;
-	private boolean initialized;
+    public NightConfigSection(NightConfigBase owner, CommentedConfig config, Consumer<String> commentSetter, boolean exists) {
+        this.owner = owner;
+        this.config = config;
+        this.commentSetter = commentSetter;
+        this.exists = this.initialized = exists;
+    }
 
-	public NightConfigSection(NightConfigBase owner, CommentedConfig config, Consumer<String> commentSetter,
-			boolean exists) {
-		this.owner = owner;
-		this.config = config;
-		this.commentSetter = commentSetter;
-		this.exists = this.initialized = exists;
-	}
+    @Override
+    public boolean exists() {
+        return this.exists;
+    }
 
-	@Override
-	public boolean exists() {
-		return exists;
-	}
+    @Override
+    public boolean initialized() {
+        return this.initialized;
+    }
 
-	@Override
-	public boolean initialized() {
-		return initialized;
-	}
+    @Override
+    public void setComment(String comment) {
+        if (this.commentSetter != null) {
+            this.commentSetter.accept(NightConfigLoader.createComment(comment));
+            this.owner.modified = true;
+        }
+    }
 
-	@Override
-	public void setComment(String comment) {
-		if (commentSetter != null) {
-			commentSetter.accept(NightConfigLoader.createComment(comment));
-			owner.modified = true;
-		}
-	}
+    @Override
+    public IEaglerConfSection getIfSection(String name) {
+        List<String> k = Collections.singletonList(name);
+        Object o = this.config.get(k);
+        return o instanceof CommentedConfig ? new NightConfigSection(this.owner, (CommentedConfig)o, str -> this.config.setComment(k, str), true) : null;
+    }
 
-	@Override
-	public IEaglerConfSection getIfSection(String name) {
-		List<String> k = Collections.singletonList(name);
-		Object o = config.get(k);
-		return (o instanceof CommentedConfig o2)
-				? new NightConfigSection(owner, o2, (str) -> config.setComment(k, str), true)
-				: null;
-	}
+    @Override
+    public IEaglerConfSection getSection(String name) {
+        List<String> k = Collections.singletonList(name);
+        Object o = this.config.get(k);
+        if (o instanceof CommentedConfig) {
+            CommentedConfig o2 = (CommentedConfig)o;
+            return new NightConfigSection(this.owner, o2, str -> this.config.setComment(k, str), true);
+        }
+        CommentedConfig sub = this.config.createSubConfig();
+        this.config.set(k, (Object)sub);
+        this.owner.modified = true;
+        this.initialized = true;
+        return new NightConfigSection(this.owner, sub, str -> this.config.setComment(k, str), false);
+    }
 
-	@Override
-	public IEaglerConfSection getSection(String name) {
-		List<String> k = Collections.singletonList(name);
-		Object o = config.get(k);
-		if (o instanceof CommentedConfig o2) {
-			return new NightConfigSection(owner, o2, (str) -> config.setComment(k, str), true);
-		} else {
-			CommentedConfig sub = config.createSubConfig();
-			config.set(k, sub);
-			owner.modified = true;
-			initialized = true;
-			return new NightConfigSection(owner, sub, (str) -> config.setComment(k, str), false);
-		}
-	}
+    private NightConfigList.IContext bindListContext(final List<String> key) {
+        return new NightConfigList.IContext(){
 
-	private NightConfigList.IContext bindListContext(List<String> key) {
-		return new NightConfigList.IContext() {
-			@Override
-			public void setComment(String comment) {
-				config.setComment(key, comment);
-			}
+            @Override
+            public void setComment(String comment) {
+                NightConfigSection.this.config.setComment(key, comment);
+            }
 
-			@Override
-			public CommentedConfig genSection() {
-				return config.createSubConfig();
-			}
-		};
-	}
+            @Override
+            public CommentedConfig genSection() {
+                return NightConfigSection.this.config.createSubConfig();
+            }
+        };
+    }
 
-	@Override
-	public IEaglerConfList getIfList(String name) {
-		List<String> k = Collections.singletonList(name);
-		Object o = config.get(k);
-		return (o instanceof List) ? new NightConfigList(owner, (List<Object>) o, bindListContext(k), true) : null;
-	}
+    @Override
+    public IEaglerConfList getIfList(String name) {
+        List<String> k = Collections.singletonList(name);
+        Object o = this.config.get(k);
+        return o instanceof List ? new NightConfigList(this.owner, (List)o, this.bindListContext(k), true) : null;
+    }
 
-	@Override
-	public IEaglerConfList getList(String name) {
-		List<String> k = Collections.singletonList(name);
-		Object o = config.get(k);
-		if (o instanceof List) {
-			return new NightConfigList(owner, (List<Object>) o, bindListContext(k), true);
-		} else {
-			List<Object> sub = new ArrayList<>();
-			config.set(k, sub);
-			owner.modified = true;
-			initialized = true;
-			return new NightConfigList(owner, sub, bindListContext(k), false);
-		}
-	}
+    @Override
+    public IEaglerConfList getList(String name) {
+        List<String> k = Collections.singletonList(name);
+        Object o = this.config.get(k);
+        if (o instanceof List) {
+            return new NightConfigList(this.owner, (List)o, this.bindListContext(k), true);
+        }
+        ArrayList<Object> sub = new ArrayList<Object>();
+        this.config.set(k, sub);
+        this.owner.modified = true;
+        this.initialized = true;
+        return new NightConfigList(this.owner, sub, this.bindListContext(k), false);
+    }
 
-	@Override
-	public List<String> getKeys() {
-		return ImmutableList.copyOf(config.valueMap().keySet());
-	}
+    @Override
+    public List<String> getKeys() {
+        return ImmutableList.copyOf(this.config.valueMap().keySet());
+    }
 
-	@Override
-	public boolean isBoolean(String name) {
-		List<String> k = Collections.singletonList(name);
-		Object o = config.get(k);
-		return (o instanceof Boolean);
-	}
+    @Override
+    public boolean isBoolean(String name) {
+        List<String> k = Collections.singletonList(name);
+        Object o = this.config.get(k);
+        return o instanceof Boolean;
+    }
 
-	@Override
-	public boolean getBoolean(String name) {
-		List<String> k = Collections.singletonList(name);
-		Object o = config.get(k);
-		return (o instanceof Boolean o2) && o2;
-	}
+    @Override
+    public boolean getBoolean(String name) {
+        List<String> k = Collections.singletonList(name);
+        Object o = this.config.get(k);
+        return o instanceof Boolean && (Boolean)o != false;
+    }
 
-	@Override
-	public boolean getBoolean(String name, boolean defaultValue, String comment) {
-		List<String> k = Collections.singletonList(name);
-		Object o = config.get(k);
-		if (o instanceof Boolean o2) {
-			return o2;
-		} else {
-			config.set(k, defaultValue);
-			if (comment != null) {
-				config.setComment(k, NightConfigLoader.createComment(comment));
-			}
-			owner.modified = true;
-			initialized = true;
-			return defaultValue;
-		}
-	}
+    @Override
+    public boolean getBoolean(String name, boolean defaultValue, String comment) {
+        List<String> k = Collections.singletonList(name);
+        Object o = this.config.get(k);
+        if (o instanceof Boolean) {
+            Boolean o2 = (Boolean)o;
+            return o2;
+        }
+        this.config.set(k, (Object)defaultValue);
+        if (comment != null) {
+            this.config.setComment(k, NightConfigLoader.createComment(comment));
+        }
+        this.owner.modified = true;
+        this.initialized = true;
+        return defaultValue;
+    }
 
-	@Override
-	public boolean getBoolean(String name, Supplier<Boolean> defaultValue, String comment) {
-		List<String> k = Collections.singletonList(name);
-		Object o = config.get(k);
-		if (o instanceof Boolean o2) {
-			return o2;
-		} else {
-			Boolean d = defaultValue.get();
-			config.set(k, d);
-			if (comment != null) {
-				config.setComment(k, NightConfigLoader.createComment(comment));
-			}
-			owner.modified = true;
-			initialized = true;
-			return d;
-		}
-	}
+    @Override
+    public boolean getBoolean(String name, Supplier<Boolean> defaultValue, String comment) {
+        List<String> k = Collections.singletonList(name);
+        Object o = this.config.get(k);
+        if (o instanceof Boolean) {
+            Boolean o2 = (Boolean)o;
+            return o2;
+        }
+        Boolean d = defaultValue.get();
+        this.config.set(k, (Object)d);
+        if (comment != null) {
+            this.config.setComment(k, NightConfigLoader.createComment(comment));
+        }
+        this.owner.modified = true;
+        this.initialized = true;
+        return d;
+    }
 
-	@Override
-	public boolean isInteger(String name) {
-		List<String> k = Collections.singletonList(name);
-		Object o = config.get(k);
-		return (o instanceof Number);
-	}
+    @Override
+    public boolean isInteger(String name) {
+        List<String> k = Collections.singletonList(name);
+        Object o = this.config.get(k);
+        return o instanceof Number;
+    }
 
-	@Override
-	public int getInteger(String name, int defaultValue, String comment) {
-		List<String> k = Collections.singletonList(name);
-		Object o = config.get(k);
-		if (o instanceof Number o2) {
-			return o2.intValue();
-		} else {
-			config.set(k, defaultValue);
-			if (comment != null) {
-				config.setComment(k, NightConfigLoader.createComment(comment));
-			}
-			owner.modified = true;
-			initialized = true;
-			return defaultValue;
-		}
-	}
+    @Override
+    public int getInteger(String name, int defaultValue, String comment) {
+        List<String> k = Collections.singletonList(name);
+        Object o = this.config.get(k);
+        if (o instanceof Number) {
+            Number o2 = (Number)o;
+            return o2.intValue();
+        }
+        this.config.set(k, (Object)defaultValue);
+        if (comment != null) {
+            this.config.setComment(k, NightConfigLoader.createComment(comment));
+        }
+        this.owner.modified = true;
+        this.initialized = true;
+        return defaultValue;
+    }
 
-	@Override
-	public int getInteger(String name, Supplier<Integer> defaultValue, String comment) {
-		List<String> k = Collections.singletonList(name);
-		Object o = config.get(k);
-		if (o instanceof Number o2) {
-			return o2.intValue();
-		} else {
-			Integer d = defaultValue.get();
-			config.set(k, d);
-			if (comment != null) {
-				config.setComment(k, NightConfigLoader.createComment(comment));
-			}
-			owner.modified = true;
-			initialized = true;
-			return d;
-		}
-	}
+    @Override
+    public int getInteger(String name, Supplier<Integer> defaultValue, String comment) {
+        List<String> k = Collections.singletonList(name);
+        Object o = this.config.get(k);
+        if (o instanceof Number) {
+            Number o2 = (Number)o;
+            return o2.intValue();
+        }
+        Integer d = defaultValue.get();
+        this.config.set(k, (Object)d);
+        if (comment != null) {
+            this.config.setComment(k, NightConfigLoader.createComment(comment));
+        }
+        this.owner.modified = true;
+        this.initialized = true;
+        return d;
+    }
 
-	@Override
-	public boolean isString(String name) {
-		List<String> k = Collections.singletonList(name);
-		Object o = config.get(k);
-		return (o instanceof String);
-	}
+    @Override
+    public boolean isString(String name) {
+        List<String> k = Collections.singletonList(name);
+        Object o = this.config.get(k);
+        return o instanceof String;
+    }
 
-	@Override
-	public String getIfString(String name) {
-		List<String> k = Collections.singletonList(name);
-		Object o = config.get(k);
-		return (o instanceof String str) ? str : null;
-	}
+    @Override
+    public String getIfString(String name) {
+        List<String> k = Collections.singletonList(name);
+        Object o = this.config.get(k);
+        return o instanceof String ? (String)o : null;
+    }
 
-	@Override
-	public String getString(String name, String defaultValue, String comment) {
-		List<String> k = Collections.singletonList(name);
-		Object o = config.get(k);
-		if (o instanceof String str) {
-			return str;
-		} else {
-			config.set(k, defaultValue);
-			if (comment != null) {
-				config.setComment(k, NightConfigLoader.createComment(comment));
-			}
-			owner.modified = true;
-			initialized = true;
-			return defaultValue;
-		}
-	}
+    @Override
+    public String getString(String name, String defaultValue, String comment) {
+        List<String> k = Collections.singletonList(name);
+        Object o = this.config.get(k);
+        if (o instanceof String) {
+            String str = (String)o;
+            return str;
+        }
+        this.config.set(k, (Object)defaultValue);
+        if (comment != null) {
+            this.config.setComment(k, NightConfigLoader.createComment(comment));
+        }
+        this.owner.modified = true;
+        this.initialized = true;
+        return defaultValue;
+    }
 
-	@Override
-	public String getString(String name, Supplier<String> defaultValue, String comment) {
-		List<String> k = Collections.singletonList(name);
-		Object o = config.get(k);
-		if (o instanceof String str) {
-			return str;
-		} else {
-			String d = defaultValue.get();
-			config.set(k, d);
-			if (comment != null) {
-				config.setComment(k, NightConfigLoader.createComment(comment));
-			}
-			owner.modified = true;
-			initialized = true;
-			return d;
-		}
-	}
-
+    @Override
+    public String getString(String name, Supplier<String> defaultValue, String comment) {
+        List<String> k = Collections.singletonList(name);
+        Object o = this.config.get(k);
+        if (o instanceof String) {
+            String str = (String)o;
+            return str;
+        }
+        String d = defaultValue.get();
+        this.config.set(k, (Object)d);
+        if (comment != null) {
+            this.config.setComment(k, NightConfigLoader.createComment(comment));
+        }
+        this.owner.modified = true;
+        this.initialized = true;
+        return d;
+    }
 }
+

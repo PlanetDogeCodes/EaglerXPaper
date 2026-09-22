@@ -42,7 +42,7 @@ public class CPacketSvRPCResultSuccess implements EaglerSupervisorPacket, IRefCo
 		requestUUID = new UUID(buffer.readLong(), buffer.readLong());
 		int len = EaglerSupervisorPacket.readVarInt(buffer);
 		if (len > 0) {
-			dataBuffer = buffer.readRetainedSlice(len);
+			dataBuffer = buffer.readSlice(len).retain();
 		}
 	}
 

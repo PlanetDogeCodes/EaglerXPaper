@@ -1,113 +1,112 @@
 /*
- * Copyright (c) 2025 lax1dude. All Rights Reserved.
+ * Decompiled with CFR 0.152.
  * 
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
- * IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT,
- * INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
- * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
- * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
- * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
- * 
+ * Could not load the following classes:
+ *  javax.annotation.Nonnull
+ *  javax.annotation.Nullable
  */
-
 package net.lax1dude.eaglercraft.backend.server.api.event;
 
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
+import net.lax1dude.eaglercraft.backend.server.api.event.IBaseHandshakeEvent;
 
 public interface IEaglercraftAuthCheckRequiredEvent<PlayerObject, ComponentObject>
-		extends IBaseHandshakeEvent<PlayerObject> {
+extends IBaseHandshakeEvent<PlayerObject> {
+    public boolean isClientSolicitingPassword();
 
-	public static enum EnumAuthResponse {
-		SKIP, REQUIRE, DENY
-	}
+    @Nonnull
+    public byte[] getAuthUsername();
 
-	public static enum EnumAuthType {
-		PLAINTEXT((byte) 255),
-		EAGLER_SHA256((byte) 1),
-		AUTHME_SHA256((byte) 2);
+    public boolean isNicknameSelectionEnabled();
 
-		private byte id;
+    public void setNicknameSelectionEnabled(boolean var1);
 
-		private EnumAuthType(byte id) {
-			this.id = id;
-		}
+    @Nullable
+    public byte[] getSaltingData();
 
-		public byte getId() {
-			return id;
-		}
+    public void setSaltingData(@Nullable byte[] var1);
 
-		public static EnumAuthType getById(byte id) {
-			return switch (id) {
-			case (byte) 255 -> PLAINTEXT;
-			case (byte) 1 -> EAGLER_SHA256;
-			case (byte) 2 -> AUTHME_SHA256;
-			default -> null;
-			};
-		}
+    @Nullable
+    default public EnumAuthType getUseAuthType() {
+        return EnumAuthType.getById(this.getUseAuthTypeRaw());
+    }
 
-	}
+    default public void setUseAuthType(@Nullable EnumAuthType authType) {
+        this.setUseAuthTypeRaw(authType != null ? authType.id : (byte)0);
+    }
 
-	boolean isClientSolicitingPassword();
+    public byte getUseAuthTypeRaw();
 
-	@Nonnull
-	byte[] getAuthUsername();
+    public void setUseAuthTypeRaw(byte var1);
 
-	boolean isNicknameSelectionEnabled();
+    @Nullable
+    public EnumAuthResponse getAuthRequired();
 
-	void setNicknameSelectionEnabled(boolean enable);
+    public void setAuthRequired(@Nullable EnumAuthResponse var1);
 
-	@Nullable
-	byte[] getSaltingData();
+    @Nonnull
+    public String getAuthMessage();
 
-	void setSaltingData(@Nullable byte[] saltingData);
+    public void setAuthMessage(@Nonnull String var1);
 
-	@Nullable
-	default EnumAuthType getUseAuthType() {
-		return EnumAuthType.getById(getUseAuthTypeRaw());
-	}
+    public boolean getEnableCookieAuth();
 
-	default void setUseAuthType(@Nullable EnumAuthType authType) {
-		setUseAuthTypeRaw(authType != null ? authType.id : (byte) 0);
-	}
+    public void setEnableCookieAuth(boolean var1);
 
-	byte getUseAuthTypeRaw();
+    @Nullable
+    public ComponentObject getKickMessage();
 
-	void setUseAuthTypeRaw(byte authType);
+    public void setKickMessage(@Nullable ComponentObject var1);
 
-	@Nullable
-	EnumAuthResponse getAuthRequired();
+    public void setKickMessage(@Nullable String var1);
 
-	void setAuthRequired(@Nullable EnumAuthResponse required);
+    default public void kickUser(@Nullable ComponentObject kickMessage) {
+        this.setKickMessage(kickMessage);
+        this.setAuthRequired(EnumAuthResponse.DENY);
+    }
 
-	@Nonnull
-	String getAuthMessage();
+    default public void kickUser(@Nullable String kickMessage) {
+        this.setKickMessage(kickMessage);
+        this.setAuthRequired(EnumAuthResponse.DENY);
+    }
 
-	void setAuthMessage(@Nonnull String authMessage);
+    public static enum EnumAuthType {
+        PLAINTEXT((byte)-1),
+        EAGLER_SHA256((byte)1),
+        AUTHME_SHA256((byte)2);
 
-	boolean getEnableCookieAuth();
+        private byte id;
 
-	void setEnableCookieAuth(boolean enable);
+        private EnumAuthType(byte id) {
+            this.id = id;
+        }
 
-	@Nullable
-	ComponentObject getKickMessage();
+        public byte getId() {
+            return this.id;
+        }
 
-	void setKickMessage(@Nullable ComponentObject kickMessage);
+        public static EnumAuthType getById(byte id) {
+            switch (id) {
+                case -1: {
+                    return PLAINTEXT;
+                }
+                case 1: {
+                    return EAGLER_SHA256;
+                }
+                case 2: {
+                    return AUTHME_SHA256;
+                }
+            }
+            return null;
+        }
+    }
 
-	void setKickMessage(@Nullable String kickMessage);
+    public static enum EnumAuthResponse {
+        SKIP,
+        REQUIRE,
+        DENY;
 
-	default void kickUser(@Nullable ComponentObject kickMessage) {
-		setKickMessage(kickMessage);
-		setAuthRequired(EnumAuthResponse.DENY);
-	}
-
-	default void kickUser(@Nullable String kickMessage) {
-		setKickMessage(kickMessage);
-		setAuthRequired(EnumAuthResponse.DENY);
-	}
-
+    }
 }
+

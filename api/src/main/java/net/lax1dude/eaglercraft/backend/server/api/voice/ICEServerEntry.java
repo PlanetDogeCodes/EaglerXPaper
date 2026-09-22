@@ -1,111 +1,104 @@
 /*
- * Copyright (c) 2025 lax1dude. All Rights Reserved.
+ * Decompiled with CFR 0.152.
  * 
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
- * IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT,
- * INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
- * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
- * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
- * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
- * 
+ * Could not load the following classes:
+ *  javax.annotation.Nonnull
+ *  javax.annotation.Nullable
  */
-
 package net.lax1dude.eaglercraft.backend.server.api.voice;
 
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
 
 public final class ICEServerEntry {
+    private final String uri;
+    private final boolean auth;
+    private final String username;
+    private final String password;
 
-	@Nonnull
-	public static ICEServerEntry create(@Nonnull String uri) {
-		return new ICEServerEntry(validate(uri, "uri"), false, null, null);
-	}
+    @Nonnull
+    public static ICEServerEntry create(@Nonnull String uri) {
+        return new ICEServerEntry(ICEServerEntry.validate(uri, "uri"), false, null, null);
+    }
 
-	@Nonnull
-	public static ICEServerEntry create(@Nonnull String uri, @Nonnull String username, @Nonnull String password) {
-		return new ICEServerEntry(validate(uri, "uri"), true, validate(username, "username"),
-				validate(password, "password"));
-	}
+    @Nonnull
+    public static ICEServerEntry create(@Nonnull String uri, @Nonnull String username, @Nonnull String password) {
+        return new ICEServerEntry(ICEServerEntry.validate(uri, "uri"), true, ICEServerEntry.validate(username, "username"), ICEServerEntry.validate(password, "password"));
+    }
 
-	private static String validate(String str, String name) {
-		if (str == null) {
-			throw new NullPointerException(name + " cannot be null");
-		}
-		if (str.indexOf(';') != -1) {
-			throw new IllegalArgumentException("Illegal semicolon in " + name);
-		}
-		return str;
-	}
+    private static String validate(String str, String name) {
+        if (str == null) {
+            throw new NullPointerException(name + " cannot be null");
+        }
+        if (str.indexOf(59) != -1) {
+            throw new IllegalArgumentException("Illegal semicolon in " + name);
+        }
+        return str;
+    }
 
-	private final String uri;
-	private final boolean auth;
-	private final String username;
-	private final String password;
+    private ICEServerEntry(String uri, boolean auth, String username, String password) {
+        this.uri = uri;
+        this.auth = auth;
+        this.username = username;
+        this.password = password;
+    }
 
-	private ICEServerEntry(String uri, boolean auth, String username, String password) {
-		this.uri = uri;
-		this.auth = auth;
-		this.username = username;
-		this.password = password;
-	}
+    @Nonnull
+    public String getURI() {
+        return this.uri;
+    }
 
-	@Nonnull
-	public String getURI() {
-		return uri;
-	}
+    public boolean isAuthenticated() {
+        return this.auth;
+    }
 
-	public boolean isAuthenticated() {
-		return auth;
-	}
+    @Nullable
+    public String getUsername() {
+        return this.username;
+    }
 
-	@Nullable
-	public String getUsername() {
-		return username;
-	}
+    @Nullable
+    public String getPassword() {
+        return this.password;
+    }
 
-	@Nullable
-	public String getPassword() {
-		return password;
-	}
+    @Nonnull
+    public String toString() {
+        return this.auth ? this.uri + ';' + this.username + ';' + this.password : this.uri;
+    }
 
-	@Nonnull
-	@Override
-	public String toString() {
-		return auth ? (uri + ';' + username + ';' + password) : uri;
-	}
+    public int hashCode() {
+        int result = 1;
+        result = 31 * result + (this.auth ? 1231 : 1237);
+        result = 31 * result + this.uri.hashCode();
+        result = 31 * result + (this.auth ? this.password.hashCode() : 0);
+        result = 31 * result + (this.auth ? this.username.hashCode() : 0);
+        return result;
+    }
 
-	@Override
-	public int hashCode() {
-		int result = 1;
-		result = 31 * result + (auth ? 1231 : 1237);
-		result = 31 * result + uri.hashCode();
-		result = 31 * result + (auth ? password.hashCode() : 0);
-		result = 31 * result + (auth ? username.hashCode() : 0);
-		return result;
-	}
-
-	@Override
-	public boolean equals(Object obj) {
-		if (this == obj)
-			return true;
-		if (!(obj instanceof ICEServerEntry other))
-			return false;
-		if (auth != other.auth)
-			return false;
-		if (!uri.equals(other.uri))
-			return false;
-		if (auth) {
-			if (!password.equals(other.password))
-				return false;
-			if (!username.equals(other.username))
-				return false;
-		}
-		return true;
-	}
-
+    public boolean equals(Object obj) {
+        if (this == obj) {
+            return true;
+        }
+        if (!(obj instanceof ICEServerEntry)) {
+            return false;
+        }
+        ICEServerEntry other = (ICEServerEntry)obj;
+        if (this.auth != other.auth) {
+            return false;
+        }
+        if (!this.uri.equals(other.uri)) {
+            return false;
+        }
+        if (this.auth) {
+            if (!this.password.equals(other.password)) {
+                return false;
+            }
+            if (!this.username.equals(other.username)) {
+                return false;
+            }
+        }
+        return true;
+    }
 }
+

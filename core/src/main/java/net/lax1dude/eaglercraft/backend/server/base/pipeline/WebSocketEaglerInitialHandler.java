@@ -45,6 +45,7 @@ import net.lax1dude.eaglercraft.backend.server.base.handshake.HandshakerV3;
 import net.lax1dude.eaglercraft.backend.server.base.handshake.HandshakerV4;
 import net.lax1dude.eaglercraft.backend.server.base.handshake.HandshakerV5;
 import net.lax1dude.eaglercraft.backend.server.base.handshake.VanillaInitializer;
+import net.lax1dude.eaglercraft.backend.server.base.pipeline.EaglerPlayStateSyncHandler;
 import net.lax1dude.eaglercraft.backend.server.base.message.RewindMessageInjector;
 import net.lax1dude.eaglercraft.backend.server.util.Util;
 
@@ -647,6 +648,13 @@ public class WebSocketEaglerInitialHandler extends MessageToMessageCodec<ByteBuf
                         pipeline.fireUserEventTriggered(EnumPipelineEvent.EAGLER_OUTBOUND_THROW_REMOVED);
                         vanillaInitializer = new VanillaInitializer(server, pipelineData, this);
                         vanillaInitializer.init(ctx);
+                        // Notify the platform NOW (before the vanilla login listener processes the
+                        // synthesized LoginStart) that the backend login has begun with the final
+                        // client UUID. On 1.20.2+ Bukkit fires PlayerLoginEvent during the vanilla
+                        // login listener tick, which can happen before the Eagler handshake finishes,
+                        // so the login-context-by-UUID registration must not wait for play state.
+                        pipeline.fireUserEventTriggered(EnumPipelineEvent.EAGLER_BACKEND_LOGIN_START);
+                        ctx.fireUserEventTriggered(EnumPipelineEvent.EAGLER_BACKEND_LOGIN_START);
                 }
         }
 
@@ -665,9 +673,26 @@ public class WebSocketEaglerInitialHandler extends MessageToMessageCodec<ByteBuf
                 // could exceed the 30s login timeout on slow networks.
                 // The duplicate block that used to fire it here has been removed.
                 vanillaInitializer.flushBufferedPackets(ctx);
-                pipeline.remove(PipelineTransformer.HANDLER_HANDSHAKE);
+                // Replace the handshake codec with a play-state sync buffer instead of removing
+                // it outright: on MC 1.8-1.20.1 the vanilla decoder is still in LOGIN state for a
+                // few ticks when the Eagler client already considers the login complete, and its
+                // early play packets would otherwise be rejected ("Bad packet id N").
+                // 1.20.2+ (protocol 764+) advances to CONFIGURATION eagerly via the early
+                // ServerboundLoginAcknowledged and uses a different inbound setup, so the plain
+                // removal is kept there.
+                if (pipelineData.minecraftProtocol > 0 && pipelineData.minecraftProtocol < 764) {
+                        pipeline.replace(PipelineTransformer.HANDLER_HANDSHAKE, EaglerPlayStateSyncHandler.HANDLER_NAME,
+                                        (ChannelHandler) new EaglerPlayStateSyncHandler(pipelineData));
+                } else {
+                        pipeline.remove(PipelineTransformer.HANDLER_HANDSHAKE);
+                }
                 pipelineData.signalPlayState();
+                // Fire both ways: from the head (reaches handlers before this position, e.g. the
+                // compression guard) and from this context (reaches handlers after it, e.g. the
+                // UUID registrar on the far side of ViaVersion/vanilla handlers that may not
+                // forward user events during the login->play pipeline churn).
                 pipeline.fireUserEventTriggered(EnumPipelineEvent.EAGLER_ENTERED_PLAY_STATE);
+                ctx.fireUserEventTriggered(EnumPipelineEvent.EAGLER_ENTERED_PLAY_STATE);
         }
 
 }

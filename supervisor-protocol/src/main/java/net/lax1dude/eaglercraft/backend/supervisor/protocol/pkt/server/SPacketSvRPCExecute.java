@@ -54,7 +54,7 @@ public class SPacketSvRPCExecute implements EaglerSupervisorPacket, IRefCountedH
 		requestUUID = new UUID(buffer.readLong(), buffer.readLong());
 		sourceNodeId = EaglerSupervisorPacket.readVarInt(buffer);
 		nameLength = buffer.readUnsignedByte();
-		payload = buffer.readRetainedSlice(buffer.readUnsignedMedium());
+		payload = buffer.readSlice(buffer.readUnsignedMedium()).retain();
 	}
 
 	@Override
@@ -63,7 +63,7 @@ public class SPacketSvRPCExecute implements EaglerSupervisorPacket, IRefCountedH
 		buffer.writeLong(requestUUID.getLeastSignificantBits());
 		EaglerSupervisorPacket.writeVarInt(buffer, sourceNodeId);
 		if (injected != null) {
-			buffer.writeIntLE(0);
+			buffer.writeInt(Integer.reverseBytes(0));
 			int pos = buffer.writerIndex();
 			buffer.setByte(pos - 4, injected.writePayload(buffer));
 			buffer.setMedium(pos - 3, buffer.writerIndex() - pos);

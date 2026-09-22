@@ -1,21 +1,14 @@
 /*
- * Copyright (c) 2025 lax1dude. All Rights Reserved.
+ * Decompiled with CFR 0.152.
  * 
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
- * IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT,
- * INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
- * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
- * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
- * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
- * 
+ * Could not load the following classes:
+ *  com.google.common.collect.ImmutableList
+ *  io.netty.channel.Channel
  */
-
 package net.lax1dude.eaglercraft.backend.server.base;
 
+import com.google.common.collect.ImmutableList;
+import io.netty.channel.Channel;
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
@@ -26,254 +19,243 @@ import java.net.InetSocketAddress;
 import java.net.SocketAddress;
 import java.util.Collections;
 import java.util.List;
-
 import javax.net.ssl.SSLException;
-
-import com.google.common.collect.ImmutableList;
-
-import io.netty.channel.Channel;
 import net.lax1dude.eaglercraft.backend.server.adapter.IEaglerXServerListener;
 import net.lax1dude.eaglercraft.backend.server.api.IEaglerListenerInfo;
 import net.lax1dude.eaglercraft.backend.server.api.ITLSManager;
 import net.lax1dude.eaglercraft.backend.server.api.attribute.IAttributeKey;
-import net.lax1dude.eaglercraft.backend.server.base.EaglerAttributeManager.EaglerAttributeHolder;
+import net.lax1dude.eaglercraft.backend.server.base.CompoundRateLimiterMap;
+import net.lax1dude.eaglercraft.backend.server.base.EaglerAttributeManager;
+import net.lax1dude.eaglercraft.backend.server.base.EaglerXServer;
+import net.lax1dude.eaglercraft.backend.server.base.ISSLContextProvider;
+import net.lax1dude.eaglercraft.backend.server.base.SSLContextHolderPlugin;
 import net.lax1dude.eaglercraft.backend.server.base.config.ConfigDataListener;
 import net.lax1dude.eaglercraft.backend.server.base.pipeline.WebSocketEaglerInitialHandler;
 import net.lax1dude.eaglercraft.backend.server.util.RateLimiterExclusions;
 
-public class EaglerListener implements IEaglerListenerInfo, IEaglerXServerListener {
+public class EaglerListener
+implements IEaglerListenerInfo,
+IEaglerXServerListener {
+    private final EaglerXServer<?> server;
+    private final SocketAddress address;
+    private final ConfigDataListener listenerConf;
+    private final EaglerAttributeManager.EaglerAttributeHolder attrHolder;
+    private final boolean sslPluginManaged;
+    private final ISSLContextProvider sslContext;
+    private final byte[] legacyRedirectAddressBuf;
+    private volatile byte[] cachedServerIcon;
+    private volatile List<String> cachedServerMOTD;
+    private CompoundRateLimiterMap rateLimiter;
 
-        private final EaglerXServer<?> server;
-        private final SocketAddress address;
-        private final ConfigDataListener listenerConf;
-        private final EaglerAttributeHolder attrHolder;
-        private final boolean sslPluginManaged;
-        private final ISSLContextProvider sslContext;
-        private final byte[] legacyRedirectAddressBuf;
-        private volatile byte[] cachedServerIcon;
-        private volatile List<String> cachedServerMOTD;
-        private CompoundRateLimiterMap rateLimiter;
+    EaglerListener(EaglerXServer<?> server, ConfigDataListener listenerConf) throws SSLException, IOException {
+        this(server, listenerConf.getInjectAddress(), listenerConf);
+    }
 
-        EaglerListener(EaglerXServer<?> server, ConfigDataListener listenerConf) throws SSLException, IOException {
-                this(server, listenerConf.getInjectAddress(), listenerConf);
+    EaglerListener(EaglerXServer<?> server, SocketAddress address, ConfigDataListener listenerConf) throws SSLException, IOException {
+        this.server = server;
+        this.address = address;
+        this.listenerConf = listenerConf;
+        this.attrHolder = server.getEaglerAttribManager().createEaglerHolder();
+        if (listenerConf.isEnableTLS()) {
+            this.sslPluginManaged = listenerConf.isTLSManagedByExternalPlugin();
+            this.sslContext = this.sslPluginManaged ? new SSLContextHolderPlugin(this) : server.getCertificateManager().createHolder(new File(listenerConf.getTLSPublicChainFile()), new File(listenerConf.getTLSPrivateKeyFile()), listenerConf.getTLSPrivateKeyPassword(), listenerConf.isTLSAutoRefreshCert());
+        } else {
+            this.sslPluginManaged = false;
+            this.sslContext = null;
         }
+        this.legacyRedirectAddressBuf = (byte[])(listenerConf.getRedirectLegacyClientsTo() != null ? WebSocketEaglerInitialHandler.prepareRedirectAddr(listenerConf.getRedirectLegacyClientsTo()) : null);
+        this.cachedServerMOTD = listenerConf.getServerMOTD();
+        String iconName = listenerConf.getServerIcon();
+        if (iconName != null && !iconName.isEmpty()) {
+            try {
+                this.cachedServerIcon = server.getServerIconLoader().loadServerIcon(new File(iconName));
+            }
+            catch (FileNotFoundException ex) {
+                server.logger().error("Could not load server icon: " + iconName + " (not found)");
+                this.cachedServerIcon = null;
+            }
+            catch (IOException ex) {
+                server.logger().error("Could not load server icon: " + iconName + " (" + ex.getMessage() + ")");
+                this.cachedServerIcon = null;
+            }
+            catch (Throwable t) {
+                server.logger().error("Could not load server icon: " + iconName + " (" + t.getClass().getSimpleName() + ": " + t.getMessage() + ")");
+                this.cachedServerIcon = null;
+            }
+        } else {
+            this.cachedServerIcon = null;
+        }
+        this.rateLimiter = CompoundRateLimiterMap.create(listenerConf.getLimitIP(), listenerConf.getLimitLogin(), listenerConf.getLimitMOTD(), listenerConf.getLimitQuery(), listenerConf.getLimitHTTP(), RateLimiterExclusions.create(listenerConf.getLimitExclusions(), server.logger()));
+    }
 
-        EaglerListener(EaglerXServer<?> server, SocketAddress address, ConfigDataListener listenerConf)
-                        throws SSLException, IOException {
-                this.server = server;
-                this.address = address;
-                this.listenerConf = listenerConf;
-                this.attrHolder = server.getEaglerAttribManager().createEaglerHolder();
-                if (listenerConf.isEnableTLS()) {
-                        this.sslPluginManaged = listenerConf.isTLSManagedByExternalPlugin();
-                        if (this.sslPluginManaged) {
-                                this.sslContext = new SSLContextHolderPlugin(this);
-                        } else {
-                                this.sslContext = server.getCertificateManager().createHolder(
-                                                new File(listenerConf.getTLSPublicChainFile()), new File(listenerConf.getTLSPrivateKeyFile()),
-                                                listenerConf.getTLSPrivateKeyPassword(), listenerConf.isTLSAutoRefreshCert());
-                        }
-                } else {
-                        this.sslPluginManaged = false;
-                        this.sslContext = null;
+    public ISSLContextProvider getSSLContext() {
+        return this.sslContext;
+    }
+
+    @Override
+    public <T> T get(IAttributeKey<T> key) {
+        return this.attrHolder.get(key);
+    }
+
+    @Override
+    public <T> void set(IAttributeKey<T> key, T value) {
+        this.attrHolder.set(key, value);
+    }
+
+    @Override
+    public String getName() {
+        return this.listenerConf.getListenerName();
+    }
+
+    @Override
+    public SocketAddress getAddress() {
+        return this.address;
+    }
+
+    @Override
+    public boolean isDualStack() {
+        return this.listenerConf.isDualStack();
+    }
+
+    @Override
+    public boolean isTLSEnabled() {
+        return this.listenerConf.isEnableTLS();
+    }
+
+    @Override
+    public boolean isTLSRequired() {
+        return this.listenerConf.isRequireTLS();
+    }
+
+    @Override
+    public boolean isTLSManagedByPlugin() {
+        return this.sslPluginManaged;
+    }
+
+    @Override
+    public ITLSManager getTLSManager() throws IllegalStateException {
+        if (!this.listenerConf.isEnableTLS()) {
+            throw new IllegalStateException("TLS is not enabled on this listener!");
+        }
+        if (!this.sslPluginManaged) {
+            throw new IllegalStateException("TLS manager is disabled for this listener! (Set 'tls_managed_by_external_plugin' to true)");
+        }
+        return (ITLSManager)((Object)this.sslContext);
+    }
+
+    @Override
+    public byte[] getServerIcon() {
+        return this.cachedServerIcon;
+    }
+
+    @Override
+    public void setServerIcon(byte[] pixels) {
+        if (pixels != null && pixels.length != 16384) {
+            throw new IllegalArgumentException("Server icon is the wrong length, should be 16384");
+        }
+        this.cachedServerIcon = pixels;
+    }
+
+    @Override
+    public List<String> getServerMOTD() {
+        return this.cachedServerMOTD;
+    }
+
+    @Override
+    public void setServerMOTD(List<String> motd) {
+        if (motd == null || motd.size() == 0) {
+            this.cachedServerMOTD = Collections.emptyList();
+        } else if (motd.size() == 1) {
+            this.cachedServerMOTD = ImmutableList.of(motd.get(0));
+        } else {
+            this.cachedServerMOTD = ImmutableList.of(motd.get(0), motd.get(1));
+        }
+    }
+
+    @Override
+    public boolean isForwardIP() {
+        return this.listenerConf.isForwardIP();
+    }
+
+    @Override
+    public boolean matchListenerAddress(SocketAddress addr) {
+        if (addr.equals(this.listenerConf.getInjectAddress())) {
+            return true;
+        }
+        if (addr instanceof InetSocketAddress) {
+            SocketAddress injectAddress = this.listenerConf.getInjectAddress();
+            if (injectAddress instanceof InetSocketAddress) {
+                InetSocketAddress addr2 = (InetSocketAddress)addr;
+                InetSocketAddress addr3 = (InetSocketAddress)injectAddress;
+                if (this.isAllZeros(addr2) && this.isAllZeros(addr3)) {
+                    return addr2.getPort() == addr3.getPort();
                 }
-                if (listenerConf.getRedirectLegacyClientsTo() != null) {
-                        this.legacyRedirectAddressBuf = WebSocketEaglerInitialHandler
-                                        .prepareRedirectAddr(listenerConf.getRedirectLegacyClientsTo());
-                } else {
-                        this.legacyRedirectAddressBuf = null;
-                }
-                cachedServerMOTD = listenerConf.getServerMOTD();
-                String iconName = listenerConf.getServerIcon();
-                if (iconName != null && !iconName.isEmpty()) {
-                        try {
-                                cachedServerIcon = server.getServerIconLoader().loadServerIcon(new File(iconName));
-                        } catch (FileNotFoundException ex) {
-                                server.logger().error("Could not load server icon: " + iconName + " (not found)");
-                                cachedServerIcon = null;
-                        } catch (IOException ex) {
-                                // No stack trace for common file errors, just the message
-                                server.logger().error("Could not load server icon: " + iconName + " (" + ex.getMessage() + ")");
-                                cachedServerIcon = null;
-                        } catch (Throwable t) {
-                                server.logger().error("Could not load server icon: " + iconName + " (" + t.getClass().getSimpleName() + ": " + t.getMessage() + ")");
-                                cachedServerIcon = null;
-                        }
-                } else {
-                        cachedServerIcon = null;
-                }
-                rateLimiter = CompoundRateLimiterMap.create(listenerConf.getLimitIP(), listenerConf.getLimitLogin(),
-                                listenerConf.getLimitMOTD(), listenerConf.getLimitQuery(), listenerConf.getLimitHTTP(),
-                                RateLimiterExclusions.create(listenerConf.getLimitExclusions(), server.logger()));
+            }
+            return false;
         }
+        return false;
+    }
 
-        public ISSLContextProvider getSSLContext() {
-                return sslContext;
+    private boolean isAllZeros(InetSocketAddress addr) {
+        InetAddress addr2 = addr.getAddress();
+        if (addr2 instanceof Inet4Address) {
+            byte[] octets = ((Inet4Address)addr2).getAddress();
+            return (octets[0] | octets[1] | octets[2] | octets[3]) == 0;
         }
-
-        @Override
-        public <T> T get(IAttributeKey<T> key) {
-                return attrHolder.get(key);
+        if (addr2 instanceof Inet6Address) {
+            byte[] octets = ((Inet6Address)addr2).getAddress();
+            return (octets[0] | octets[1] | octets[2] | octets[3] | octets[4] | octets[5] | octets[6] | octets[7] | octets[8] | octets[9] | octets[10] | octets[11] | octets[12] | octets[13] | octets[14] | octets[15]) == 0;
         }
+        return false;
+    }
 
-        @Override
-        public <T> void set(IAttributeKey<T> key, T value) {
-                attrHolder.set(key, value);
-        }
+    @Override
+    public boolean isCloneListenerEnabled() {
+        return this.listenerConf.isCloneListenerEnabled();
+    }
 
-        @Override
-        public String getName() {
-                return listenerConf.getListenerName();
-        }
+    @Override
+    public SocketAddress getCloneListenerAddress() {
+        return this.listenerConf.getInjectAddress();
+    }
 
-        @Override
-        public SocketAddress getAddress() {
-                return address;
-        }
+    @Override
+    public void reportVelocityInjected(Channel channel) {
+        this.server.logger().info("Listener \"" + this.listenerConf.getListenerName() + "\" injected into channel " + channel + " successfully (Velocity method)");
+    }
 
-        @Override
-        public boolean isDualStack() {
-                return listenerConf.isDualStack();
-        }
+    @Override
+    public void reportPaperMCInjected() {
+        this.server.logger().info("Default listener injected into server channel successfully (PaperMC method)");
+    }
 
-        @Override
-        public boolean isTLSEnabled() {
-                return listenerConf.isEnableTLS();
-        }
+    @Override
+    public void reportNettyInjected(Channel channel) {
+        this.server.logger().info("Listener \"" + this.listenerConf.getListenerName() + "\" injected into channel " + channel + " successfully (Generic Netty method)");
+    }
 
-        @Override
-        public boolean isTLSRequired() {
-                return listenerConf.isRequireTLS();
-        }
+    public byte[] getLegacyRedirectAddressBuf() {
+        return this.legacyRedirectAddressBuf;
+    }
 
-        @Override
-        public boolean isTLSManagedByPlugin() {
-                return sslPluginManaged;
-        }
+    public boolean isAllowMOTD() {
+        return this.listenerConf.isAllowMOTD();
+    }
 
-        @Override
-        public ITLSManager getTLSManager() throws IllegalStateException {
-                if (!listenerConf.isEnableTLS()) {
-                        throw new IllegalStateException("TLS is not enabled on this listener!");
-                }
-                if (!sslPluginManaged) {
-                        throw new IllegalStateException(
-                                        "TLS manager is disabled for this listener! (Set 'tls_managed_by_external_plugin' to true)");
-                }
-                return (ITLSManager) sslContext;
-        }
+    public boolean isAllowQuery() {
+        return this.listenerConf.isAllowQuery();
+    }
 
-        @Override
-        public byte[] getServerIcon() {
-                return cachedServerIcon;
-        }
+    public boolean isShowMOTDPlayerList() {
+        return this.listenerConf.isShowMOTDPlayerList();
+    }
 
-        @Override
-        public void setServerIcon(byte[] pixels) {
-                if (pixels != null && pixels.length != 16384) {
-                        throw new IllegalArgumentException("Server icon is the wrong length, should be 16384");
-                }
-                cachedServerIcon = pixels;
-        }
+    public ConfigDataListener getConfigData() {
+        return this.listenerConf;
+    }
 
-        @Override
-        public List<String> getServerMOTD() {
-                return cachedServerMOTD;
-        }
-
-        @Override
-        public void setServerMOTD(List<String> motd) {
-                if (motd == null || motd.size() == 0) {
-                        cachedServerMOTD = Collections.emptyList();
-                } else if (motd.size() == 1) {
-                        cachedServerMOTD = ImmutableList.of(motd.get(0));
-                } else {
-                        cachedServerMOTD = ImmutableList.of(motd.get(0), motd.get(1));
-                }
-        }
-
-        @Override
-        public boolean isForwardIP() {
-                return listenerConf.isForwardIP();
-        }
-
-        @Override
-        public boolean matchListenerAddress(SocketAddress addr) {
-                if (addr.equals(listenerConf.getInjectAddress())) {
-                        return true;
-                } else if ((addr instanceof InetSocketAddress addr2)
-                                && (listenerConf.getInjectAddress() instanceof InetSocketAddress addr3) && isAllZeros(addr2)
-                                && isAllZeros(addr3)) {
-                        return addr2.getPort() == addr3.getPort();
-                } else {
-                        return false;
-                }
-        }
-
-        private boolean isAllZeros(InetSocketAddress addr) {
-                InetAddress addr2 = addr.getAddress();
-                if (addr2 instanceof Inet4Address addr3) {
-                        byte[] octets = addr3.getAddress();
-                        return (octets[0] | octets[1] | octets[2] | octets[3]) == 0;
-                } else if (addr2 instanceof Inet6Address addr3) {
-                        byte[] octets = addr3.getAddress();
-                        return (octets[0] | octets[1] | octets[2] | octets[3] | octets[4] | octets[5] | octets[6] | octets[7]
-                                        | octets[8] | octets[9] | octets[10] | octets[11] | octets[12] | octets[13] | octets[14]
-                                        | octets[15]) == 0;
-                } else {
-                        return false;
-                }
-        }
-
-        @Override
-        public boolean isCloneListenerEnabled() {
-                return listenerConf.isCloneListenerEnabled();
-        }
-
-        @Override
-        public SocketAddress getCloneListenerAddress() {
-                return listenerConf.getInjectAddress();
-        }
-
-        @Override
-        public void reportVelocityInjected(Channel channel) {
-                server.logger().info("Listener \"" + listenerConf.getListenerName() + "\" injected into channel " + channel
-                                + " successfully (Velocity method)");
-        }
-
-        @Override
-        public void reportPaperMCInjected() {
-                server.logger().info("Default listener injected into server channel successfully (PaperMC method)");
-        }
-
-        @Override
-        public void reportNettyInjected(Channel channel) {
-                server.logger().info("Listener \"" + listenerConf.getListenerName() + "\" injected into channel " + channel
-                                + " successfully (Generic Netty method)");
-        }
-
-        public byte[] getLegacyRedirectAddressBuf() {
-                return legacyRedirectAddressBuf;
-        }
-
-        public boolean isAllowMOTD() {
-                return listenerConf.isAllowMOTD();
-        }
-
-        public boolean isAllowQuery() {
-                return listenerConf.isAllowQuery();
-        }
-
-        public boolean isShowMOTDPlayerList() {
-                return listenerConf.isShowMOTDPlayerList();
-        }
-
-        public ConfigDataListener getConfigData() {
-                return listenerConf;
-        }
-
-        public CompoundRateLimiterMap getRateLimiter() {
-                return rateLimiter;
-        }
-
+    public CompoundRateLimiterMap getRateLimiter() {
+        return this.rateLimiter;
+    }
 }
+

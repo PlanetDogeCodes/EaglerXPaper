@@ -1,48 +1,35 @@
 /*
- * Copyright (c) 2024 lax1dude. All Rights Reserved.
- * 
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
- * IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT,
- * INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
- * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
- * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
- * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
- * 
+ * Decompiled with CFR 0.152.
  */
-
 package net.lax1dude.eaglercraft.v1_8.socket.protocol;
 
 import java.io.DataInput;
 import java.io.IOException;
 import java.io.InputStream;
 
-public interface GamePacketInputBuffer extends DataInput {
+public interface GamePacketInputBuffer
+extends DataInput {
+    public void skipAllBytes(int var1) throws IOException;
 
-	void skipAllBytes(int n) throws IOException;
+    public int readVarInt() throws IOException;
 
-	int readVarInt() throws IOException;
+    public long readVarLong() throws IOException;
 
-	long readVarLong() throws IOException;
+    public String readStringMC(int var1) throws IOException;
 
-	String readStringMC(int maxLen) throws IOException;
+    public String readStringEaglerASCII8() throws IOException;
 
-	String readStringEaglerASCII8() throws IOException;
+    public String readStringEaglerASCII16() throws IOException;
 
-	String readStringEaglerASCII16() throws IOException;
+    @Deprecated
+    public byte[] readByteArrayMC() throws IOException;
 
-	@Deprecated(forRemoval = true)
-	byte[] readByteArrayMC() throws IOException;
+    public byte[] readByteArrayMC(int var1) throws IOException;
 
-	byte[] readByteArrayMC(int maxLen) throws IOException;
+    public int available() throws IOException;
 
-	int available() throws IOException;
+    public InputStream stream();
 
-	InputStream stream();
-
-	byte[] toByteArray() throws IOException;
-
+    public byte[] toByteArray() throws IOException;
 }
+

@@ -30,6 +30,7 @@ import net.lax1dude.eaglercraft.backend.server.base.skins.type.CustomSkinPlayer;
 import net.lax1dude.eaglercraft.backend.server.base.skins.type.InternUtils;
 import net.lax1dude.eaglercraft.backend.server.base.skins.type.MissingCape;
 import net.lax1dude.eaglercraft.backend.server.base.skins.type.MissingSkin;
+import net.lax1dude.eaglercraft.backend.server.base.pipeline.BufferUtils;
 import net.lax1dude.eaglercraft.backend.server.base.supervisor.rpc.SupervisorRPCHandler;
 import net.lax1dude.eaglercraft.backend.supervisor.protocol.pkt.EaglerSupervisorHandler;
 import net.lax1dude.eaglercraft.backend.supervisor.protocol.pkt.client.*;
@@ -225,13 +226,13 @@ public class SupervisorClientV1Handler implements EaglerSupervisorHandler {
 	@Override
 	public void handleServer(SPacketSvRPCExecute pkt) {
 		rpcHandler.onRPCExecute(connection, pkt.requestUUID, pkt.sourceNodeId,
-				pkt.payload.readCharSequence(pkt.nameLength, StandardCharsets.US_ASCII).toString(), pkt.payload);
+				BufferUtils.readCharSequence(pkt.payload, pkt.nameLength, StandardCharsets.US_ASCII).toString(), pkt.payload);
 	}
 
 	@Override
 	public void handleServer(SPacketSvRPCExecuteVoid pkt) {
 		rpcHandler.onRPCExecuteVoid(pkt.sourceNodeId,
-				pkt.payload.readCharSequence(pkt.nameLength, StandardCharsets.US_ASCII).toString(), pkt.payload);
+				BufferUtils.readCharSequence(pkt.payload, pkt.nameLength, StandardCharsets.US_ASCII).toString(), pkt.payload);
 	}
 
 	@Override

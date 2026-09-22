@@ -1,21 +1,36 @@
 /*
- * Copyright (c) 2025 lax1dude. All Rights Reserved.
+ * Decompiled with CFR 0.152.
  * 
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
- * IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT,
- * INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
- * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
- * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
- * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
- * 
+ * Could not load the following classes:
+ *  com.google.common.collect.Multimap
+ *  com.mojang.authlib.GameProfile
+ *  com.mojang.authlib.properties.Property
+ *  io.netty.channel.Channel
+ *  net.md_5.bungee.api.chat.BaseComponent
+ *  org.bukkit.entity.Player
+ *  org.bukkit.event.EventHandler
+ *  org.bukkit.event.EventPriority
+ *  org.bukkit.event.Listener
+ *  org.bukkit.event.player.PlayerChangedWorldEvent
+ *  org.bukkit.event.player.PlayerJoinEvent
+ *  org.bukkit.event.player.PlayerLoginEvent
+ *  org.bukkit.event.player.PlayerQuitEvent
  */
-
 package net.lax1dude.eaglercraft.backend.server.bukkit;
 
+import com.google.common.collect.Multimap;
+import com.mojang.authlib.GameProfile;
+import com.mojang.authlib.properties.Property;
+import io.netty.channel.Channel;
+import net.lax1dude.eaglercraft.backend.server.adapter.IPipelineData;
+import net.lax1dude.eaglercraft.backend.server.adapter.PipelineAttributes;
+import net.lax1dude.eaglercraft.backend.server.api.bukkit.compat.AuthlibCompat;
+import net.lax1dude.eaglercraft.backend.server.api.bukkit.event.PlayerLoginInitEvent;
+import net.lax1dude.eaglercraft.backend.server.api.bukkit.event.PlayerLoginPostEvent;
+import net.lax1dude.eaglercraft.backend.server.bukkit.BukkitUnsafe;
+import net.lax1dude.eaglercraft.backend.server.bukkit.PlatformPluginBukkit;
+import net.lax1dude.eaglercraft.backend.server.bukkit.async.PlayerPostLoginInjector;
+import net.md_5.bungee.api.chat.BaseComponent;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
@@ -25,144 +40,119 @@ import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.event.player.PlayerLoginEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
 
-import io.netty.channel.Channel;
-import net.lax1dude.eaglercraft.backend.server.adapter.IPipelineData;
-import net.lax1dude.eaglercraft.backend.server.adapter.PipelineAttributes;
-import net.lax1dude.eaglercraft.backend.server.api.bukkit.event.PlayerLoginInitEvent;
-import net.lax1dude.eaglercraft.backend.server.api.bukkit.event.PlayerLoginPostEvent;
-import net.lax1dude.eaglercraft.backend.server.bukkit.async.PlayerPostLoginInjector;
-import net.md_5.bungee.api.chat.BaseComponent;
+class BukkitListener
+implements Listener {
+    private final PlatformPluginBukkit plugin;
 
-class BukkitListener implements Listener {
+    BukkitListener(PlatformPluginBukkit plugin) {
+        this.plugin = plugin;
+    }
 
-        private final PlatformPluginBukkit plugin;
+    @EventHandler(priority=EventPriority.LOWEST)
+    public void onPlayerLoginEvent(PlayerLoginEvent evt) {
+        this.plugin.postLoginInjector.handleLoginEvent(evt);
+    }
 
-        BukkitListener(PlatformPluginBukkit plugin) {
-                this.plugin = plugin;
+    @EventHandler(priority=EventPriority.LOW)
+    public void onPlayerLoginInitEvent(PlayerLoginInitEvent evt) {
+        Channel channel = evt.netty().getChannel();
+        PlayerPostLoginInjector.LoginEventContext ctx = (PlayerPostLoginInjector.LoginEventContext)channel.attr(PlayerPostLoginInjector.attr).get();
+        if (ctx == null) {
+            return;
         }
-
-        @EventHandler(priority = EventPriority.LOWEST)
-        public void onPlayerLoginEvent(PlayerLoginEvent evt) {
-                plugin.postLoginInjector.handleLoginEvent(evt);
+        IPipelineData pipelineData = (IPipelineData)channel.attr(PipelineAttributes.pipelineData()).get();
+        if (pipelineData != null && pipelineData.isCompressionDisable()) {
+            ctx.markCompressionDisable(true);
         }
+    }
 
-        @EventHandler(priority = EventPriority.LOW)
-        public void onPlayerLoginInitEvent(PlayerLoginInitEvent evt) {
-                Channel channel = evt.netty().getChannel();
-                // CRITICAL: ctx may be null if the channel was not wrapped by EaglerXServer
-                // (e.g. a Bedrock-via-Geyser connection that bypassed our wrapNetworkManager,
-                // or a vanilla player whose connection didn't go through the PaperMC listener).
-                // Don't NPE — bail out cleanly.
-                PlayerPostLoginInjector.LoginEventContext ctx = channel.attr(PlayerPostLoginInjector.attr).get();
-                if (ctx == null) {
-                        return;
-                }
-                IPipelineData pipelineData = channel.attr(PipelineAttributes.<IPipelineData>pipelineData()).get();
-                if (pipelineData != null && pipelineData.isCompressionDisable()) {
-                        ctx.markCompressionDisable(true);
-                }
-        }
-
-        @EventHandler(priority = EventPriority.LOW)
-        public void onPlayerPostLoginEvent(PlayerLoginPostEvent evt) {
-                Player player = evt.getPlayer();
-                plugin.forEachChannel((ch) -> {
-                        BukkitUnsafe.addPlayerChannel(player, ch);
-                });
-                Channel channel = evt.netty().getChannel();
-                IPipelineData pipelineData = channel.attr(PipelineAttributes.<IPipelineData>pipelineData()).getAndSet(null);
-                evt.registerIntent(plugin);
-                awaitPlayState(pipelineData, () -> {
-                        PlayerPostLoginInjector.setPlayState(evt);
-                        try {
-                                plugin.initializePlayer(player, channel, pipelineData, (b) -> {
-                                        if (b != Boolean.TRUE) {
-                                                if (b != null) {
-                                                        evt.setKickMessage((BaseComponent) b);
-                                                }
-                                                evt.setCancelled(true);
-                                        }
-                                        evt.completeIntent(plugin);
-                                });
-                        } catch (Exception ex) {
-                                try {
-                                        evt.setCancelled(true);
-                                        evt.completeIntent(plugin);
-                                } catch (IllegalStateException exx) {
-                                        return;
-                                }
-                                if (ex instanceof RuntimeException exx)
-                                        throw exx;
-                                throw new RuntimeException("Uncaught exception", ex);
+    @EventHandler(priority=EventPriority.LOW)
+    public void onPlayerPostLoginEvent(PlayerLoginPostEvent evt) {
+        Player player = evt.getPlayer();
+        this.plugin.forEachChannel(ch -> BukkitUnsafe.addPlayerChannel(player, ch));
+        Channel channel = evt.netty().getChannel();
+        IPipelineData pipelineData = (IPipelineData)channel.attr(PipelineAttributes.pipelineData()).getAndSet(null);
+        evt.registerIntent(this.plugin);
+        BukkitListener.awaitPlayState(pipelineData, () -> {
+            PlayerPostLoginInjector.setPlayState(evt);
+            try {
+                this.plugin.initializePlayer(player, channel, pipelineData, b -> {
+                    if (b != Boolean.TRUE) {
+                        if (b != null) {
+                            evt.setKickMessage((BaseComponent)b);
                         }
+                        evt.setCancelled(true);
+                    }
+                    evt.completeIntent(this.plugin);
                 });
-        }
-
-        private static void awaitPlayState(IPipelineData conn, Runnable cont) {
-                if (conn != null) {
-                        conn.awaitPlayState(cont);
-                } else {
-                        cont.run();
-                }
-        }
-
-        @EventHandler
-        public void onPlayerJoinEvent(PlayerJoinEvent evt) {
-                plugin.confirmPlayer(evt.getPlayer());
-        }
-
-        @EventHandler(priority = EventPriority.LOW)
-        public void onPlayerChangedWorldEvent(PlayerChangedWorldEvent evt) {
-                if (evt.getFrom() != null) {
-                        plugin.worldChange(evt.getPlayer());
-                }
-        }
-
-        @EventHandler(priority = EventPriority.MONITOR)
-        public void onQuitEvent(PlayerQuitEvent evt) {
-                plugin.dropPlayer(evt.getPlayer());
-                // Clean up any orphaned eaglerMarker properties from the player's GameProfile.
-                // These are inserted by PlayerPostLoginInjector.handleLoginEvent and are
-                // normally removed when PacketLoginOutSuccess is sent. But if login fails
-                // before that (kick, timeout, disconnect), the marker stays forever.
-                //
-                // CRITICAL: must use AuthlibCompat (not Property.getName() directly) because
-                // authlib 6.x (Paper 26.x / MC 1.21.11) renamed Property.getName() to name().
-                // A direct call throws NoSuchMethodError which is an Error, NOT an Exception,
-                // so the old `catch (Exception e)` didn't catch it.
+            }
+            catch (Exception ex) {
                 try {
-                        Object handle = BukkitUnsafe.getHandle(evt.getPlayer());
-                        com.mojang.authlib.GameProfile profile = BukkitUnsafe.getGameProfile(handle);
-                        if (profile != null) {
-                                synchronized (profile) {
-                                        com.google.common.collect.Multimap<String, com.mojang.authlib.properties.Property> props = net.lax1dude.eaglercraft.backend.server.api.bukkit.compat.AuthlibCompat
-                                                        .getProperties(profile);
-                                        com.mojang.authlib.properties.Property[] toRemove = props.values().stream()
-                                                        .filter(net.lax1dude.eaglercraft.backend.server.api.bukkit.compat.AuthlibCompat
-                                                                        .nameStartsWith("$eaglerMarker_"))
-                                                        .toArray(com.mojang.authlib.properties.Property[]::new);
-                                        for (com.mojang.authlib.properties.Property p : toRemove) {
-                                                String name = net.lax1dude.eaglercraft.backend.server.api.bukkit.compat.AuthlibCompat
-                                                                .getName(p);
-                                                net.lax1dude.eaglercraft.backend.server.api.bukkit.compat.AuthlibCompat
-                                                                .remove(props, name, p);
-                                                // CRITICAL: also remove the (Property, Player) entry from the
-                                                // PlayerPostLoginInjector.entityPlayers weak map. Without this,
-                                                // the entry stays alive until GC reclaims both the Property and
-                                                // the Player — which can take seconds to minutes. During that
-                                                // window a fast reconnect could match a stale marker.
-                                                try {
-                                                        plugin.postLoginInjector.removeMarker(p);
-                                                } catch (Throwable ignored) {
-                                                }
-                                        }
-                                }
-                        }
-                } catch (Throwable e) {
-                        // Widened from Exception to Throwable: NoSuchMethodError, NoClassDefFoundError,
-                        // and other Errors must not propagate to Bukkit's event dispatcher.
-                        // Best effort — don't crash on quit.
+                    evt.setCancelled(true);
+                    evt.completeIntent(this.plugin);
                 }
-        }
+                catch (IllegalStateException exx) {
+                    return;
+                }
+                if (ex instanceof RuntimeException) {
+                    throw (RuntimeException)ex;
+                }
+                throw new RuntimeException("Uncaught exception", ex);
+            }
+        });
+    }
 
+    private static void awaitPlayState(IPipelineData conn, Runnable cont) {
+        if (conn != null) {
+            conn.awaitPlayState(cont);
+        } else {
+            cont.run();
+        }
+    }
+
+    @EventHandler
+    public void onPlayerJoinEvent(PlayerJoinEvent evt) {
+        this.plugin.confirmPlayer(evt.getPlayer());
+    }
+
+    @EventHandler(priority=EventPriority.LOW)
+    public void onPlayerChangedWorldEvent(PlayerChangedWorldEvent evt) {
+        if (evt.getFrom() != null) {
+            this.plugin.worldChange(evt.getPlayer());
+        }
+    }
+
+    /*
+     * WARNING - Removed try catching itself - possible behaviour change.
+     */
+    @EventHandler(priority=EventPriority.MONITOR)
+    public void onQuitEvent(PlayerQuitEvent evt) {
+        block8: {
+            this.plugin.dropPlayer(evt.getPlayer());
+            try {
+                Object handle = BukkitUnsafe.getHandle(evt.getPlayer());
+                GameProfile profile = BukkitUnsafe.getGameProfile(handle);
+                if (profile == null) break block8;
+                GameProfile gameProfile = profile;
+                synchronized (gameProfile) {
+                    Property[] toRemove;
+                    Multimap<String, Property> props = AuthlibCompat.getProperties(profile);
+                    for (Property p : toRemove = (Property[])props.values().stream().filter(AuthlibCompat.nameStartsWith("$eaglerMarker_")).toArray(Property[]::new)) {
+                        String name = AuthlibCompat.getName(p);
+                        AuthlibCompat.remove(props, name, p);
+                        try {
+                            this.plugin.postLoginInjector.removeMarker(p);
+                        }
+                        catch (Throwable throwable) {
+                            // empty catch block
+                        }
+                    }
+                }
+            }
+            catch (Throwable throwable) {
+                // empty catch block
+            }
+        }
+    }
 }
+

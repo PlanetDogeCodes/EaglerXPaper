@@ -86,7 +86,7 @@ public class WebViewService<PlayerObject> implements IWebViewService<PlayerObjec
 
 	@Override
 	public IWebViewBlobBuilder<OutputStream> createWebViewBlobBuilderStream() {
-		return new WebViewBlobBuilder<>(server.getConfig().getPauseMenu().getServerInfoButtonEmbedSendChunkSize()) {
+		return new WebViewBlobBuilder<OutputStream>(server.getConfig().getPauseMenu().getServerInfoButtonEmbedSendChunkSize()) {
 			@Override
 			protected OutputStream wrap(OutputStream os) {
 				return os;
@@ -96,7 +96,7 @@ public class WebViewService<PlayerObject> implements IWebViewService<PlayerObjec
 
 	@Override
 	public IWebViewBlobBuilder<Writer> createWebViewBlobBuilderWriter() {
-		return new WebViewBlobBuilder<>(server.getConfig().getPauseMenu().getServerInfoButtonEmbedSendChunkSize()) {
+		return new WebViewBlobBuilder<Writer>(server.getConfig().getPauseMenu().getServerInfoButtonEmbedSendChunkSize()) {
 			@Override
 			protected Writer wrap(OutputStream os) {
 				return new OutputStreamWriter(os, StandardCharsets.UTF_8);

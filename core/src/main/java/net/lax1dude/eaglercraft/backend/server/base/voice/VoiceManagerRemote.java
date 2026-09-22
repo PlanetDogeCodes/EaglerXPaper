@@ -1,35 +1,25 @@
 /*
- * Copyright (c) 2025 lax1dude. All Rights Reserved.
- * 
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
- * IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT,
- * INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
- * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
- * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
- * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
- * 
+ * Decompiled with CFR 0.152.
  */
-
 package net.lax1dude.eaglercraft.backend.server.base.voice;
 
 import java.io.IOException;
-import java.lang.invoke.MethodHandles;
-import java.lang.invoke.VarHandle;
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicIntegerFieldUpdater;
 import java.util.stream.Collectors;
-
 import net.lax1dude.eaglercraft.backend.server.adapter.IPlatformLogger;
 import net.lax1dude.eaglercraft.backend.server.api.IEaglerPlayer;
 import net.lax1dude.eaglercraft.backend.server.api.voice.EnumVoiceState;
 import net.lax1dude.eaglercraft.backend.server.api.voice.IVoiceChannel;
 import net.lax1dude.eaglercraft.backend.server.api.voice.IVoiceService;
 import net.lax1dude.eaglercraft.backend.server.base.EaglerPlayerInstance;
+import net.lax1dude.eaglercraft.backend.server.base.voice.IVoiceManagerImpl;
+import net.lax1dude.eaglercraft.backend.server.base.voice.SerializationContext;
+import net.lax1dude.eaglercraft.backend.server.base.voice.ServerV1VCProtocolHandler;
+import net.lax1dude.eaglercraft.backend.server.base.voice.ServerVCProtocolHandler;
+import net.lax1dude.eaglercraft.backend.server.base.voice.VoiceServiceRemote;
 import net.lax1dude.eaglercraft.backend.voice.protocol.EaglerVCProtocol;
 import net.lax1dude.eaglercraft.backend.voice.protocol.pkt.EaglerVCPacket;
 import net.lax1dude.eaglercraft.backend.voice.protocol.pkt.WrongVCPacketException;
@@ -41,7 +31,7 @@ import net.lax1dude.eaglercraft.backend.voice.protocol.pkt.client.CPacketVCDisco
 import net.lax1dude.eaglercraft.backend.voice.protocol.pkt.client.CPacketVCDisconnectPeer;
 import net.lax1dude.eaglercraft.backend.voice.protocol.pkt.client.CPacketVCICECandidate;
 import net.lax1dude.eaglercraft.backend.voice.protocol.pkt.server.SPacketVCCapable;
-import net.lax1dude.eaglercraft.backend.voice.protocol.pkt.server.SPacketVCPlayerList.UserData;
+import net.lax1dude.eaglercraft.backend.voice.protocol.pkt.server.SPacketVCPlayerList;
 import net.lax1dude.eaglercraft.v1_8.socket.protocol.pkt.server.SPacketVoiceSignalAllowedEAG;
 import net.lax1dude.eaglercraft.v1_8.socket.protocol.pkt.server.SPacketVoiceSignalConnectAnnounceV4EAG;
 import net.lax1dude.eaglercraft.v1_8.socket.protocol.pkt.server.SPacketVoiceSignalConnectV4EAG;
@@ -50,364 +40,359 @@ import net.lax1dude.eaglercraft.v1_8.socket.protocol.pkt.server.SPacketVoiceSign
 import net.lax1dude.eaglercraft.v1_8.socket.protocol.pkt.server.SPacketVoiceSignalGlobalEAG;
 import net.lax1dude.eaglercraft.v1_8.socket.protocol.pkt.server.SPacketVoiceSignalICEEAG;
 
-public class VoiceManagerRemote<PlayerObject> extends SerializationContext implements IVoiceManagerImpl<PlayerObject> {
+public class VoiceManagerRemote<PlayerObject>
+extends SerializationContext
+implements IVoiceManagerImpl<PlayerObject> {
+    private static final AtomicIntegerFieldUpdater<VoiceManagerRemote> STATE_HANDLE = AtomicIntegerFieldUpdater.newUpdater(VoiceManagerRemote.class, "state");
+    final EaglerPlayerInstance<PlayerObject> player;
+    final VoiceServiceRemote<PlayerObject> voice;
+    private volatile int state = -1;
+    private ServerVCProtocolHandler handler;
+    final boolean isBroken;
+    private static final String[] EMPTY_STRING_ARRAY = new String[0];
 
-        private static final VarHandle STATE_HANDLE;
+    VoiceManagerRemote(EaglerPlayerInstance<PlayerObject> player, VoiceServiceRemote<PlayerObject> voice) {
+        super(player.getSerializationContext());
+        this.player = player;
+        this.voice = voice;
+        this.isBroken = player.getEaglerProtocol().ver < 5;
+    }
 
-        static {
-                try {
-                        MethodHandles.Lookup l = MethodHandles.lookup();
-                        STATE_HANDLE = l.findVarHandle(VoiceManagerRemote.class, "state", int.class);
-                } catch (ReflectiveOperationException e) {
-                        throw new ExceptionInInitializerError(e);
-                }
+    @Override
+    protected IPlatformLogger logger() {
+        return this.player.logger();
+    }
+
+    @Override
+    public IEaglerPlayer<PlayerObject> getPlayer() {
+        return this.player;
+    }
+
+    @Override
+    public IVoiceService<PlayerObject> getVoiceService() {
+        return this.voice;
+    }
+
+    @Override
+    public boolean isBackendRelayMode() {
+        return true;
+    }
+
+    private int stateXchg(int newValue) {
+        return STATE_HANDLE.getAndSet(this, newValue);
+    }
+
+    private boolean stateCmpXchg(int oldValue, int newValue) {
+        return STATE_HANDLE.compareAndSet(this, oldValue, newValue);
+    }
+
+    @Override
+    public EnumVoiceState getVoiceState() {
+        switch (this.state) {
+            case 1: {
+                return EnumVoiceState.DISABLED;
+            }
+            case 2: {
+                return EnumVoiceState.ENABLED;
+            }
         }
+        return EnumVoiceState.SERVER_DISABLE;
+    }
 
-        final EaglerPlayerInstance<PlayerObject> player;
-        final VoiceServiceRemote<PlayerObject> voice;
-        private volatile int state = -1;
-        private ServerVCProtocolHandler handler;
-        final boolean isBroken;
+    private boolean isVoiceEnabled() {
+        return this.state == 2;
+    }
 
-        VoiceManagerRemote(EaglerPlayerInstance<PlayerObject> player, VoiceServiceRemote<PlayerObject> voice) {
-                super(player.getSerializationContext());
-                this.player = player;
-                this.voice = voice;
-                this.isBroken = player.getEaglerProtocol().ver < 5;
-        }
+    @Override
+    public IVoiceChannel getVoiceChannel() {
+        throw VoiceServiceRemote.backendRelayMode();
+    }
 
-        @Override
-        protected IPlatformLogger logger() {
-                return player.logger();
-        }
+    @Override
+    public void setVoiceChannel(IVoiceChannel channel) {
+        throw VoiceServiceRemote.backendRelayMode();
+    }
 
-        @Override
-        public IEaglerPlayer<PlayerObject> getPlayer() {
-                return player;
-        }
+    @Override
+    public boolean isServerManaged() {
+        throw VoiceServiceRemote.backendRelayMode();
+    }
 
-        @Override
-        public IVoiceService<PlayerObject> getVoiceService() {
-                return voice;
-        }
+    @Override
+    public void setServerManaged(boolean managed) {
+        throw VoiceServiceRemote.backendRelayMode();
+    }
 
-        @Override
-        public boolean isBackendRelayMode() {
-                return true;
-        }
-
-        private int stateXchg(int newValue) {
-                return (int) STATE_HANDLE.getAndSet(this, newValue);
-        }
-
-        private int stateCmpXchg(int oldValue, int newValue) {
-                return (int) STATE_HANDLE.compareAndExchange(this, oldValue, newValue);
-        }
-
-        @Override
-        public EnumVoiceState getVoiceState() {
-                return switch ((int) STATE_HANDLE.getAcquire(this)) {
-                default -> EnumVoiceState.SERVER_DISABLE;
-                case 1 -> EnumVoiceState.DISABLED;
-                case 2 -> EnumVoiceState.ENABLED;
-                };
-        }
-
-        private boolean isVoiceEnabled() {
-                return (int) STATE_HANDLE.getAcquire(this) == 2;
-        }
-
-        @Override
-        public IVoiceChannel getVoiceChannel() {
-                throw VoiceServiceRemote.backendRelayMode();
-        }
-
-        @Override
-        public void setVoiceChannel(IVoiceChannel channel) {
-                throw VoiceServiceRemote.backendRelayMode();
-        }
-
-        @Override
-        public boolean isServerManaged() {
-                throw VoiceServiceRemote.backendRelayMode();
-        }
-
-        @Override
-        public void setServerManaged(boolean managed) {
-                throw VoiceServiceRemote.backendRelayMode();
-        }
-
-        @Override
-        public void handleBackendMessage(byte[] data) {
-                EaglerVCPacket pkt;
-                eagler: if ((int) STATE_HANDLE.getAcquire(this) == -1) {
-                        synchronized (this) {
-                                if ((int) STATE_HANDLE.getAcquire(this) != -1) {
-                                        break eagler;
-                                }
-                                try {
-                                        pkt = deserialize(EaglerVCProtocol.INIT, data);
-                                } catch (Exception e) {
-                                        player.logger().warn("Dropping invalid voice RPC packet on uninitialized connection: " + e);
-                                        return;
-                                }
-                                handleBackendHandshake(pkt);
-                                return;
-                        }
-                }
-                try {
-                        pkt = deserialize(EaglerVCProtocol.V1, data);
-                } catch (Exception e) {
-                        handleException(e);
+    /*
+     * WARNING - Removed try catching itself - possible behaviour change.
+     */
+    @Override
+    public void handleBackendMessage(byte[] data) {
+        EaglerVCPacket pkt;
+        block12: {
+            if (this.state == -1) {
+                VoiceManagerRemote voiceManagerRemote = this;
+                synchronized (voiceManagerRemote) {
+                    EaglerVCPacket pkt2;
+                    if (this.state != -1) {
+                        break block12;
+                    }
+                    try {
+                        pkt2 = this.deserialize(EaglerVCProtocol.INIT, data);
+                    }
+                    catch (Exception e) {
+                        this.player.logger().warn("Dropping invalid voice RPC packet on uninitialized connection: " + e);
                         return;
+                    }
+                    this.handleBackendHandshake(pkt2);
+                    return;
                 }
-                if (handler == null) {
-                        player.logger().warn("Received voice RPC packet before handshake completed: "
-                                        + pkt.getClass().getSimpleName());
-                        return;
+            }
+        }
+        try {
+            pkt = this.deserialize(EaglerVCProtocol.V1, data);
+        }
+        catch (Exception e) {
+            this.handleException(e);
+            return;
+        }
+        if (this.handler == null) {
+            this.player.logger().warn("Received voice RPC packet before handshake completed: " + pkt.getClass().getSimpleName());
+            return;
+        }
+        try {
+            pkt.handlePacket(this.handler);
+        }
+        catch (Exception e) {
+            this.handleException(new IllegalStateException("Failed to handle inbound voice RPC packet: " + pkt.getClass().getSimpleName(), e));
+        }
+    }
+
+    private void handleBackendHandshake(EaglerVCPacket packet) {
+        if (packet instanceof SPacketVCCapable) {
+            SPacketVCCapable pkt = (SPacketVCCapable)packet;
+            if (pkt.version != 1) {
+                throw new IllegalStateException("Wrong protocol version selected: " + pkt.version);
+            }
+            this.handler = new ServerV1VCProtocolHandler(this, VoiceManagerRemote.internStrings(pkt.iceServers), pkt.overrideICE);
+            if (pkt.allowed) {
+                this.state = 1;
+                this.voiceEnabled();
+            } else {
+                this.state = 0;
+            }
+        } else {
+            throw new WrongVCPacketException();
+        }
+    }
+
+    private static String[] internStrings(String[] strs) {
+        if (strs.length == 0) {
+            return EMPTY_STRING_ARRAY;
+        }
+        for (int i = 0; i < strs.length; ++i) {
+            strs[i] = strs[i].intern();
+        }
+        return strs;
+    }
+
+    private void handleException(Exception e) {
+        this.player.logger().error("Caught exception handling voice RPC packet from backend", e);
+    }
+
+    private void sendBackendMessage(EaglerVCPacket packet) {
+        this.sendBackendMessage(EaglerVCProtocol.V1, packet);
+    }
+
+    private void sendBackendMessage(EaglerVCProtocol protocol, EaglerVCPacket packet) {
+        byte[] pkt;
+        try {
+            pkt = this.serialize(protocol, packet);
+        }
+        catch (IOException e) {
+            this.handleException(e);
+            return;
+        }
+        this.player.getPlatformPlayer().sendDataBackend(this.voice.getRPCChannel(), pkt);
+    }
+
+    @Override
+    public void handleServerPreConnect() {
+        int lastState = this.stateXchg(-1);
+        this.handler = null;
+        if (lastState != 0 && lastState != -1) {
+            this.voiceDisabled(lastState == 2);
+        }
+    }
+
+    @Override
+    public void handleServerPostConnect(String serverName) {
+        this.sendBackendMessage(EaglerVCProtocol.INIT, new CPacketVCCapable(new int[]{1}));
+    }
+
+    private String[] concatICEServers() {
+        ServerVCProtocolHandler h = this.handler;
+        if (h != null) {
+            String[] iceServers = h.iceServerStash;
+            if (h.iceServerOverride) {
+                return iceServers;
+            }
+            HashSet<String> joined = new HashSet<String>();
+            VoiceManagerRemote.addAll(joined, this.voice.iceServersStr());
+            VoiceManagerRemote.addAll(joined, iceServers);
+            return joined.toArray(new String[joined.size()]);
+        }
+        return this.voice.iceServersStr();
+    }
+
+    private static void addAll(Set<String> set, String[] strs) {
+        for (int i = 0; i < strs.length; ++i) {
+            set.add(strs[i]);
+        }
+    }
+
+    private void voiceEnabled() {
+        this.player.sendEaglerMessage(new SPacketVoiceSignalAllowedEAG(true, this.concatICEServers()));
+        this.player.getEaglerXServer().eventDispatcher().dispatchVoiceChangeEvent(this.player, EnumVoiceState.SERVER_DISABLE, EnumVoiceState.DISABLED, null);
+    }
+
+    private void voiceConnected() {
+        this.player.getEaglerXServer().eventDispatcher().dispatchVoiceChangeEvent(this.player, EnumVoiceState.DISABLED, EnumVoiceState.ENABLED, null);
+    }
+
+    private void voiceDisconnected() {
+        this.player.getEaglerXServer().eventDispatcher().dispatchVoiceChangeEvent(this.player, EnumVoiceState.ENABLED, EnumVoiceState.DISABLED, null);
+    }
+
+    private void voiceDisabled(boolean wasConnected) {
+        this.player.sendEaglerMessage(new SPacketVoiceSignalAllowedEAG(false, null));
+        this.player.getEaglerXServer().eventDispatcher().dispatchVoiceChangeEvent(this.player, wasConnected ? EnumVoiceState.ENABLED : EnumVoiceState.DISABLED, EnumVoiceState.SERVER_DISABLE, null);
+    }
+
+    @Override
+    public void destroyVoiceManager() {
+        int lastState = this.stateXchg(-1);
+        this.handler = null;
+        if (lastState == 1 || lastState == 2) {
+            try {
+                this.sendBackendMessage(new CPacketVCDisconnect());
+            }
+            catch (Throwable throwable) {
+                // empty catch block
+            }
+        }
+        if (lastState == 2) {
+            this.voiceDisconnected();
+        }
+    }
+
+    private boolean ratelimitCon() {
+        return this.player.getRateLimits().ratelimitVoiceCon();
+    }
+
+    private boolean ratelimitReqV5() {
+        return this.isBroken || this.player.getRateLimits().ratelimitVoiceReq();
+    }
+
+    private boolean ratelimitICE() {
+        return this.player.getRateLimits().ratelimitVoiceICE();
+    }
+
+    @Override
+    public void handlePlayerSignalPacketTypeConnect() {
+        if (this.ratelimitCon() && this.stateCmpXchg(1, 2)) {
+            this.sendBackendMessage(new CPacketVCConnect());
+            this.voiceConnected();
+        }
+    }
+
+    @Override
+    public void handlePlayerSignalPacketTypeRequest(long playerUUIDMost, long playerUUIDLeast) {
+        if (this.isVoiceEnabled() && this.ratelimitReqV5()) {
+            this.sendBackendMessage(new CPacketVCConnectPeer(playerUUIDMost, playerUUIDLeast));
+        }
+    }
+
+    @Override
+    public void handlePlayerSignalPacketTypeICE(long playerUUIDMost, long playerUUIDLeast, byte[] str) {
+        if (this.isVoiceEnabled() && this.ratelimitICE()) {
+            this.sendBackendMessage(new CPacketVCICECandidate(playerUUIDMost, playerUUIDLeast, str));
+        }
+    }
+
+    @Override
+    public void handlePlayerSignalPacketTypeDesc(long playerUUIDMost, long playerUUIDLeast, byte[] str) {
+        if (this.isVoiceEnabled() && this.ratelimitICE()) {
+            this.sendBackendMessage(new CPacketVCDescription(playerUUIDMost, playerUUIDLeast, str));
+        }
+    }
+
+    @Override
+    public void handlePlayerSignalPacketTypeDisconnectPeer(long playerUUIDMost, long playerUUIDLeast) {
+        if (this.isVoiceEnabled()) {
+            this.sendBackendMessage(new CPacketVCDisconnectPeer(playerUUIDMost, playerUUIDLeast));
+        }
+    }
+
+    @Override
+    public void handlePlayerSignalPacketTypeDisconnect() {
+        if (this.stateCmpXchg(2, 1)) {
+            this.sendBackendMessage(new CPacketVCDisconnect());
+            this.voiceDisconnected();
+        }
+    }
+
+    public void handleBackendSignalPacketAllowed(boolean allowed) {
+        if (allowed) {
+            if (this.stateCmpXchg(0, 1)) {
+                this.voiceEnabled();
+            }
+        } else {
+            int lastState = this.stateXchg(0);
+            if (lastState != 0) {
+                if (lastState == -1) {
+                    this.state = -1;
+                    throw new IllegalStateException("shit");
                 }
-                try {
-                        pkt.handlePacket(handler);
-                } catch (Exception e) {
-                        handleException(new IllegalStateException(
-                                        "Failed to handle inbound voice RPC packet: " + pkt.getClass().getSimpleName(), e));
-                }
+                this.voiceDisabled(lastState == 2);
+            }
         }
+    }
 
-        private void handleBackendHandshake(EaglerVCPacket packet) {
-                if (packet instanceof SPacketVCCapable pkt) {
-                        if (pkt.version != 1) {
-                                throw new IllegalStateException("Wrong protocol version selected: " + pkt.version);
-                        }
-                        handler = new ServerV1VCProtocolHandler(this, internStrings(pkt.iceServers), pkt.overrideICE);
-                        if (pkt.allowed) {
-                                STATE_HANDLE.setRelease(this, 1);
-                                voiceEnabled();
-                        } else {
-                                STATE_HANDLE.setRelease(this, 0);
-                        }
-                } else {
-                        throw new WrongVCPacketException();
-                }
+    public void handleBackendSignalPacketPlayerList(Collection<SPacketVCPlayerList.UserData> users) {
+        if (this.isVoiceEnabled()) {
+            this.player.sendEaglerMessage(new SPacketVoiceSignalGlobalEAG(users.stream().map(data -> new SPacketVoiceSignalGlobalEAG.UserData(data.uuidMost, data.uuidLeast, data.username)).collect(Collectors.toList())));
         }
+    }
 
-        private static final String[] EMPTY_STRING_ARRAY = new String[0];
-
-        private static String[] internStrings(String[] strs) {
-                if (strs.length == 0) {
-                        return EMPTY_STRING_ARRAY;
-                }
-                for (int i = 0; i < strs.length; ++i) {
-                        strs[i] = strs[i].intern();
-                }
-                return strs;
+    public void handleBackendSignalPacketAnnounce(long uuidMost, long uuidLeast) {
+        if (this.isVoiceEnabled()) {
+            this.player.sendEaglerMessage(new SPacketVoiceSignalConnectAnnounceV4EAG(uuidMost, uuidLeast));
         }
+    }
 
-        private void handleException(Exception e) {
-                player.logger().error("Caught exception handling voice RPC packet from backend", e);
+    public void handleBackendSignalPacketConnectPeer(long uuidMost, long uuidLeast, boolean offer) {
+        if (this.isVoiceEnabled()) {
+            this.player.sendEaglerMessage(new SPacketVoiceSignalConnectV4EAG(uuidMost, uuidLeast, offer));
         }
+    }
 
-        private void sendBackendMessage(EaglerVCPacket packet) {
-                sendBackendMessage(EaglerVCProtocol.V1, packet);
+    public void handleBackendSignalPacketDisconnectPeer(long uuidMost, long uuidLeast) {
+        if (this.isVoiceEnabled()) {
+            this.player.sendEaglerMessage(new SPacketVoiceSignalDisconnectPeerEAG(uuidMost, uuidLeast));
         }
+    }
 
-        private void sendBackendMessage(EaglerVCProtocol protocol, EaglerVCPacket packet) {
-                byte[] pkt;
-                try {
-                        pkt = serialize(protocol, packet);
-                } catch (IOException e) {
-                        handleException(e);
-                        return;
-                }
-                player.getPlatformPlayer().sendDataBackend(voice.getRPCChannel(), pkt);
+    public void handleBackendSignalPacketDescription(long uuidMost, long uuidLeast, byte[] desc) {
+        if (this.isVoiceEnabled()) {
+            this.player.sendEaglerMessage(new SPacketVoiceSignalDescEAG(uuidMost, uuidLeast, desc));
         }
+    }
 
-        @Override
-        public void handleServerPreConnect() {
-                int lastState = stateXchg(-1);
-                handler = null;
-                if (lastState != 0 && lastState != -1) {
-                        voiceDisabled(lastState == 2);
-                }
+    public void handleBackendSignalPacketICECandidate(long uuidMost, long uuidLeast, byte[] ice) {
+        if (this.isVoiceEnabled()) {
+            this.player.sendEaglerMessage(new SPacketVoiceSignalICEEAG(uuidMost, uuidLeast, ice));
         }
-
-        @Override
-        public void handleServerPostConnect(String serverName) {
-                sendBackendMessage(EaglerVCProtocol.INIT, new CPacketVCCapable(new int[] { 1 }));
-        }
-
-        private String[] concatICEServers() {
-                ServerVCProtocolHandler h = handler;
-                if (h != null) {
-                        String[] iceServers = h.iceServerStash;
-                        if (h.iceServerOverride) {
-                                return iceServers;
-                        } else {
-                                Set<String> joined = new HashSet<>();
-                                addAll(joined, voice.iceServersStr());
-                                addAll(joined, iceServers);
-                                return joined.toArray(new String[joined.size()]);
-                        }
-                } else {
-                        return voice.iceServersStr();
-                }
-        }
-
-        private static void addAll(Set<String> set, String[] strs) {
-                for (int i = 0; i < strs.length; ++i) {
-                        set.add(strs[i]);
-                }
-        }
-
-        private void voiceEnabled() {
-                player.sendEaglerMessage(new SPacketVoiceSignalAllowedEAG(true, concatICEServers()));
-                player.getEaglerXServer().eventDispatcher().dispatchVoiceChangeEvent(player, EnumVoiceState.SERVER_DISABLE,
-                                EnumVoiceState.DISABLED, null);
-        }
-
-        private void voiceConnected() {
-                player.getEaglerXServer().eventDispatcher().dispatchVoiceChangeEvent(player, EnumVoiceState.DISABLED,
-                                EnumVoiceState.ENABLED, null);
-        }
-
-        private void voiceDisconnected() {
-                player.getEaglerXServer().eventDispatcher().dispatchVoiceChangeEvent(player, EnumVoiceState.ENABLED,
-                                EnumVoiceState.DISABLED, null);
-        }
-
-        private void voiceDisabled(boolean wasConnected) {
-                player.sendEaglerMessage(new SPacketVoiceSignalAllowedEAG(false, null));
-                player.getEaglerXServer().eventDispatcher().dispatchVoiceChangeEvent(player,
-                                wasConnected ? EnumVoiceState.ENABLED : EnumVoiceState.DISABLED, EnumVoiceState.SERVER_DISABLE, null);
-        }
-
-        @Override
-        public void destroyVoiceManager() {
-                // tell the backend the voice session is over instead of letting it hit
-                // its own timeout, mirrors VoiceManagerLocal.removeFromChannel(mgr, true)
-                int lastState = stateXchg(-1);
-                handler = null;
-                if (lastState == 1 || lastState == 2) {
-                        try {
-                                sendBackendMessage(new CPacketVCDisconnect());
-                        } catch (Throwable t) {
-                                // best effort, backend times out the session anyway
-                        }
-                }
-                if (lastState == 2) {
-                        voiceDisconnected();
-                }
-        }
-
-        private boolean ratelimitCon() {
-                return player.getRateLimits().ratelimitVoiceCon();
-        }
-
-        private boolean ratelimitReqV5() {
-                return isBroken || player.getRateLimits().ratelimitVoiceReq();
-        }
-
-        private boolean ratelimitICE() {
-                return player.getRateLimits().ratelimitVoiceICE();
-        }
-
-        @Override
-        public void handlePlayerSignalPacketTypeConnect() {
-                if (ratelimitCon() && stateCmpXchg(1, 2) == 1) {
-                        sendBackendMessage(new CPacketVCConnect());
-                        voiceConnected();
-                }
-        }
-
-        @Override
-        public void handlePlayerSignalPacketTypeRequest(long playerUUIDMost, long playerUUIDLeast) {
-                if (isVoiceEnabled() && ratelimitReqV5()) {
-                        sendBackendMessage(new CPacketVCConnectPeer(playerUUIDMost, playerUUIDLeast));
-                }
-        }
-
-        @Override
-        public void handlePlayerSignalPacketTypeICE(long playerUUIDMost, long playerUUIDLeast, byte[] str) {
-                if (isVoiceEnabled() && ratelimitICE()) {
-                        sendBackendMessage(new CPacketVCICECandidate(playerUUIDMost, playerUUIDLeast, str));
-                }
-        }
-
-        @Override
-        public void handlePlayerSignalPacketTypeDesc(long playerUUIDMost, long playerUUIDLeast, byte[] str) {
-                if (isVoiceEnabled() && ratelimitICE()) {
-                        sendBackendMessage(new CPacketVCDescription(playerUUIDMost, playerUUIDLeast, str));
-                }
-        }
-
-        @Override
-        public void handlePlayerSignalPacketTypeDisconnectPeer(long playerUUIDMost, long playerUUIDLeast) {
-                if (isVoiceEnabled()) {
-                        sendBackendMessage(new CPacketVCDisconnectPeer(playerUUIDMost, playerUUIDLeast));
-                }
-        }
-
-        @Override
-        public void handlePlayerSignalPacketTypeDisconnect() {
-                if (stateCmpXchg(2, 1) == 2) {
-                        sendBackendMessage(new CPacketVCDisconnect());
-                        voiceDisconnected();
-                }
-        }
-
-        public void handleBackendSignalPacketAllowed(boolean allowed) {
-                if (allowed) {
-                        if (stateCmpXchg(0, 1) == 0) {
-                                voiceEnabled();
-                        }
-                } else {
-                        int lastState = stateXchg(0);
-                        if (lastState != 0) {
-                                if (lastState == -1) {
-                                        STATE_HANDLE.setOpaque(this, -1);
-                                        throw new IllegalStateException("shit");
-                                }
-                                voiceDisabled(lastState == 2);
-                        }
-                }
-        }
-
-        public void handleBackendSignalPacketPlayerList(Collection<UserData> users) {
-                if (isVoiceEnabled()) {
-                        player.sendEaglerMessage(new SPacketVoiceSignalGlobalEAG(users.stream().map(
-                                        (data) -> new SPacketVoiceSignalGlobalEAG.UserData(data.uuidMost, data.uuidLeast, data.username))
-                                        .collect(Collectors.toList())));
-                }
-        }
-
-        public void handleBackendSignalPacketAnnounce(long uuidMost, long uuidLeast) {
-                if (isVoiceEnabled()) {
-                        player.sendEaglerMessage(new SPacketVoiceSignalConnectAnnounceV4EAG(uuidMost, uuidLeast));
-                }
-        }
-
-        public void handleBackendSignalPacketConnectPeer(long uuidMost, long uuidLeast, boolean offer) {
-                if (isVoiceEnabled()) {
-                        player.sendEaglerMessage(new SPacketVoiceSignalConnectV4EAG(uuidMost, uuidLeast, offer));
-                }
-        }
-
-        public void handleBackendSignalPacketDisconnectPeer(long uuidMost, long uuidLeast) {
-                if (isVoiceEnabled()) {
-                        player.sendEaglerMessage(new SPacketVoiceSignalDisconnectPeerEAG(uuidMost, uuidLeast));
-                }
-        }
-
-        public void handleBackendSignalPacketDescription(long uuidMost, long uuidLeast, byte[] desc) {
-                if (isVoiceEnabled()) {
-                        player.sendEaglerMessage(new SPacketVoiceSignalDescEAG(uuidMost, uuidLeast, desc));
-                }
-        }
-
-        public void handleBackendSignalPacketICECandidate(long uuidMost, long uuidLeast, byte[] ice) {
-                if (isVoiceEnabled()) {
-                        player.sendEaglerMessage(new SPacketVoiceSignalICEEAG(uuidMost, uuidLeast, ice));
-                }
-        }
-
+    }
 }
+

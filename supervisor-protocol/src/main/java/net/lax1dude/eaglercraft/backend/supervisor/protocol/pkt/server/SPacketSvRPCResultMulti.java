@@ -81,7 +81,7 @@ public class SPacketSvRPCResultMulti extends AbstractReferenceCounted implements
 			if (var2 > 0) {
 				ByteBuf data = null;
 				if (var2 > 1) {
-					data = buffer.readRetainedSlice(var2 - 1);
+					data = buffer.readSlice(var2 - 1).retain();
 				}
 				results.add(ResultEntry.success(nodeId, data));
 			} else {

@@ -1,371 +1,401 @@
 /*
- * Copyright (c) 2025 lax1dude. All Rights Reserved.
- * 
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
- * IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT,
- * INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
- * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
- * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
- * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
- * 
+ * Decompiled with CFR 0.152.
  */
-
 package net.lax1dude.eaglercraft.backend.server.base.supervisor;
 
-import java.lang.invoke.MethodHandles;
-import java.lang.invoke.VarHandle;
 import java.util.List;
 import java.util.UUID;
 import java.util.function.Consumer;
-
 import net.lax1dude.eaglercraft.backend.server.api.skins.IEaglerPlayerCape;
 import net.lax1dude.eaglercraft.backend.server.api.skins.IEaglerPlayerSkin;
 import net.lax1dude.eaglercraft.backend.server.base.skins.type.MissingCape;
 import net.lax1dude.eaglercraft.backend.server.base.skins.type.MissingSkin;
-import net.lax1dude.eaglercraft.backend.server.util.KeyedConcurrentLazyLoader.KeyedConsumerList;
+import net.lax1dude.eaglercraft.backend.server.base.supervisor.SupervisorConnection;
+import net.lax1dude.eaglercraft.backend.server.base.supervisor.SupervisorService;
+import net.lax1dude.eaglercraft.backend.server.util.KeyedConcurrentLazyLoader;
 import net.lax1dude.eaglercraft.backend.supervisor.protocol.pkt.client.CPacketSvGetClientBrandUUID;
 import net.lax1dude.eaglercraft.backend.supervisor.protocol.pkt.client.CPacketSvGetOtherCape;
 import net.lax1dude.eaglercraft.backend.supervisor.protocol.pkt.client.CPacketSvGetOtherSkin;
 
 class SupervisorPlayer {
+    private final SupervisorConnection connection;
+    private final UUID playerUUID;
+    private volatile int nodeId = -1;
+    private volatile UUID brandUUID = null;
+    private KeyedConcurrentLazyLoader.KeyedConsumerList<UUID, UUID> waitingBrandCallbacks = null;
+    private volatile IEaglerPlayerSkin skin = null;
+    private final Object skinLock = new Object();
+    private KeyedConcurrentLazyLoader.KeyedConsumerList<UUID, IEaglerPlayerSkin> waitingSkinCallbacks = null;
+    private volatile IEaglerPlayerCape cape = null;
+    private final Object capeLock = new Object();
+    private KeyedConcurrentLazyLoader.KeyedConsumerList<UUID, IEaglerPlayerCape> waitingCapeCallbacks = null;
 
-	private static final VarHandle NODE_ID_HANDLE;
-	private static final VarHandle BRAND_HANDLE;
-	private static final VarHandle SKIN_HANDLE;
-	private static final VarHandle CAPE_HANDLE;
+    SupervisorPlayer(SupervisorConnection connection, UUID playerUUID) {
+        this.connection = connection;
+        this.playerUUID = playerUUID;
+    }
 
-	static {
-		try {
-			MethodHandles.Lookup l = MethodHandles.lookup();
-			NODE_ID_HANDLE = l.findVarHandle(SupervisorPlayer.class, "nodeId", int.class);
-			BRAND_HANDLE = l.findVarHandle(SupervisorPlayer.class, "brandUUID", UUID.class);
-			SKIN_HANDLE = l.findVarHandle(SupervisorPlayer.class, "skin", IEaglerPlayerSkin.class);
-			CAPE_HANDLE = l.findVarHandle(SupervisorPlayer.class, "cape", IEaglerPlayerCape.class);
-		} catch (ReflectiveOperationException e) {
-			throw new ExceptionInInitializerError(e);
-		}
-	}
+    public SupervisorConnection getConnection() {
+        return this.connection;
+    }
 
-	private final SupervisorConnection connection;
-	private final UUID playerUUID;
+    public SupervisorService<?> getController() {
+        return this.connection.service;
+    }
 
-	private int nodeId = -1;
+    public UUID getPlayerUUID() {
+        return this.playerUUID;
+    }
 
-	private UUID brandUUID = null;
-	private KeyedConsumerList<UUID, UUID> waitingBrandCallbacks = null;
+    public int getNodeId() {
+        return this.nodeId;
+    }
 
-	private IEaglerPlayerSkin skin = null;
-	private final Object skinLock = new Object();
-	private KeyedConsumerList<UUID, IEaglerPlayerSkin> waitingSkinCallbacks = null;
+    /*
+     * WARNING - Removed try catching itself - possible behaviour change.
+     */
+    public void loadBrandUUID(UUID requester, Consumer<UUID> callback) {
+        UUID val = this.brandUUID;
+        if (val != null) {
+            callback.accept(val);
+        } else {
+            SupervisorPlayer supervisorPlayer = this;
+            synchronized (supervisorPlayer) {
+                val = this.brandUUID;
+                if (val != null) {
+                } else {
+                    if (this.waitingBrandCallbacks != null) {
+                        this.waitingBrandCallbacks.add(requester, callback);
+                        return;
+                    }
+                    this.waitingBrandCallbacks = new KeyedConcurrentLazyLoader.KeyedConsumerList();
+                    this.waitingBrandCallbacks.add(requester, callback);
+                }
+            }
+            if (val != null) {
+                callback.accept(val);
+                return;
+            }
+            this.connection.sendSupervisorPacket(new CPacketSvGetClientBrandUUID(this.playerUUID));
+        }
+    }
 
-	private IEaglerPlayerCape cape = null;
-	private final Object capeLock = new Object();
-	private KeyedConsumerList<UUID, IEaglerPlayerCape> waitingCapeCallbacks = null;
+    /*
+     * WARNING - Removed try catching itself - possible behaviour change.
+     */
+    public void loadSkinData(UUID requester, Consumer<IEaglerPlayerSkin> callback) {
+        IEaglerPlayerSkin val = this.skin;
+        if (val != null) {
+            callback.accept(val);
+        } else {
+            Object object = this.skinLock;
+            synchronized (object) {
+                val = this.skin;
+                if (val != null) {
+                } else {
+                    if (this.waitingSkinCallbacks != null) {
+                        this.waitingSkinCallbacks.add(requester, callback);
+                        return;
+                    }
+                    this.waitingSkinCallbacks = new KeyedConcurrentLazyLoader.KeyedConsumerList();
+                    this.waitingSkinCallbacks.add(requester, callback);
+                }
+            }
+            if (val != null) {
+                callback.accept(val);
+                return;
+            }
+            this.connection.sendSupervisorPacket(new CPacketSvGetOtherSkin(this.playerUUID));
+        }
+    }
 
-	SupervisorPlayer(SupervisorConnection connection, UUID playerUUID) {
-		this.connection = connection;
-		this.playerUUID = playerUUID;
-	}
+    /*
+     * WARNING - Removed try catching itself - possible behaviour change.
+     */
+    public void loadCapeData(UUID requester, Consumer<IEaglerPlayerCape> callback) {
+        IEaglerPlayerCape val = this.cape;
+        if (val != null) {
+            callback.accept(val);
+        } else {
+            Object object = this.capeLock;
+            synchronized (object) {
+                val = this.cape;
+                if (val != null) {
+                } else {
+                    if (this.waitingCapeCallbacks != null) {
+                        this.waitingCapeCallbacks.add(requester, callback);
+                        return;
+                    }
+                    this.waitingCapeCallbacks = new KeyedConcurrentLazyLoader.KeyedConsumerList();
+                    this.waitingCapeCallbacks.add(requester, callback);
+                }
+            }
+            if (val != null) {
+                callback.accept(val);
+                return;
+            }
+            this.connection.sendSupervisorPacket(new CPacketSvGetOtherCape(this.playerUUID));
+        }
+    }
 
-	public SupervisorConnection getConnection() {
-		return connection;
-	}
+    /*
+     * WARNING - Removed try catching itself - possible behaviour change.
+     */
+    void onSkinReceived(IEaglerPlayerSkin skin) {
+        KeyedConcurrentLazyLoader.KeyedConsumerList<UUID, IEaglerPlayerSkin> toCall;
+        Object object = this.skinLock;
+        synchronized (object) {
+            if (this.skin != null) {
+                return;
+            }
+            this.skin = skin;
+            toCall = this.waitingSkinCallbacks;
+            this.waitingSkinCallbacks = null;
+        }
+        if (toCall != null) {
+            List<Consumer<IEaglerPlayerSkin>> toCallList = toCall.getList();
+            int l = toCallList.size();
+            for (int i = 0; i < l; ++i) {
+                try {
+                    toCallList.get(i).accept(skin);
+                    continue;
+                }
+                catch (Exception ex) {
+                    this.connection.logger().error("Caught error from lazy load callback", ex);
+                }
+            }
+        }
+    }
 
-	public SupervisorService<?> getController() {
-		return connection.service;
-	}
+    /*
+     * WARNING - Removed try catching itself - possible behaviour change.
+     */
+    void onSkinError() {
+        if (this.nodeId == -1) {
+            this.connection.onDropPlayer(this.playerUUID);
+        } else {
+            KeyedConcurrentLazyLoader.KeyedConsumerList<UUID, IEaglerPlayerSkin> toCall;
+            Object object = this.skinLock;
+            synchronized (object) {
+                if (this.skin != null) {
+                    return;
+                }
+                toCall = this.waitingSkinCallbacks;
+                this.waitingSkinCallbacks = null;
+            }
+            if (toCall != null) {
+                List<Consumer<IEaglerPlayerSkin>> toCallList = toCall.getList();
+                int l = toCallList.size();
+                for (int i = 0; i < l; ++i) {
+                    try {
+                        toCallList.get(i).accept(MissingSkin.MISSING_SKIN);
+                        continue;
+                    }
+                    catch (Exception ex) {
+                        this.connection.logger().error("Caught error from lazy load callback", ex);
+                    }
+                }
+            }
+        }
+    }
 
-	public UUID getPlayerUUID() {
-		return playerUUID;
-	}
+    /*
+     * WARNING - Removed try catching itself - possible behaviour change.
+     */
+    void onCapeReceived(IEaglerPlayerCape cape) {
+        KeyedConcurrentLazyLoader.KeyedConsumerList<UUID, IEaglerPlayerCape> toCall;
+        Object object = this.capeLock;
+        synchronized (object) {
+            if (this.cape != null) {
+                return;
+            }
+            this.cape = cape;
+            toCall = this.waitingCapeCallbacks;
+            this.waitingCapeCallbacks = null;
+        }
+        if (toCall != null) {
+            List<Consumer<IEaglerPlayerCape>> toCallList = toCall.getList();
+            int l = toCallList.size();
+            for (int i = 0; i < l; ++i) {
+                try {
+                    toCallList.get(i).accept(cape);
+                    continue;
+                }
+                catch (Exception ex) {
+                    this.connection.logger().error("Caught error from lazy load callback", ex);
+                }
+            }
+        }
+    }
 
-	public int getNodeId() {
-		return (int) NODE_ID_HANDLE.getAcquire(this);
-	}
+    /*
+     * WARNING - Removed try catching itself - possible behaviour change.
+     */
+    void onCapeError() {
+        if (this.nodeId == -1) {
+            this.connection.onDropPlayer(this.playerUUID);
+        } else {
+            KeyedConcurrentLazyLoader.KeyedConsumerList<UUID, IEaglerPlayerCape> toCall;
+            Object object = this.capeLock;
+            synchronized (object) {
+                if (this.cape != null) {
+                    return;
+                }
+                toCall = this.waitingCapeCallbacks;
+                this.waitingCapeCallbacks = null;
+            }
+            if (toCall != null) {
+                List<Consumer<IEaglerPlayerCape>> toCallList = toCall.getList();
+                int l = toCallList.size();
+                for (int i = 0; i < l; ++i) {
+                    try {
+                        toCallList.get(i).accept(MissingCape.MISSING_CAPE);
+                        continue;
+                    }
+                    catch (Exception ex) {
+                        this.connection.logger().error("Caught error from lazy load callback", ex);
+                    }
+                }
+            }
+        }
+    }
 
-	public void loadBrandUUID(UUID requester, Consumer<UUID> callback) {
-		UUID val = (UUID) BRAND_HANDLE.getAcquire(this);
-		if (val != null) {
-			callback.accept(val);
-		} else {
-			eag: synchronized (this) {
-				val = brandUUID;
-				if (val != null) {
-					break eag;
-				}
-				if (waitingBrandCallbacks == null) {
-					waitingBrandCallbacks = new KeyedConsumerList<>();
-					waitingBrandCallbacks.add(requester, callback);
-				} else {
-					waitingBrandCallbacks.add(requester, callback);
-					return;
-				}
-			}
-			if (val != null) {
-				callback.accept(val);
-				return;
-			}
-			connection.sendSupervisorPacket(new CPacketSvGetClientBrandUUID(playerUUID));
-		}
-	}
+    /*
+     * WARNING - Removed try catching itself - possible behaviour change.
+     */
+    void onNodeIDReceived(int nodeId, UUID brandUUID) {
+        KeyedConcurrentLazyLoader.KeyedConsumerList<UUID, UUID> toCall;
+        this.nodeId = nodeId;
+        SupervisorPlayer supervisorPlayer = this;
+        synchronized (supervisorPlayer) {
+            if (this.brandUUID != null) {
+                return;
+            }
+            this.brandUUID = brandUUID;
+            toCall = this.waitingBrandCallbacks;
+            this.waitingBrandCallbacks = null;
+        }
+        if (toCall != null) {
+            List<Consumer<UUID>> toCallList = toCall.getList();
+            int l = toCallList.size();
+            for (int i = 0; i < l; ++i) {
+                try {
+                    toCallList.get(i).accept(brandUUID);
+                    continue;
+                }
+                catch (Exception ex) {
+                    this.connection.logger().error("Caught error from lazy load callback", ex);
+                }
+            }
+        }
+    }
 
-	public void loadSkinData(UUID requester, Consumer<IEaglerPlayerSkin> callback) {
-		IEaglerPlayerSkin val = (IEaglerPlayerSkin) SKIN_HANDLE.getAcquire(this);
-		if (val != null) {
-			callback.accept(val);
-		} else {
-			eag: synchronized (skinLock) {
-				val = skin;
-				if (val != null) {
-					break eag;
-				}
-				if (waitingSkinCallbacks == null) {
-					waitingSkinCallbacks = new KeyedConsumerList<>();
-					waitingSkinCallbacks.add(requester, callback);
-				} else {
-					waitingSkinCallbacks.add(requester, callback);
-					return;
-				}
-			}
-			if (val != null) {
-				callback.accept(val);
-				return;
-			}
-			connection.sendSupervisorPacket(new CPacketSvGetOtherSkin(playerUUID));
-		}
-	}
+    /*
+     * WARNING - Removed try catching itself - possible behaviour change.
+     */
+    void onNodeIDError() {
+        if (this.nodeId == -1) {
+            this.connection.onDropPlayer(this.playerUUID);
+        } else {
+            KeyedConcurrentLazyLoader.KeyedConsumerList<UUID, UUID> toCall;
+            SupervisorPlayer supervisorPlayer = this;
+            synchronized (supervisorPlayer) {
+                if (this.brandUUID != null) {
+                    return;
+                }
+                toCall = this.waitingBrandCallbacks;
+                this.waitingBrandCallbacks = null;
+            }
+            if (toCall != null) {
+                List<Consumer<UUID>> toCallList = toCall.getList();
+                int l = toCallList.size();
+                for (int i = 0; i < l; ++i) {
+                    try {
+                        toCallList.get(i).accept(null);
+                        continue;
+                    }
+                    catch (Exception ex) {
+                        this.connection.logger().error("Caught error from lazy load callback", ex);
+                    }
+                }
+            }
+        }
+    }
 
-	public void loadCapeData(UUID requester, Consumer<IEaglerPlayerCape> callback) {
-		IEaglerPlayerCape val = (IEaglerPlayerCape) CAPE_HANDLE.getAcquire(this);
-		if (val != null) {
-			callback.accept(val);
-		} else {
-			eag: synchronized (capeLock) {
-				val = cape;
-				if (val != null) {
-					break eag;
-				}
-				if (waitingCapeCallbacks == null) {
-					waitingCapeCallbacks = new KeyedConsumerList<>();
-					waitingCapeCallbacks.add(requester, callback);
-				} else {
-					waitingCapeCallbacks.add(requester, callback);
-					return;
-				}
-			}
-			if (val != null) {
-				callback.accept(val);
-				return;
-			}
-			connection.sendSupervisorPacket(new CPacketSvGetOtherCape(playerUUID));
-		}
-	}
+    /*
+     * WARNING - Removed try catching itself - possible behaviour change.
+     */
+    void playerDropped() {
+        KeyedConcurrentLazyLoader.KeyedConsumerList<UUID, IEaglerPlayerCape> toCallC;
+        KeyedConcurrentLazyLoader.KeyedConsumerList<UUID, IEaglerPlayerSkin> toCallB;
+        KeyedConcurrentLazyLoader.KeyedConsumerList<UUID, UUID> toCallA;
+        synchronized (this) {
+            toCallA = this.waitingBrandCallbacks;
+            this.waitingBrandCallbacks = null;
+        }
+        if (toCallA != null) {
+            List<Consumer<UUID>> toCallAList = toCallA.getList();
+            for (int i = 0, l = toCallAList.size(); i < l; ++i) {
+                try {
+                    toCallAList.get(i).accept(null);
+                    continue;
+                }
+                catch (Exception ex) {
+                    this.connection.logger().error("Caught error from lazy load callback", ex);
+                }
+            }
+        }
+        synchronized (this.skinLock) {
+            toCallB = this.waitingSkinCallbacks;
+            this.waitingSkinCallbacks = null;
+        }
+        if (toCallB != null) {
+            List<Consumer<IEaglerPlayerSkin>> toCallBList = toCallB.getList();
+            for (int i = 0, l = toCallBList.size(); i < l; ++i) {
+                try {
+                    toCallBList.get(i).accept(null);
+                    continue;
+                }
+                catch (Exception ex) {
+                    this.connection.logger().error("Caught error from lazy load callback", ex);
+                }
+            }
+        }
+        synchronized (this.capeLock) {
+            toCallC = this.waitingCapeCallbacks;
+            this.waitingCapeCallbacks = null;
+        }
+        if (toCallC != null) {
+            List<Consumer<IEaglerPlayerCape>> toCallCList = toCallC.getList();
+            for (int i = 0, l = toCallCList.size(); i < l; ++i) {
+                try {
+                    toCallCList.get(i).accept(null);
+                    continue;
+                }
+                catch (Exception ex) {
+                    this.connection.logger().error("Caught error from lazy load callback", ex);
+                }
+            }
+        }
+    }
 
-	void onSkinReceived(IEaglerPlayerSkin skin) {
-		KeyedConsumerList<UUID, IEaglerPlayerSkin> toCall;
-		synchronized (skinLock) {
-			if (this.skin != null) {
-				return; // ignore multiple results
-			}
-			SKIN_HANDLE.setRelease(this, skin);
-			toCall = waitingSkinCallbacks;
-			waitingSkinCallbacks = null;
-		}
-		if (toCall != null) {
-			List<Consumer<IEaglerPlayerSkin>> toCallList = toCall.getList();
-			for (int i = 0, l = toCallList.size(); i < l; ++i) {
-				try {
-					toCallList.get(i).accept(skin);
-				} catch (Exception ex) {
-					connection.logger().error("Caught error from lazy load callback", ex);
-				}
-			}
-		}
-	}
-
-	void onSkinError() {
-		if ((int) NODE_ID_HANDLE.getAcquire(this) == -1) {
-			connection.onDropPlayer(playerUUID);
-		} else {
-			KeyedConsumerList<UUID, IEaglerPlayerSkin> toCall;
-			synchronized (skinLock) {
-				if (skin != null) {
-					return; // ignore multiple results
-				}
-				toCall = waitingSkinCallbacks;
-				waitingSkinCallbacks = null;
-			}
-			if (toCall != null) {
-				List<Consumer<IEaglerPlayerSkin>> toCallList = toCall.getList();
-				for (int i = 0, l = toCallList.size(); i < l; ++i) {
-					try {
-						toCallList.get(i).accept(MissingSkin.MISSING_SKIN);
-					} catch (Exception ex) {
-						connection.logger().error("Caught error from lazy load callback", ex);
-					}
-				}
-			}
-		}
-	}
-
-	void onCapeReceived(IEaglerPlayerCape cape) {
-		KeyedConsumerList<UUID, IEaglerPlayerCape> toCall;
-		synchronized (capeLock) {
-			if (this.cape != null) {
-				return; // ignore multiple results
-			}
-			CAPE_HANDLE.setRelease(this, cape);
-			toCall = waitingCapeCallbacks;
-			waitingCapeCallbacks = null;
-		}
-		if (toCall != null) {
-			List<Consumer<IEaglerPlayerCape>> toCallList = toCall.getList();
-			for (int i = 0, l = toCallList.size(); i < l; ++i) {
-				try {
-					toCallList.get(i).accept(cape);
-				} catch (Exception ex) {
-					connection.logger().error("Caught error from lazy load callback", ex);
-				}
-			}
-		}
-	}
-
-	void onCapeError() {
-		if ((int) NODE_ID_HANDLE.getAcquire(this) == -1) {
-			connection.onDropPlayer(playerUUID);
-		} else {
-			KeyedConsumerList<UUID, IEaglerPlayerCape> toCall;
-			synchronized (capeLock) {
-				if (this.cape != null) {
-					return; // ignore multiple results
-				}
-				toCall = waitingCapeCallbacks;
-				waitingCapeCallbacks = null;
-			}
-			if (toCall != null) {
-				List<Consumer<IEaglerPlayerCape>> toCallList = toCall.getList();
-				for (int i = 0, l = toCallList.size(); i < l; ++i) {
-					try {
-						toCallList.get(i).accept(MissingCape.MISSING_CAPE);
-					} catch (Exception ex) {
-						connection.logger().error("Caught error from lazy load callback", ex);
-					}
-				}
-			}
-		}
-	}
-
-	void onNodeIDReceived(int nodeId, UUID brandUUID) {
-		NODE_ID_HANDLE.setRelease(this, nodeId);
-		KeyedConsumerList<UUID, UUID> toCall;
-		synchronized (this) {
-			if (this.brandUUID != null) {
-				return; // ignore multiple results
-			}
-			BRAND_HANDLE.setRelease(this, brandUUID);
-			toCall = waitingBrandCallbacks;
-			waitingBrandCallbacks = null;
-		}
-		if (toCall != null) {
-			List<Consumer<UUID>> toCallList = toCall.getList();
-			for (int i = 0, l = toCallList.size(); i < l; ++i) {
-				try {
-					toCallList.get(i).accept(brandUUID);
-				} catch (Exception ex) {
-					connection.logger().error("Caught error from lazy load callback", ex);
-				}
-			}
-		}
-	}
-
-	void onNodeIDError() {
-		if ((int) NODE_ID_HANDLE.getAcquire(this) == -1) {
-			connection.onDropPlayer(playerUUID);
-		} else {
-			KeyedConsumerList<UUID, UUID> toCall;
-			synchronized (this) {
-				if (this.brandUUID != null) {
-					return; // ignore multiple results
-				}
-				toCall = waitingBrandCallbacks;
-				waitingBrandCallbacks = null;
-			}
-			if (toCall != null) {
-				List<Consumer<UUID>> toCallList = toCall.getList();
-				for (int i = 0, l = toCallList.size(); i < l; ++i) {
-					try {
-						toCallList.get(i).accept(null);
-					} catch (Exception ex) {
-						connection.logger().error("Caught error from lazy load callback", ex);
-					}
-				}
-			}
-		}
-	}
-
-	void playerDropped() {
-		KeyedConsumerList<UUID, UUID> toCallA;
-		KeyedConsumerList<UUID, IEaglerPlayerSkin> toCallB;
-		KeyedConsumerList<UUID, IEaglerPlayerCape> toCallC;
-		synchronized (this) {
-			toCallA = waitingBrandCallbacks;
-			waitingBrandCallbacks = null;
-		}
-		if (toCallA != null) {
-			List<Consumer<UUID>> toCallAList = toCallA.getList();
-			for (int i = 0, l = toCallAList.size(); i < l; ++i) {
-				try {
-					toCallAList.get(i).accept(null);
-				} catch (Exception ex) {
-					connection.logger().error("Caught error from lazy load callback", ex);
-				}
-			}
-		}
-		synchronized (skinLock) {
-			toCallB = waitingSkinCallbacks;
-			waitingSkinCallbacks = null;
-		}
-		if (toCallB != null) {
-			List<Consumer<IEaglerPlayerSkin>> toCallBList = toCallB.getList();
-			for (int i = 0, l = toCallBList.size(); i < l; ++i) {
-				try {
-					toCallBList.get(i).accept(null);
-				} catch (Exception ex) {
-					connection.logger().error("Caught error from lazy load callback", ex);
-				}
-			}
-		}
-		synchronized (capeLock) {
-			toCallC = waitingCapeCallbacks;
-			waitingCapeCallbacks = null;
-		}
-		if (toCallC != null) {
-			List<Consumer<IEaglerPlayerCape>> toCallCList = toCallC.getList();
-			for (int i = 0, l = toCallCList.size(); i < l; ++i) {
-				try {
-					toCallCList.get(i).accept(null);
-				} catch (Exception ex) {
-					connection.logger().error("Caught error from lazy load callback", ex);
-				}
-			}
-		}
-	}
-
-	void onDropPartial(boolean skin, boolean cape) {
-		if (skin) {
-			synchronized (skinLock) {
-				this.skin = null;
-			}
-		}
-		if (cape) {
-			synchronized (capeLock) {
-				this.cape = null;
-			}
-		}
-	}
-
+    /*
+     * WARNING - Removed try catching itself - possible behaviour change.
+     */
+    void onDropPartial(boolean skin, boolean cape) {
+        Object object;
+        if (skin) {
+            object = this.skinLock;
+            synchronized (object) {
+                this.skin = null;
+            }
+        }
+        if (cape) {
+            object = this.capeLock;
+            synchronized (object) {
+                this.cape = null;
+            }
+        }
+    }
 }
+

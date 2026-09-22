@@ -53,7 +53,7 @@ public class Varint21FrameDecoder extends ByteToMessageDecoder {
 				if (in.readableBytes() < length) {
 					in.resetReaderIndex();
 				} else {
-					out.add(in.readRetainedSlice(length));
+					out.add(in.readSlice(length).retain());
 				}
 				return;
 			}

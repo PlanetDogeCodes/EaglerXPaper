@@ -25,7 +25,7 @@ import java.security.cert.X509Certificate;
 
 import io.netty.buffer.ByteBufAllocator;
 import io.netty.handler.ssl.SslContext;
-import io.netty.handler.ssl.SslContextBuilder;
+import net.lax1dude.eaglercraft.backend.server.base.SslCompat;
 import io.netty.handler.ssl.SslHandler;
 import net.lax1dude.eaglercraft.backend.server.api.IEaglerListenerInfo;
 import net.lax1dude.eaglercraft.backend.server.api.ITLSManager;
@@ -48,7 +48,7 @@ public class SSLContextHolderPlugin implements ISSLContextProvider, ITLSManager 
         @Override
         public void setCertificate(File fullChain, File privateKey, String privateKeyPassword) throws TLSManagerException {
                 try {
-                        ctx = SslContextBuilder.forServer(fullChain, privateKey, privateKeyPassword).build();
+                        ctx = SslCompat.forServer(fullChain, privateKey, privateKeyPassword);
                 } catch (Exception ex) {
                         throw propigateTLSManagerException(ex);
                 }
@@ -58,7 +58,7 @@ public class SSLContextHolderPlugin implements ISSLContextProvider, ITLSManager 
         public void setCertificate(InputStream fullChain, InputStream privateKey, String privateKeyPassword)
                         throws TLSManagerException {
                 try {
-                        ctx = SslContextBuilder.forServer(fullChain, privateKey, privateKeyPassword).build();
+                        ctx = SslCompat.forServer(fullChain, privateKey, privateKeyPassword);
                 } catch (Exception ex) {
                         throw propigateTLSManagerException(ex);
                 }
@@ -68,8 +68,7 @@ public class SSLContextHolderPlugin implements ISSLContextProvider, ITLSManager 
         public void setCertificate(byte[] fullChain, byte[] privateKey, String privateKeyPassword)
                         throws TLSManagerException {
                 try {
-                        ctx = SslContextBuilder.forServer(new ByteArrayInputStream(fullChain), new ByteArrayInputStream(privateKey),
-                                        privateKeyPassword).build();
+                        ctx = SslCompat.forServer(new ByteArrayInputStream(fullChain), new ByteArrayInputStream(privateKey), privateKeyPassword);
                 } catch (Exception ex) {
                         throw propigateTLSManagerException(ex);
                 }
@@ -79,7 +78,7 @@ public class SSLContextHolderPlugin implements ISSLContextProvider, ITLSManager 
         public void setCertificate(X509Certificate[] fullChain, PrivateKey privateKey, String privateKeyPassword)
                         throws TLSManagerException {
                 try {
-                        ctx = SslContextBuilder.forServer(privateKey, privateKeyPassword, fullChain).build();
+                        ctx = SslCompat.forServer(privateKey, privateKeyPassword, fullChain);
                 } catch (Exception ex) {
                         throw propigateTLSManagerException(ex);
                 }

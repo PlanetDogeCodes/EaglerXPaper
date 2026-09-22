@@ -58,7 +58,7 @@ public class CPacketSvRPCExecuteAll implements EaglerSupervisorPacket, IRefCount
 			requestUUID = null;
 		}
 		nameLength = buffer.readUnsignedByte();
-		payload = buffer.readRetainedSlice(buffer.readUnsignedMedium());
+		payload = buffer.readSlice(buffer.readUnsignedMedium()).retain();
 	}
 
 	@Override
@@ -69,7 +69,7 @@ public class CPacketSvRPCExecuteAll implements EaglerSupervisorPacket, IRefCount
 			buffer.writeLong(requestUUID.getLeastSignificantBits());
 		}
 		if (injected != null) {
-			buffer.writeIntLE(0);
+			buffer.writeInt(Integer.reverseBytes(0));
 			int pos = buffer.writerIndex();
 			buffer.setByte(pos - 4, injected.writePayload(buffer));
 			buffer.setMedium(pos - 3, buffer.writerIndex() - pos);

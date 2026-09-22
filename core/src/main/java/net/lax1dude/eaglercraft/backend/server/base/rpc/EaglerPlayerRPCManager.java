@@ -1,68 +1,51 @@
 /*
- * Copyright (c) 2025 lax1dude. All Rights Reserved.
- * 
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
- * IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT,
- * INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
- * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
- * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
- * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
- * 
+ * Decompiled with CFR 0.152.
  */
-
 package net.lax1dude.eaglercraft.backend.server.base.rpc;
 
+import java.util.UUID;
 import java.util.stream.Collectors;
-
 import net.lax1dude.eaglercraft.backend.rpc.protocol.EaglerBackendRPCProtocol;
 import net.lax1dude.eaglercraft.backend.rpc.protocol.pkt.server.SPacketRPCEnabledSuccess;
 import net.lax1dude.eaglercraft.backend.rpc.protocol.pkt.server.SPacketRPCEnabledSuccessEaglerV2;
 import net.lax1dude.eaglercraft.backend.server.base.EaglerPlayerInstance;
+import net.lax1dude.eaglercraft.backend.server.base.rpc.BackendRPCService;
+import net.lax1dude.eaglercraft.backend.server.base.rpc.BasePlayerRPCManager;
+import net.lax1dude.eaglercraft.backend.server.base.rpc.EaglerPlayerRPCContext;
 
-public class EaglerPlayerRPCManager<PlayerObject> extends BasePlayerRPCManager<PlayerObject> {
+public class EaglerPlayerRPCManager<PlayerObject>
+extends BasePlayerRPCManager<PlayerObject> {
+    private final EaglerPlayerInstance<PlayerObject> player;
 
-	private final EaglerPlayerInstance<PlayerObject> player;
+    EaglerPlayerRPCManager(BackendRPCService<PlayerObject> service, EaglerPlayerInstance<PlayerObject> player) {
+        super(service);
+        this.player = player;
+    }
 
-	EaglerPlayerRPCManager(BackendRPCService<PlayerObject> service, EaglerPlayerInstance<PlayerObject> player) {
-		super(service);
-		this.player = player;
-	}
+    @Override
+    public EaglerPlayerInstance<PlayerObject> getPlayer() {
+        return this.player;
+    }
 
-	@Override
-	public EaglerPlayerInstance<PlayerObject> getPlayer() {
-		return player;
-	}
+    @Override
+    public boolean isEaglerPlayer() {
+        return true;
+    }
 
-	@Override
-	public boolean isEaglerPlayer() {
-		return true;
-	}
+    @Override
+    protected void handleEnabled(EaglerBackendRPCProtocol protocol) {
+        if (protocol == EaglerBackendRPCProtocol.V1) {
+            this.sendRPCInitPacket(new SPacketRPCEnabledSuccess(protocol.vers, this.player.getEaglerProtocol().ver));
+        } else {
+            this.sendRPCInitPacket(new SPacketRPCEnabledSuccessEaglerV2(protocol.vers, this.player.getMinecraftProtocol(), this.player.getEaglerXServer().getSupervisorService().getNodeId(), this.player.getHandshakeEaglerProtocol(), this.player.getEaglerProtocol().ver, this.player.getRewindProtocolVersion(), this.player.getCapabilityMask(), this.player.getCapabilityVers(), this.player.getExtCapabilities().entrySet().stream().map(etr -> new SPacketRPCEnabledSuccessEaglerV2.ExtCapability((UUID)etr.getKey(), (int)((Byte)etr.getValue() & 0xFF))).collect(Collectors.toList())));
+        }
+        this.handleEnableContext(new EaglerPlayerRPCContext(this, protocol));
+    }
 
-	@Override
-	protected void handleEnabled(EaglerBackendRPCProtocol protocol) {
-		if (protocol == EaglerBackendRPCProtocol.V1) {
-			sendRPCInitPacket(new SPacketRPCEnabledSuccess(protocol.vers, player.getEaglerProtocol().ver));
-		} else {
-			sendRPCInitPacket(new SPacketRPCEnabledSuccessEaglerV2(protocol.vers, player.getMinecraftProtocol(),
-					player.getEaglerXServer().getSupervisorService().getNodeId(), player.getHandshakeEaglerProtocol(),
-					player.getEaglerProtocol().ver, player.getRewindProtocolVersion(), player.getCapabilityMask(),
-					player.getCapabilityVers(),
-					player.getExtCapabilities().entrySet().stream()
-							.map((etr) -> new SPacketRPCEnabledSuccessEaglerV2.ExtCapability(etr.getKey(),
-									etr.getValue() & 0xFF))
-							.collect(Collectors.toList())));
-		}
-		handleEnableContext(new EaglerPlayerRPCContext<>(this, protocol));
-	}
-
-	@Override
-	protected void sendReadyMessage() {
-		int renderDistance = player.getEaglerXServer().getConfig().getSettings().getEaglerPlayersViewDistance();
-		player.getPlatformPlayer().sendDataBackend(service.getReadyChannel(),
-				new byte[] { (byte) 1, (byte) renderDistance });
-	}
+    @Override
+    protected void sendReadyMessage() {
+        int renderDistance = this.player.getEaglerXServer().getConfig().getSettings().getEaglerPlayersViewDistance();
+        this.player.getPlatformPlayer().sendDataBackend(this.service.getReadyChannel(), new byte[]{1, (byte)renderDistance});
+    }
 }
+

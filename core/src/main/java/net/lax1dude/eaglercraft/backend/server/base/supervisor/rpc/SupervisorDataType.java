@@ -1,73 +1,61 @@
 /*
- * Copyright (c) 2025 lax1dude. All Rights Reserved.
+ * Decompiled with CFR 0.152.
  * 
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
- * IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT,
- * INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
- * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
- * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
- * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
- * 
+ * Could not load the following classes:
+ *  com.google.common.cache.CacheBuilder
+ *  com.google.common.cache.CacheLoader
+ *  com.google.common.cache.LoadingCache
  */
-
 package net.lax1dude.eaglercraft.backend.server.base.supervisor.rpc;
-
-import java.lang.reflect.Constructor;
-import java.util.concurrent.ExecutionException;
 
 import com.google.common.cache.CacheBuilder;
 import com.google.common.cache.CacheLoader;
 import com.google.common.cache.LoadingCache;
-
+import java.lang.reflect.Constructor;
+import java.util.concurrent.ExecutionException;
 import net.lax1dude.eaglercraft.backend.server.api.supervisor.data.ISupervisorData;
 import net.lax1dude.eaglercraft.backend.server.api.supervisor.data.SupervisorDataVoid;
 
 class SupervisorDataType {
+    private static final LoadingCache<Class<? extends ISupervisorData>, SupervisorDataType> dataTypeCache = CacheBuilder.newBuilder().weakKeys().weakValues().build((CacheLoader)new CacheLoader<Class<? extends ISupervisorData>, SupervisorDataType>(){
 
-	private static final LoadingCache<Class<? extends ISupervisorData>, SupervisorDataType> dataTypeCache = CacheBuilder
-			.newBuilder().weakKeys().weakValues()
-			.build(new CacheLoader<Class<? extends ISupervisorData>, SupervisorDataType>() {
-				@Override
-				public SupervisorDataType load(Class<? extends ISupervisorData> var1) throws Exception {
-					return new SupervisorDataType(var1);
-				}
-			});
+        public SupervisorDataType load(Class<? extends ISupervisorData> var1) throws Exception {
+            return new SupervisorDataType(var1);
+        }
+    });
+    static final SupervisorDataType VOID_TYPE = new SupervisorDataType();
+    protected final Class<? extends ISupervisorData> clazz;
+    protected final Constructor<? extends ISupervisorData> ctor;
 
-	static final SupervisorDataType VOID_TYPE = new SupervisorDataType();
+    private SupervisorDataType(Class<? extends ISupervisorData> clazz) {
+        this.clazz = clazz;
+        try {
+            this.ctor = clazz.getConstructor(new Class[0]);
+        }
+        catch (NoSuchMethodException | SecurityException e) {
+            throw new IllegalArgumentException("Data class must define a default constructor with zero arguments!");
+        }
+    }
 
-	protected final Class<? extends ISupervisorData> clazz;
-	protected final Constructor<? extends ISupervisorData> ctor;
+    private SupervisorDataType() {
+        this.clazz = SupervisorDataVoid.class;
+        this.ctor = null;
+    }
 
-	private SupervisorDataType(Class<? extends ISupervisorData> clazz) {
-		this.clazz = clazz;
-		try {
-			this.ctor = clazz.getConstructor();
-		} catch (NoSuchMethodException | SecurityException e) {
-			throw new IllegalArgumentException("Data class must define a default constructor with zero arguments!");
-		}
-	}
-
-	private SupervisorDataType() {
-		this.clazz = SupervisorDataVoid.class;
-		this.ctor = null;
-	}
-
-	static SupervisorDataType provideType(Class<? extends ISupervisorData> clazz) {
-		if (clazz == SupervisorDataVoid.class) {
-			return VOID_TYPE;
-		} else {
-			try {
-				return dataTypeCache.get(clazz);
-			} catch (ExecutionException e) {
-				if (e.getCause() instanceof RuntimeException ee)
-					throw ee;
-				throw new RuntimeException(e.getCause());
-			}
-		}
-	}
-
+    static SupervisorDataType provideType(Class<? extends ISupervisorData> clazz) {
+        if (clazz == SupervisorDataVoid.class) {
+            return VOID_TYPE;
+        }
+        try {
+            return (SupervisorDataType)dataTypeCache.get(clazz);
+        }
+        catch (ExecutionException e) {
+            Throwable cause = e.getCause();
+            if (cause instanceof RuntimeException) {
+                throw (RuntimeException)cause;
+            }
+            throw new RuntimeException(cause);
+        }
+    }
 }
+

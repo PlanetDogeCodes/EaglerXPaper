@@ -3,70 +3,82 @@ def localLibsFolder = uri(file("gradle/local-libs"));
 
 subprojects {
 
-	apply plugin: "eclipse"
+        apply plugin: "eclipse"
 
-	repositories {
-		mavenCentral()
-		maven {
-			name = "papermc"
-			url = uri("https://repo.papermc.io/repository/maven-public/")
-		}
-		maven {
-			name = "spigotmc"
-			url = uri("https://hub.spigotmc.org/nexus/content/repositories/snapshots/")
-		}
-		maven {
-			name = "codemc"
-			url = uri("https://repo.codemc.org/repository/maven-public/")
-		}
-		maven {
-			name = "sonatype-oss"
-			url = uri("https://oss.sonatype.org/content/repositories/snapshots/")
-		}
-		maven {
-			name = "eagler-local"
-			url = localLibsFolder
-		}
-	}
+        repositories {
+                mavenCentral()
+                maven {
+                        name = "papermc"
+                        url = uri("https://repo.papermc.io/repository/maven-public/")
+                }
+                maven {
+                        name = "spigotmc"
+                        url = uri("https://hub.spigotmc.org/nexus/content/repositories/snapshots/")
+                }
+                maven {
+                        name = "codemc"
+                        url = uri("https://repo.codemc.org/repository/maven-public/")
+                }
+                maven {
+                        name = "sonatype-oss"
+                        url = uri("https://oss.sonatype.org/content/repositories/snapshots/")
+                }
+                maven {
+                        name = "eagler-local"
+                        url = localLibsFolder
+                }
+        }
 
-	group = providers.gradleProperty("eaglerxserver.group").get()
-	version = providers.gradleProperty("eaglerxserver.version").get()
+        group = providers.gradleProperty("eaglerxserver.group").get()
+        version = providers.gradleProperty("eaglerxserver.version").get()
 
-	plugins.withId("java") {
+        plugins.withId("java") {
 
-		java {
-			toolchain {
-				languageVersion = JavaLanguageVersion.of(17)
-			}
-		}
+                java {
+                        toolchain {
+                                languageVersion = JavaLanguageVersion.of(17)
+                        }
+                }
 
-		// https://github.com/gradle/gradle/issues/32284
-		sourceSets.configureEach {
-			def eclipseCompileClasspath = configurations.resolvable(getTaskName(null, "eclipseCompileClasspath")) {
-				def compileClasspath = configurations.getByName(getCompileClasspathConfigurationName())
-					extendsFrom(compileClasspath)
-					attributes {
-						compileClasspath.attributes.keySet().each { key ->
-						attribute((Attribute) key, compileClasspath.attributes.getAttribute(key))
-					}
-					attribute(LibraryElements.LIBRARY_ELEMENTS_ATTRIBUTE, objects.named(LibraryElements, LibraryElements.JAR))
-				}
-			}
-			eclipse {
-				classpath {
-					plusConfigurations.add(eclipseCompileClasspath.get())
-				}
-			}
-		}
+                def java8Modules = [":api", ":api-bukkit", ":core-config", ":protocol-game", ":skin-cache", ":skin-cache:sqlite-jdbc-jar", ":supervisor-protocol", ":voice-rpc-protocol", ":backend-rpc-protocol", ":core", ":core:core-platform-bukkit", ":core:core-platform-bungee-chat", ":stubs"] as Set
+                if (java8Modules.contains(project.path)) {
+                        tasks.withType(JavaCompile).configureEach {
+                                options.release = 8
+                        }
+                        configurations.configureEach {
+                                attributes {
+                                        attribute(org.gradle.api.attributes.java.TargetJvmVersion.TARGET_JVM_VERSION_ATTRIBUTE, 17)
+                                }
+                        }
+                }
 
-	}
+                // https://github.com/gradle/gradle/issues/32284
+                sourceSets.configureEach {
+                        def eclipseCompileClasspath = configurations.resolvable(getTaskName(null, "eclipseCompileClasspath")) {
+                                def compileClasspath = configurations.getByName(getCompileClasspathConfigurationName())
+                                        extendsFrom(compileClasspath)
+                                        attributes {
+                                                compileClasspath.attributes.keySet().each { key ->
+                                                attribute((Attribute) key, compileClasspath.attributes.getAttribute(key))
+                                        }
+                                        attribute(LibraryElements.LIBRARY_ELEMENTS_ATTRIBUTE, objects.named(LibraryElements, LibraryElements.JAR))
+                                }
+                        }
+                        eclipse {
+                                classpath {
+                                        plusConfigurations.add(eclipseCompileClasspath.get())
+                                }
+                        }
+                }
 
-	tasks.withType(JavaCompile).configureEach {
-		options.encoding = "UTF-8"
-	}
+        }
 
-	tasks.withType(Javadoc).configureEach {
-		options.encoding = "UTF-8"
-	}
+        tasks.withType(JavaCompile).configureEach {
+                options.encoding = "UTF-8"
+        }
+
+        tasks.withType(Javadoc).configureEach {
+                options.encoding = "UTF-8"
+        }
 
 }

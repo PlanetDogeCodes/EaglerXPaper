@@ -54,6 +54,12 @@ public class InjectedMessageController extends MessageController {
                 // pipeline mutation must happen on the channel's event loop
                 Runnable r = () -> {
                         try {
+                                if (channel.pipeline().get(PipelineTransformer.HANDLER_FRAME_CODEC) == null) {
+                                        return;
+                                }
+                                if (channel.pipeline().get(PipelineTransformer.HANDLER_INJECTED) != null) {
+                                        return;
+                                }
                                 channel.pipeline().addAfter(PipelineTransformer.HANDLER_FRAME_CODEC,
                                                 PipelineTransformer.HANDLER_INJECTED,
                                                 new EaglerInjectedMessageHandler(controller));
@@ -208,7 +214,7 @@ public class InjectedMessageController extends MessageController {
                                                         }
                                                         if (sendCount <= 1) {
                                                                 i = start << 1;
-                                                                output.add(buf.retainedSlice(marks[i] - 1, marks[i + 1] + 1));
+                                                                output.add(buf.slice(marks[i] - 1, marks[i + 1] + 1).retain());
                                                                 shit = false;
                                                                 ++start;
                                                                 continue;

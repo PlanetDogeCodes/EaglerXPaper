@@ -62,7 +62,7 @@ public class CPacketSvRPCExecuteNode implements EaglerSupervisorPacket, IRefCoun
 		}
 		nodeId = EaglerSupervisorPacket.readVarInt(buffer);
 		nameLength = buffer.readUnsignedByte();
-		payload = buffer.readRetainedSlice(buffer.readUnsignedMedium());
+		payload = buffer.readSlice(buffer.readUnsignedMedium()).retain();
 	}
 
 	@Override
@@ -74,7 +74,7 @@ public class CPacketSvRPCExecuteNode implements EaglerSupervisorPacket, IRefCoun
 		}
 		EaglerSupervisorPacket.writeVarInt(buffer, nodeId);
 		if (injected != null) {
-			buffer.writeIntLE(0);
+			buffer.writeInt(Integer.reverseBytes(0));
 			int pos = buffer.writerIndex();
 			buffer.setByte(pos - 4, injected.writePayload(buffer));
 			buffer.setMedium(pos - 3, buffer.writerIndex() - pos);

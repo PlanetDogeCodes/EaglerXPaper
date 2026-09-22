@@ -1,19 +1,6 @@
 /*
- * Copyright (c) 2024 lax1dude. All Rights Reserved.
- * 
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
- * IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT,
- * INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
- * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
- * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
- * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
- * 
+ * Decompiled with CFR 0.152.
  */
-
 package net.lax1dude.eaglercraft.backend.rpc.protocol;
 
 import java.io.DataInput;
@@ -23,186 +10,153 @@ import java.lang.reflect.Constructor;
 import java.lang.reflect.InvocationTargetException;
 import java.util.HashMap;
 import java.util.Map;
-
 import net.lax1dude.eaglercraft.backend.rpc.protocol.pkt.EaglerBackendRPCPacket;
-import net.lax1dude.eaglercraft.backend.rpc.protocol.pkt.client.*;
-import net.lax1dude.eaglercraft.backend.rpc.protocol.pkt.server.*;
+import net.lax1dude.eaglercraft.backend.rpc.protocol.pkt.client.CPacketRPCDisabled;
+import net.lax1dude.eaglercraft.backend.rpc.protocol.pkt.client.CPacketRPCDisplayWebViewAliasV2;
+import net.lax1dude.eaglercraft.backend.rpc.protocol.pkt.client.CPacketRPCDisplayWebViewBlobV2;
+import net.lax1dude.eaglercraft.backend.rpc.protocol.pkt.client.CPacketRPCDisplayWebViewURLV2;
+import net.lax1dude.eaglercraft.backend.rpc.protocol.pkt.client.CPacketRPCEnabled;
+import net.lax1dude.eaglercraft.backend.rpc.protocol.pkt.client.CPacketRPCGetCapeByURLV2;
+import net.lax1dude.eaglercraft.backend.rpc.protocol.pkt.client.CPacketRPCGetSkinByURLV2;
+import net.lax1dude.eaglercraft.backend.rpc.protocol.pkt.client.CPacketRPCInjectRawBinaryFrameV2;
+import net.lax1dude.eaglercraft.backend.rpc.protocol.pkt.client.CPacketRPCNotifBadgeHide;
+import net.lax1dude.eaglercraft.backend.rpc.protocol.pkt.client.CPacketRPCNotifBadgeShow;
+import net.lax1dude.eaglercraft.backend.rpc.protocol.pkt.client.CPacketRPCNotifIconRegister;
+import net.lax1dude.eaglercraft.backend.rpc.protocol.pkt.client.CPacketRPCNotifIconRelease;
+import net.lax1dude.eaglercraft.backend.rpc.protocol.pkt.client.CPacketRPCRedirectPlayer;
+import net.lax1dude.eaglercraft.backend.rpc.protocol.pkt.client.CPacketRPCRequestPlayerInfo;
+import net.lax1dude.eaglercraft.backend.rpc.protocol.pkt.client.CPacketRPCResetPlayerMulti;
+import net.lax1dude.eaglercraft.backend.rpc.protocol.pkt.client.CPacketRPCSendRawMessage;
+import net.lax1dude.eaglercraft.backend.rpc.protocol.pkt.client.CPacketRPCSendWebViewMessage;
+import net.lax1dude.eaglercraft.backend.rpc.protocol.pkt.client.CPacketRPCSetPauseMenuCustom;
+import net.lax1dude.eaglercraft.backend.rpc.protocol.pkt.client.CPacketRPCSetPlayerCape;
+import net.lax1dude.eaglercraft.backend.rpc.protocol.pkt.client.CPacketRPCSetPlayerCapePresetV2;
+import net.lax1dude.eaglercraft.backend.rpc.protocol.pkt.client.CPacketRPCSetPlayerCookie;
+import net.lax1dude.eaglercraft.backend.rpc.protocol.pkt.client.CPacketRPCSetPlayerFNAWEn;
+import net.lax1dude.eaglercraft.backend.rpc.protocol.pkt.client.CPacketRPCSetPlayerSkin;
+import net.lax1dude.eaglercraft.backend.rpc.protocol.pkt.client.CPacketRPCSetPlayerSkinPresetV2;
+import net.lax1dude.eaglercraft.backend.rpc.protocol.pkt.client.CPacketRPCSetPlayerTexturesPresetV2;
+import net.lax1dude.eaglercraft.backend.rpc.protocol.pkt.client.CPacketRPCSetPlayerTexturesV2;
+import net.lax1dude.eaglercraft.backend.rpc.protocol.pkt.client.CPacketRPCSubscribeEvents;
+import net.lax1dude.eaglercraft.backend.rpc.protocol.pkt.server.SPacketRPCEnabledFailure;
+import net.lax1dude.eaglercraft.backend.rpc.protocol.pkt.server.SPacketRPCEnabledSuccess;
+import net.lax1dude.eaglercraft.backend.rpc.protocol.pkt.server.SPacketRPCEnabledSuccessEaglerV2;
+import net.lax1dude.eaglercraft.backend.rpc.protocol.pkt.server.SPacketRPCEnabledSuccessVanillaV2;
+import net.lax1dude.eaglercraft.backend.rpc.protocol.pkt.server.SPacketRPCEventToggledVoice;
+import net.lax1dude.eaglercraft.backend.rpc.protocol.pkt.server.SPacketRPCEventWebViewMessage;
+import net.lax1dude.eaglercraft.backend.rpc.protocol.pkt.server.SPacketRPCEventWebViewOpenClose;
+import net.lax1dude.eaglercraft.backend.rpc.protocol.pkt.server.SPacketRPCResponseTypeBrandDataV2;
+import net.lax1dude.eaglercraft.backend.rpc.protocol.pkt.server.SPacketRPCResponseTypeBytes;
+import net.lax1dude.eaglercraft.backend.rpc.protocol.pkt.server.SPacketRPCResponseTypeCookie;
+import net.lax1dude.eaglercraft.backend.rpc.protocol.pkt.server.SPacketRPCResponseTypeError;
+import net.lax1dude.eaglercraft.backend.rpc.protocol.pkt.server.SPacketRPCResponseTypeIntegerSingleV2;
+import net.lax1dude.eaglercraft.backend.rpc.protocol.pkt.server.SPacketRPCResponseTypeIntegerTupleV2;
+import net.lax1dude.eaglercraft.backend.rpc.protocol.pkt.server.SPacketRPCResponseTypeNull;
+import net.lax1dude.eaglercraft.backend.rpc.protocol.pkt.server.SPacketRPCResponseTypeString;
+import net.lax1dude.eaglercraft.backend.rpc.protocol.pkt.server.SPacketRPCResponseTypeUUID;
+import net.lax1dude.eaglercraft.backend.rpc.protocol.pkt.server.SPacketRPCResponseTypeVoiceStatus;
+import net.lax1dude.eaglercraft.backend.rpc.protocol.pkt.server.SPacketRPCResponseTypeWebViewStatus;
+import net.lax1dude.eaglercraft.backend.rpc.protocol.pkt.server.SPacketRPCResponseTypeWebViewStatusV2;
 
 public enum EaglerBackendRPCProtocol {
-	INIT(0,
-			define_CLIENT_(0x00, CPacketRPCEnabled.class),
-			define_SERVER_(0x01, SPacketRPCEnabledSuccess.class),
-			define_SERVER_(0x02, SPacketRPCEnabledFailure.class),
-			define_SERVER_(0x03, SPacketRPCEnabledSuccessVanillaV2.class),
-			define_SERVER_(0x04, SPacketRPCEnabledSuccessEaglerV2.class)
-	), V1(1,
-			define_CLIENT_(0x03, CPacketRPCDisabled.class),
-			define_CLIENT_(0x04, CPacketRPCRequestPlayerInfo.class),
-			define_CLIENT_(0x05, CPacketRPCSubscribeEvents.class),
-			define_CLIENT_(0x06, CPacketRPCSetPlayerSkin.class),
-			define_CLIENT_(0x07, CPacketRPCSetPlayerCape.class),
-			define_CLIENT_(0x08, CPacketRPCSetPlayerCookie.class),
-			define_CLIENT_(0x09, CPacketRPCSetPlayerFNAWEn.class),
-			define_CLIENT_(0x0A, CPacketRPCSetPauseMenuCustom.class),
-			define_CLIENT_(0x0B, CPacketRPCRedirectPlayer.class),
-			define_CLIENT_(0x0C, CPacketRPCResetPlayerMulti.class),
-			define_SERVER_(0x0D, SPacketRPCResponseTypeNull.class),
-			define_SERVER_(0x0E, SPacketRPCResponseTypeBytes.class),
-			define_SERVER_(0x0F, SPacketRPCResponseTypeString.class),
-			define_SERVER_(0x10, SPacketRPCResponseTypeUUID.class),
-			define_SERVER_(0x11, SPacketRPCResponseTypeCookie.class),
-			define_SERVER_(0x12, SPacketRPCResponseTypeVoiceStatus.class),
-			define_SERVER_(0x13, SPacketRPCResponseTypeWebViewStatus.class),
-			define_SERVER_(0x14, SPacketRPCResponseTypeError.class),
-			define_CLIENT_(0x15, CPacketRPCSendWebViewMessage.class),
-			define_SERVER_(0x16, SPacketRPCEventWebViewOpenClose.class),
-			define_SERVER_(0x17, SPacketRPCEventWebViewMessage.class),
-			define_SERVER_(0x18, SPacketRPCEventToggledVoice.class),
-			define_CLIENT_(0x19, CPacketRPCNotifIconRegister.class),
-			define_CLIENT_(0x1A, CPacketRPCNotifIconRelease.class),
-			define_CLIENT_(0x1B, CPacketRPCNotifBadgeShow.class),
-			define_CLIENT_(0x1C, CPacketRPCNotifBadgeHide.class),
-			define_CLIENT_(0x1D, CPacketRPCSendRawMessage.class)
-	), V2(2,
-			// client-to-server
-			define_CLIENT_(0x01, CPacketRPCDisabled.class),
-			define_CLIENT_(0x02, CPacketRPCRequestPlayerInfo.class),
-			define_CLIENT_(0x03, CPacketRPCSubscribeEvents.class),
-			define_CLIENT_(0x04, CPacketRPCSetPlayerSkin.class),
-			define_CLIENT_(0x05, CPacketRPCSetPlayerSkinPresetV2.class),
-			define_CLIENT_(0x06, CPacketRPCSetPlayerCape.class),
-			define_CLIENT_(0x07, CPacketRPCSetPlayerCapePresetV2.class),
-			define_CLIENT_(0x08, CPacketRPCSetPlayerTexturesV2.class),
-			define_CLIENT_(0x09, CPacketRPCSetPlayerTexturesPresetV2.class),
-			define_CLIENT_(0x0A, CPacketRPCSetPlayerCookie.class),
-			define_CLIENT_(0x0B, CPacketRPCSetPlayerFNAWEn.class),
-			define_CLIENT_(0x0C, CPacketRPCSetPauseMenuCustom.class),
-			define_CLIENT_(0x0D, CPacketRPCRedirectPlayer.class),
-			define_CLIENT_(0x0E, CPacketRPCResetPlayerMulti.class),
-			define_CLIENT_(0x0F, CPacketRPCSendWebViewMessage.class),
-			define_CLIENT_(0x10, CPacketRPCNotifIconRegister.class),
-			define_CLIENT_(0x11, CPacketRPCNotifIconRelease.class),
-			define_CLIENT_(0x12, CPacketRPCNotifBadgeShow.class),
-			define_CLIENT_(0x13, CPacketRPCNotifBadgeHide.class),
-			define_CLIENT_(0x14, CPacketRPCSendRawMessage.class),
-			define_CLIENT_(0x15, CPacketRPCInjectRawBinaryFrameV2.class),
-			define_CLIENT_(0x16, CPacketRPCDisplayWebViewURLV2.class),
-			define_CLIENT_(0x17, CPacketRPCDisplayWebViewBlobV2.class),
-			define_CLIENT_(0x18, CPacketRPCDisplayWebViewAliasV2.class),
-			define_CLIENT_(0x19, CPacketRPCGetSkinByURLV2.class),
-			define_CLIENT_(0x1A, CPacketRPCGetCapeByURLV2.class),
-			
-			// server-to-client
-			define_SERVER_(0x01, SPacketRPCResponseTypeNull.class),
-			define_SERVER_(0x02, SPacketRPCResponseTypeBytes.class),
-			define_SERVER_(0x03, SPacketRPCResponseTypeIntegerSingleV2.class),
-			define_SERVER_(0x04, SPacketRPCResponseTypeIntegerTupleV2.class),
-			define_SERVER_(0x05, SPacketRPCResponseTypeString.class),
-			define_SERVER_(0x06, SPacketRPCResponseTypeBrandDataV2.class),
-			define_SERVER_(0x07, SPacketRPCResponseTypeUUID.class),
-			define_SERVER_(0x08, SPacketRPCResponseTypeCookie.class),
-			define_SERVER_(0x09, SPacketRPCResponseTypeVoiceStatus.class),
-			define_SERVER_(0x0A, SPacketRPCResponseTypeWebViewStatusV2.class),
-			define_SERVER_(0x0B, SPacketRPCResponseTypeError.class),
-			define_SERVER_(0x0C, SPacketRPCEventWebViewOpenClose.class),
-			define_SERVER_(0x0D, SPacketRPCEventWebViewMessage.class),
-			define_SERVER_(0x0E, SPacketRPCEventToggledVoice.class)
-	);
+    INIT(0, EaglerBackendRPCProtocol.define_CLIENT_(0, CPacketRPCEnabled.class), EaglerBackendRPCProtocol.define_SERVER_(1, SPacketRPCEnabledSuccess.class), EaglerBackendRPCProtocol.define_SERVER_(2, SPacketRPCEnabledFailure.class), EaglerBackendRPCProtocol.define_SERVER_(3, SPacketRPCEnabledSuccessVanillaV2.class), EaglerBackendRPCProtocol.define_SERVER_(4, SPacketRPCEnabledSuccessEaglerV2.class)),
+    V1(1, EaglerBackendRPCProtocol.define_CLIENT_(3, CPacketRPCDisabled.class), EaglerBackendRPCProtocol.define_CLIENT_(4, CPacketRPCRequestPlayerInfo.class), EaglerBackendRPCProtocol.define_CLIENT_(5, CPacketRPCSubscribeEvents.class), EaglerBackendRPCProtocol.define_CLIENT_(6, CPacketRPCSetPlayerSkin.class), EaglerBackendRPCProtocol.define_CLIENT_(7, CPacketRPCSetPlayerCape.class), EaglerBackendRPCProtocol.define_CLIENT_(8, CPacketRPCSetPlayerCookie.class), EaglerBackendRPCProtocol.define_CLIENT_(9, CPacketRPCSetPlayerFNAWEn.class), EaglerBackendRPCProtocol.define_CLIENT_(10, CPacketRPCSetPauseMenuCustom.class), EaglerBackendRPCProtocol.define_CLIENT_(11, CPacketRPCRedirectPlayer.class), EaglerBackendRPCProtocol.define_CLIENT_(12, CPacketRPCResetPlayerMulti.class), EaglerBackendRPCProtocol.define_SERVER_(13, SPacketRPCResponseTypeNull.class), EaglerBackendRPCProtocol.define_SERVER_(14, SPacketRPCResponseTypeBytes.class), EaglerBackendRPCProtocol.define_SERVER_(15, SPacketRPCResponseTypeString.class), EaglerBackendRPCProtocol.define_SERVER_(16, SPacketRPCResponseTypeUUID.class), EaglerBackendRPCProtocol.define_SERVER_(17, SPacketRPCResponseTypeCookie.class), EaglerBackendRPCProtocol.define_SERVER_(18, SPacketRPCResponseTypeVoiceStatus.class), EaglerBackendRPCProtocol.define_SERVER_(19, SPacketRPCResponseTypeWebViewStatus.class), EaglerBackendRPCProtocol.define_SERVER_(20, SPacketRPCResponseTypeError.class), EaglerBackendRPCProtocol.define_CLIENT_(21, CPacketRPCSendWebViewMessage.class), EaglerBackendRPCProtocol.define_SERVER_(22, SPacketRPCEventWebViewOpenClose.class), EaglerBackendRPCProtocol.define_SERVER_(23, SPacketRPCEventWebViewMessage.class), EaglerBackendRPCProtocol.define_SERVER_(24, SPacketRPCEventToggledVoice.class), EaglerBackendRPCProtocol.define_CLIENT_(25, CPacketRPCNotifIconRegister.class), EaglerBackendRPCProtocol.define_CLIENT_(26, CPacketRPCNotifIconRelease.class), EaglerBackendRPCProtocol.define_CLIENT_(27, CPacketRPCNotifBadgeShow.class), EaglerBackendRPCProtocol.define_CLIENT_(28, CPacketRPCNotifBadgeHide.class), EaglerBackendRPCProtocol.define_CLIENT_(29, CPacketRPCSendRawMessage.class)),
+    V2(2, EaglerBackendRPCProtocol.define_CLIENT_(1, CPacketRPCDisabled.class), EaglerBackendRPCProtocol.define_CLIENT_(2, CPacketRPCRequestPlayerInfo.class), EaglerBackendRPCProtocol.define_CLIENT_(3, CPacketRPCSubscribeEvents.class), EaglerBackendRPCProtocol.define_CLIENT_(4, CPacketRPCSetPlayerSkin.class), EaglerBackendRPCProtocol.define_CLIENT_(5, CPacketRPCSetPlayerSkinPresetV2.class), EaglerBackendRPCProtocol.define_CLIENT_(6, CPacketRPCSetPlayerCape.class), EaglerBackendRPCProtocol.define_CLIENT_(7, CPacketRPCSetPlayerCapePresetV2.class), EaglerBackendRPCProtocol.define_CLIENT_(8, CPacketRPCSetPlayerTexturesV2.class), EaglerBackendRPCProtocol.define_CLIENT_(9, CPacketRPCSetPlayerTexturesPresetV2.class), EaglerBackendRPCProtocol.define_CLIENT_(10, CPacketRPCSetPlayerCookie.class), EaglerBackendRPCProtocol.define_CLIENT_(11, CPacketRPCSetPlayerFNAWEn.class), EaglerBackendRPCProtocol.define_CLIENT_(12, CPacketRPCSetPauseMenuCustom.class), EaglerBackendRPCProtocol.define_CLIENT_(13, CPacketRPCRedirectPlayer.class), EaglerBackendRPCProtocol.define_CLIENT_(14, CPacketRPCResetPlayerMulti.class), EaglerBackendRPCProtocol.define_CLIENT_(15, CPacketRPCSendWebViewMessage.class), EaglerBackendRPCProtocol.define_CLIENT_(16, CPacketRPCNotifIconRegister.class), EaglerBackendRPCProtocol.define_CLIENT_(17, CPacketRPCNotifIconRelease.class), EaglerBackendRPCProtocol.define_CLIENT_(18, CPacketRPCNotifBadgeShow.class), EaglerBackendRPCProtocol.define_CLIENT_(19, CPacketRPCNotifBadgeHide.class), EaglerBackendRPCProtocol.define_CLIENT_(20, CPacketRPCSendRawMessage.class), EaglerBackendRPCProtocol.define_CLIENT_(21, CPacketRPCInjectRawBinaryFrameV2.class), EaglerBackendRPCProtocol.define_CLIENT_(22, CPacketRPCDisplayWebViewURLV2.class), EaglerBackendRPCProtocol.define_CLIENT_(23, CPacketRPCDisplayWebViewBlobV2.class), EaglerBackendRPCProtocol.define_CLIENT_(24, CPacketRPCDisplayWebViewAliasV2.class), EaglerBackendRPCProtocol.define_CLIENT_(25, CPacketRPCGetSkinByURLV2.class), EaglerBackendRPCProtocol.define_CLIENT_(26, CPacketRPCGetCapeByURLV2.class), EaglerBackendRPCProtocol.define_SERVER_(1, SPacketRPCResponseTypeNull.class), EaglerBackendRPCProtocol.define_SERVER_(2, SPacketRPCResponseTypeBytes.class), EaglerBackendRPCProtocol.define_SERVER_(3, SPacketRPCResponseTypeIntegerSingleV2.class), EaglerBackendRPCProtocol.define_SERVER_(4, SPacketRPCResponseTypeIntegerTupleV2.class), EaglerBackendRPCProtocol.define_SERVER_(5, SPacketRPCResponseTypeString.class), EaglerBackendRPCProtocol.define_SERVER_(6, SPacketRPCResponseTypeBrandDataV2.class), EaglerBackendRPCProtocol.define_SERVER_(7, SPacketRPCResponseTypeUUID.class), EaglerBackendRPCProtocol.define_SERVER_(8, SPacketRPCResponseTypeCookie.class), EaglerBackendRPCProtocol.define_SERVER_(9, SPacketRPCResponseTypeVoiceStatus.class), EaglerBackendRPCProtocol.define_SERVER_(10, SPacketRPCResponseTypeWebViewStatusV2.class), EaglerBackendRPCProtocol.define_SERVER_(11, SPacketRPCResponseTypeError.class), EaglerBackendRPCProtocol.define_SERVER_(12, SPacketRPCEventWebViewOpenClose.class), EaglerBackendRPCProtocol.define_SERVER_(13, SPacketRPCEventWebViewMessage.class), EaglerBackendRPCProtocol.define_SERVER_(14, SPacketRPCEventToggledVoice.class));
 
-	public static final String CHANNEL_NAME = "EAG|1.8-RPC";
-	public static final String CHANNEL_NAME_READY = "EAG|1.8-Ready";
+    public static final String CHANNEL_NAME = "EAG|1.8-RPC";
+    public static final String CHANNEL_NAME_READY = "EAG|1.8-Ready";
+    public static final String CHANNEL_NAME_MODERN = "eagler:1-8-rpc";
+    public static final String CHANNEL_NAME_READY_MODERN = "eagler:1-8-ready";
+    public static final int CLIENT_TO_SERVER = 0;
+    public static final int SERVER_TO_CLIENT = 1;
+    public final int vers;
+    private final PacketDef[][] idMap = new PacketDef[2][32];
+    private final Map<Class<? extends EaglerBackendRPCPacket>, PacketDef> classMap = new HashMap<Class<? extends EaglerBackendRPCPacket>, PacketDef>();
 
-	public static final String CHANNEL_NAME_MODERN = "eagler:1-8-rpc";
-	public static final String CHANNEL_NAME_READY_MODERN = "eagler:1-8-ready";
+    private EaglerBackendRPCProtocol(int vers, PacketDef ... pkts) {
+        this.vers = vers;
+        for (int i = 0; i < pkts.length; ++i) {
+            PacketDef def = pkts[i];
+            if (this.idMap[def.dir][def.id] != null) {
+                throw new IllegalArgumentException("Packet ID " + def.id + " registered twice!");
+            }
+            this.idMap[((PacketDef)def).dir][((PacketDef)def).id] = def;
+            if (this.classMap.put(def.pkt, def) == null) continue;
+            throw new IllegalArgumentException("Packet class " + def.pkt.getSimpleName() + " registered twice!");
+        }
+    }
 
-	public static final int CLIENT_TO_SERVER = 0;
-	public static final int SERVER_TO_CLIENT = 1;
+    private static PacketDef define_CLIENT_(int id, Class<? extends EaglerBackendRPCPacket> pkt) {
+        return new PacketDef(id, 0, pkt);
+    }
 
-	public final int vers;
+    private static PacketDef define_SERVER_(int id, Class<? extends EaglerBackendRPCPacket> pkt) {
+        return new PacketDef(id, 1, pkt);
+    }
 
-	private final PacketDef[][] idMap = new PacketDef[2][32]; // May need to grow this in the future
-	private final Map<Class<? extends EaglerBackendRPCPacket>, PacketDef> classMap = new HashMap<>();
+    public EaglerBackendRPCPacket readPacket(DataInput buffer, int dir) throws IOException {
+        EaglerBackendRPCPacket newPkt;
+        PacketDef[] defs;
+        int pktId = buffer.readUnsignedByte();
+        if (pktId >= (defs = this.idMap[dir]).length) {
+            throw new IOException("Packet ID is out of range: 0x" + Integer.toHexString(pktId));
+        }
+        PacketDef pp = defs[pktId];
+        if (pp == null) {
+            throw new IOException("Unknown packet ID: 0x" + Integer.toHexString(pktId));
+        }
+        try {
+            newPkt = (EaglerBackendRPCPacket)pp.ctor.newInstance(new Object[0]);
+        }
+        catch (IllegalAccessException | IllegalArgumentException | InstantiationException | InvocationTargetException e) {
+            throw new RuntimeException(e);
+        }
+        newPkt.readPacket(buffer);
+        return newPkt;
+    }
 
-	private EaglerBackendRPCProtocol(int vers, PacketDef... pkts) {
-		this.vers = vers;
-		for (int i = 0; i < pkts.length; ++i) {
-			PacketDef def = pkts[i];
-			if (idMap[def.dir][def.id] != null) {
-				throw new IllegalArgumentException("Packet ID " + def.id + " registered twice!");
-			}
-			idMap[def.dir][def.id] = def;
-			if (classMap.put(def.pkt, def) != null) {
-				throw new IllegalArgumentException("Packet class " + def.pkt.getSimpleName() + " registered twice!");
-			}
-		}
-	}
+    public void writePacket(DataOutput buffer, int dir, EaglerBackendRPCPacket packet) throws IOException {
+        Class<?> clazz = packet.getClass();
+        PacketDef def = this.classMap.get(clazz);
+        if (def == null || def.dir != dir) {
+            throw new IOException("Unknown packet type or wrong direction: " + clazz);
+        }
+        buffer.writeByte(def.id);
+        packet.writePacket(buffer);
+    }
 
-	private static PacketDef define_CLIENT_(int id, Class<? extends EaglerBackendRPCPacket> pkt) {
-		return new PacketDef(id, CLIENT_TO_SERVER, pkt);
-	}
+    public static EaglerBackendRPCProtocol getByID(int id) {
+        switch (id) {
+            case 0: {
+                return INIT;
+            }
+            case 1: {
+                return V1;
+            }
+            case 2: {
+                return V2;
+            }
+        }
+        return null;
+    }
 
-	private static PacketDef define_SERVER_(int id, Class<? extends EaglerBackendRPCPacket> pkt) {
-		return new PacketDef(id, SERVER_TO_CLIENT, pkt);
-	}
+    private static class PacketDef {
+        private final int id;
+        private final int dir;
+        private final Class<? extends EaglerBackendRPCPacket> pkt;
+        private final Constructor<? extends EaglerBackendRPCPacket> ctor;
 
-	private static class PacketDef {
-
-		private final int id;
-		private final int dir;
-		private final Class<? extends EaglerBackendRPCPacket> pkt;
-		private final Constructor<? extends EaglerBackendRPCPacket> ctor;
-
-		private PacketDef(int id, int dir, Class<? extends EaglerBackendRPCPacket> pkt) {
-			this.id = id;
-			this.dir = dir;
-			this.pkt = pkt;
-			try {
-				this.ctor = pkt.getConstructor();
-			} catch (NoSuchMethodException | SecurityException e) {
-				throw new RuntimeException("Packet does not have a default constructor: " + pkt.getName(), e);
-			}
-		}
-
-	}
-
-	public EaglerBackendRPCPacket readPacket(DataInput buffer, int dir) throws IOException {
-		int pktId = buffer.readUnsignedByte();
-		PacketDef[] defs = idMap[dir];
-		if (pktId >= defs.length) {
-			throw new IOException("Packet ID is out of range: 0x" + Integer.toHexString(pktId));
-		}
-		PacketDef pp = defs[pktId];
-		if (pp == null) {
-			throw new IOException("Unknown packet ID: 0x" + Integer.toHexString(pktId));
-		}
-		EaglerBackendRPCPacket newPkt;
-		try {
-			newPkt = pp.ctor.newInstance();
-		} catch (InstantiationException | IllegalAccessException | IllegalArgumentException
-				| InvocationTargetException e) {
-			throw new RuntimeException(e);
-		}
-		newPkt.readPacket(buffer);
-		return newPkt;
-	}
-
-	public void writePacket(DataOutput buffer, int dir, EaglerBackendRPCPacket packet) throws IOException {
-		Class<? extends EaglerBackendRPCPacket> clazz = packet.getClass();
-		PacketDef def = classMap.get(clazz);
-		if (def == null || def.dir != dir) {
-			throw new IOException("Unknown packet type or wrong direction: " + clazz);
-		}
-		buffer.writeByte(def.id);
-		packet.writePacket(buffer);
-	}
-
-	public static EaglerBackendRPCProtocol getByID(int id) {
-		return switch (id) {
-		case 0 -> INIT;
-		case 1 -> V1;
-		case 2 -> V2;
-		default -> null;
-		};
-	}
-
+        private PacketDef(int id, int dir, Class<? extends EaglerBackendRPCPacket> pkt) {
+            this.id = id;
+            this.dir = dir;
+            this.pkt = pkt;
+            try {
+                this.ctor = pkt.getConstructor(new Class[0]);
+            }
+            catch (NoSuchMethodException | SecurityException e) {
+                throw new RuntimeException("Packet does not have a default constructor: " + pkt.getName(), e);
+            }
+        }
+    }
 }
+

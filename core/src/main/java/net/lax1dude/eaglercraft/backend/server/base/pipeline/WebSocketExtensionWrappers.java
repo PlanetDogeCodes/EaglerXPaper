@@ -1,28 +1,36 @@
 /*
- * Copyright (c) 2026 lax1dude. All Rights Reserved.
+ * Decompiled with CFR 0.152.
  * 
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
- * IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT,
- * INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
- * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
- * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
- * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
- * 
+ * Could not load the following classes:
+ *  io.netty.channel.ChannelHandler
+ *  io.netty.channel.ChannelHandlerContext
+ *  io.netty.channel.ChannelPipeline
+ *  io.netty.channel.embedded.EmbeddedChannel
+ *  io.netty.handler.codec.CodecException
+ *  io.netty.handler.codec.MessageToMessageDecoder
+ *  io.netty.handler.codec.compression.JZlibDecoder
+ *  io.netty.handler.codec.compression.JdkZlibDecoder
+ *  io.netty.handler.codec.compression.ZlibDecoder
+ *  io.netty.handler.codec.compression.ZlibWrapper
+ *  io.netty.handler.codec.http.websocketx.BinaryWebSocketFrame
+ *  io.netty.handler.codec.http.websocketx.TextWebSocketFrame
+ *  io.netty.handler.codec.http.websocketx.WebSocketFrame
+ *  io.netty.handler.codec.http.websocketx.extensions.WebSocketExtensionData
+ *  io.netty.handler.codec.http.websocketx.extensions.WebSocketExtensionDecoder
+ *  io.netty.handler.codec.http.websocketx.extensions.WebSocketExtensionEncoder
+ *  io.netty.handler.codec.http.websocketx.extensions.WebSocketServerExtension
+ *  io.netty.handler.codec.http.websocketx.extensions.WebSocketServerExtensionHandler
+ *  io.netty.handler.codec.http.websocketx.extensions.WebSocketServerExtensionHandshaker
+ *  io.netty.handler.codec.http.websocketx.extensions.compression.DeflateFrameServerExtensionHandshaker
+ *  io.netty.handler.codec.http.websocketx.extensions.compression.PerMessageDeflateServerExtensionHandshaker
+ *  io.netty.util.internal.PlatformDependent
+ *  io.netty.util.internal.SystemPropertyUtil
  */
-
 package net.lax1dude.eaglercraft.backend.server.base.pipeline;
 
-import java.lang.invoke.MethodHandle;
-import java.lang.invoke.MethodHandles;
-import java.lang.invoke.MethodType;
-import java.lang.invoke.VarHandle;
-import java.util.List;
-
+import io.netty.channel.ChannelHandler;
 import io.netty.channel.ChannelHandlerContext;
+import io.netty.channel.ChannelPipeline;
 import io.netty.channel.embedded.EmbeddedChannel;
 import io.netty.handler.codec.CodecException;
 import io.netty.handler.codec.MessageToMessageDecoder;
@@ -37,187 +45,201 @@ import io.netty.handler.codec.http.websocketx.extensions.WebSocketExtensionData;
 import io.netty.handler.codec.http.websocketx.extensions.WebSocketExtensionDecoder;
 import io.netty.handler.codec.http.websocketx.extensions.WebSocketExtensionEncoder;
 import io.netty.handler.codec.http.websocketx.extensions.WebSocketServerExtension;
+import io.netty.handler.codec.http.websocketx.extensions.WebSocketServerExtensionHandler;
 import io.netty.handler.codec.http.websocketx.extensions.WebSocketServerExtensionHandshaker;
 import io.netty.handler.codec.http.websocketx.extensions.compression.DeflateFrameServerExtensionHandshaker;
 import io.netty.handler.codec.http.websocketx.extensions.compression.PerMessageDeflateServerExtensionHandshaker;
 import io.netty.util.internal.PlatformDependent;
 import io.netty.util.internal.SystemPropertyUtil;
+import java.lang.invoke.MethodHandle;
+import java.lang.invoke.MethodHandles;
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import java.util.List;
+import net.lax1dude.eaglercraft.backend.server.base.pipeline.LegacyJdkZlibDecoder;
 
 public class WebSocketExtensionWrappers {
+    public static final boolean PMCE_AVAILABLE;
+    private static final boolean hasMaxAllocationHandshaker;
+    private static final MethodHandle METH_DECODE;
+    private static final Field FIELD_DEFLATER;
+    private static final boolean hasMaxAllocation;
+    private static final boolean noJdkZlibDecoder;
+    public static final int PERMESSAGEDEFLATE_MAX_WINDOW_SIZE = 15;
 
-	private static final boolean hasMaxAllocationHandshaker;
+    public static void installWsCompression(ChannelPipeline pipeline, String anchor, String handlerName, Object[] enabledExtensions) {
+        if (!PMCE_AVAILABLE || enabledExtensions == null) {
+            return;
+        }
+        WebSocketServerExtensionHandshaker[] handshakers = new WebSocketServerExtensionHandshaker[enabledExtensions.length];
+        for (int i = 0; i < enabledExtensions.length; ++i) {
+            handshakers[i] = (WebSocketServerExtensionHandshaker)enabledExtensions[i];
+        }
+        pipeline.addAfter(anchor, handlerName, (ChannelHandler)new WebSocketServerExtensionHandler(handshakers));
+    }
 
-	static {
-		boolean hasMaxAlloc = false;
-		try {
-			PerMessageDeflateServerExtensionHandshaker.class.getConstructor(int.class, int.class);
-			hasMaxAlloc = true;
-		} catch (ReflectiveOperationException ex) {
-		}
-		hasMaxAllocationHandshaker = hasMaxAlloc;
-	}
+    public static Object createDeflateFrameServerExtensionHandshaker(int compressionLevel, int maxAllocation) {
+        if (!PMCE_AVAILABLE) {
+            return null;
+        }
+        if (hasMaxAllocationHandshaker) {
+            return new DeflateFrameServerExtensionHandshaker(compressionLevel, maxAllocation);
+        }
+        return new WebSocketServerExtensionHandshakerWrapper((WebSocketServerExtensionHandshaker)new DeflateFrameServerExtensionHandshaker(compressionLevel), maxAllocation);
+    }
 
-	public static WebSocketServerExtensionHandshaker createDeflateFrameServerExtensionHandshaker(int compressionLevel,
-			int maxAllocation) {
-		if (hasMaxAllocationHandshaker) {
-			return new DeflateFrameServerExtensionHandshaker(compressionLevel, maxAllocation);
-		} else {
-			return new WebSocketServerExtensionHandshakerWrapper(
-					new DeflateFrameServerExtensionHandshaker(compressionLevel), maxAllocation);
-		}
-	}
+    public static Object createPerMessageDeflateServerExtensionHandshaker(int compressionLevel, boolean allowServerWindowSize, int preferredClientWindowSize, boolean allowServerNoContext, boolean preferredClientNoContext, int maxAllocation) {
+        if (!PMCE_AVAILABLE) {
+            return null;
+        }
+        if (hasMaxAllocationHandshaker) {
+            return new PerMessageDeflateServerExtensionHandshaker(compressionLevel, allowServerWindowSize, preferredClientWindowSize, allowServerNoContext, preferredClientNoContext, maxAllocation);
+        }
+        return new WebSocketServerExtensionHandshakerWrapper((WebSocketServerExtensionHandshaker)new PerMessageDeflateServerExtensionHandshaker(compressionLevel, allowServerWindowSize, preferredClientWindowSize, allowServerNoContext, preferredClientNoContext), maxAllocation);
+    }
 
-	public static WebSocketServerExtensionHandshaker createPerMessageDeflateServerExtensionHandshaker(
-			int compressionLevel, boolean allowServerWindowSize, int preferredClientWindowSize,
-			boolean allowServerNoContext, boolean preferredClientNoContext, int maxAllocation) {
-		if (hasMaxAllocationHandshaker) {
-			return new PerMessageDeflateServerExtensionHandshaker(compressionLevel, allowServerWindowSize,
-					preferredClientWindowSize, allowServerNoContext, preferredClientNoContext, maxAllocation);
-		} else {
-			return new WebSocketServerExtensionHandshakerWrapper(
-					new PerMessageDeflateServerExtensionHandshaker(compressionLevel, allowServerWindowSize,
-							preferredClientWindowSize, allowServerNoContext, preferredClientNoContext),
-					maxAllocation);
-		}
-	}
+    static {
+        boolean pmce = false;
+        boolean hasMaxAllocHandshaker = false;
+        MethodHandle methDecode = null;
+        Field fieldDeflater = null;
+        boolean hasMaxAlloc = false;
+        boolean noJdkZlib = false;
+        try {
+            Class<?> clzHandshaker = Class.forName("io.netty.handler.codec.http.websocketx.extensions.compression.PerMessageDeflateServerExtensionHandshaker");
+            try {
+                clzHandshaker.getConstructor(Integer.TYPE, Integer.TYPE);
+                hasMaxAllocHandshaker = true;
+            }
+            catch (ReflectiveOperationException reflectiveOperationException) {
+                // empty catch block
+            }
+            Class<?> clz = Class.forName("io.netty.handler.codec.http.websocketx.extensions.compression.DeflateDecoder");
+            Method m = MessageToMessageDecoder.class.getDeclaredMethod("decode", ChannelHandlerContext.class, Object.class, List.class);
+            m.setAccessible(true);
+            methDecode = MethodHandles.lookup().unreflect(m);
+            Field fd = clz.getDeclaredField("decoder");
+            fd.setAccessible(true);
+            fieldDeflater = fd;
+            try {
+                ZlibDecoder.class.getConstructor(Integer.TYPE);
+                hasMaxAlloc = true;
+            }
+            catch (ReflectiveOperationException reflectiveOperationException) {
+                // empty catch block
+            }
+            noJdkZlib = PlatformDependent.javaVersion() < 7 || SystemPropertyUtil.getBoolean((String)"io.netty.noJdkZlibDecoder", (boolean)false);
+            pmce = true;
+        }
+        catch (NoClassDefFoundError | ReflectiveOperationException throwable) {
+            // empty catch block
+        }
+        if (pmce && !hasMaxAlloc && noJdkZlib) {
+            throw new IllegalStateException("Your Netty version is too old to use the JZlib decoder!");
+        }
+        PMCE_AVAILABLE = pmce;
+        hasMaxAllocationHandshaker = hasMaxAllocHandshaker;
+        METH_DECODE = methDecode;
+        FIELD_DEFLATER = fieldDeflater;
+        hasMaxAllocation = hasMaxAlloc;
+        noJdkZlibDecoder = noJdkZlib;
+    }
 
-	public static class WebSocketServerExtensionHandshakerWrapper implements WebSocketServerExtensionHandshaker {
+    public static class WebSocketServerExtensionHandshakerWrapper
+    implements WebSocketServerExtensionHandshaker {
+        private final WebSocketServerExtensionHandshaker delegate;
+        private final int maxAllocation;
 
-		private final WebSocketServerExtensionHandshaker delegate;
-		private final int maxAllocation;
+        public WebSocketServerExtensionHandshakerWrapper(WebSocketServerExtensionHandshaker delegate, int maxAllocation) {
+            this.delegate = delegate;
+            this.maxAllocation = maxAllocation;
+        }
 
-		public WebSocketServerExtensionHandshakerWrapper(WebSocketServerExtensionHandshaker delegate,
-				int maxAllocation) {
-			this.delegate = delegate;
-			this.maxAllocation = maxAllocation;
-		}
+        public WebSocketServerExtension handshakeExtension(WebSocketExtensionData extensionData) {
+            WebSocketServerExtension ext = this.delegate.handshakeExtension(extensionData);
+            return ext != null ? new WebSocketServerExtensionWrapper(ext, this.maxAllocation) : null;
+        }
+    }
 
-		@Override
-		public WebSocketServerExtension handshakeExtension(WebSocketExtensionData extensionData) {
-			WebSocketServerExtension ext = delegate.handshakeExtension(extensionData);
-			return ext != null ? new WebSocketServerExtensionWrapper(ext, maxAllocation) : null;
-		}
+    public static class WebSocketExtensionDecoderWrapper
+    extends WebSocketExtensionDecoder {
+        private final WebSocketExtensionDecoder delegate;
+        private final int maxAllocation;
 
-	}
+        public WebSocketExtensionDecoderWrapper(WebSocketExtensionDecoder delegate, int maxAllocation) {
+            this.delegate = delegate;
+            this.maxAllocation = maxAllocation;
+        }
 
-	public static class WebSocketServerExtensionWrapper implements WebSocketServerExtension {
+        protected void decode(ChannelHandlerContext ctx, WebSocketFrame msg, List<Object> out) throws Exception {
+            if (!PMCE_AVAILABLE) {
+                return;
+            }
+            if (FIELD_DEFLATER.get(this.delegate) == null) {
+                if (!(msg instanceof TextWebSocketFrame) && !(msg instanceof BinaryWebSocketFrame)) {
+                    throw new CodecException("unexpected initial frame type: " + msg.getClass().getName());
+                }
+                FIELD_DEFLATER.set(this.delegate, new EmbeddedChannel(new ChannelHandler[]{this.newWrappedZlibDecoder()}));
+            }
+            try {
+                METH_DECODE.invoke(this.delegate, ctx, msg, out);
+            }
+            catch (Error | Exception ex) {
+                throw ex;
+            }
+            catch (Throwable exx) {
+                throw new Error(exx);
+            }
+        }
 
-		private final WebSocketServerExtension delegate;
-		private final int maxAllocation;
+        public void handlerRemoved(ChannelHandlerContext ctx) throws Exception {
+            this.delegate.handlerRemoved(ctx);
+        }
 
-		public WebSocketServerExtensionWrapper(WebSocketServerExtension delegate, int maxAllocation) {
-			this.delegate = delegate;
-			this.maxAllocation = maxAllocation;
-		}
+        public void channelInactive(ChannelHandlerContext ctx) throws Exception {
+            this.delegate.channelInactive(ctx);
+        }
 
-		@Override
-		public int rsv() {
-			return delegate.rsv();
-		}
+        public boolean acceptInboundMessage(Object msg) throws Exception {
+            return this.delegate.acceptInboundMessage(msg);
+        }
 
-		@Override
-		public WebSocketExtensionEncoder newExtensionEncoder() {
-			return delegate.newExtensionEncoder();
-		}
+        private ZlibDecoder newWrappedZlibDecoder() {
+            if (hasMaxAllocation) {
+                if (noJdkZlibDecoder) {
+                    return new JZlibDecoder(ZlibWrapper.NONE, this.maxAllocation);
+                }
+                return new JdkZlibDecoder(ZlibWrapper.NONE, true, this.maxAllocation);
+            }
+            return new LegacyJdkZlibDecoder(ZlibWrapper.NONE, this.maxAllocation);
+        }
+    }
 
-		@Override
-		public WebSocketExtensionDecoder newExtensionDecoder() {
-			return new WebSocketExtensionDecoderWrapper(delegate.newExtensionDecoder(), maxAllocation);
-		}
+    public static class WebSocketServerExtensionWrapper
+    implements WebSocketServerExtension {
+        private final WebSocketServerExtension delegate;
+        private final int maxAllocation;
 
-		@Override
-		public WebSocketExtensionData newReponseData() {
-			return delegate.newReponseData();
-		}
+        public WebSocketServerExtensionWrapper(WebSocketServerExtension delegate, int maxAllocation) {
+            this.delegate = delegate;
+            this.maxAllocation = maxAllocation;
+        }
 
-	}
+        public int rsv() {
+            return this.delegate.rsv();
+        }
 
-	public static class WebSocketExtensionDecoderWrapper extends WebSocketExtensionDecoder {
+        public WebSocketExtensionEncoder newExtensionEncoder() {
+            return this.delegate.newExtensionEncoder();
+        }
 
-		private static final MethodHandle METH_DECODE;
-		private static final VarHandle FIELD_DEFLATER;
-		private static final boolean hasMaxAllocation;
-		private static final boolean noJdkZlibDecoder;
+        public WebSocketExtensionDecoder newExtensionDecoder() {
+            return new WebSocketExtensionDecoderWrapper(this.delegate.newExtensionDecoder(), this.maxAllocation);
+        }
 
-		static {
-			try {
-				MethodHandles.Lookup lookup = MethodHandles.lookup();
-				METH_DECODE = MethodHandles.privateLookupIn(MessageToMessageDecoder.class, lookup).findVirtual(
-						MessageToMessageDecoder.class, "decode",
-						MethodType.methodType(void.class, ChannelHandlerContext.class, Object.class, List.class));
-				Class<?> clz = Class
-						.forName("io.netty.handler.codec.http.websocketx.extensions.compression.DeflateDecoder");
-				FIELD_DEFLATER = MethodHandles.privateLookupIn(clz, lookup).findVarHandle(clz, "decoder",
-						EmbeddedChannel.class);
-				boolean maxAlloc = false;
-				try {
-					ZlibDecoder.class.getConstructor(int.class);
-					maxAlloc = true;
-				} catch (ReflectiveOperationException ex) {
-				}
-				hasMaxAllocation = maxAlloc;
-				noJdkZlibDecoder = PlatformDependent.javaVersion() < 7
-						|| SystemPropertyUtil.getBoolean("io.netty.noJdkZlibDecoder", false);
-				if (!hasMaxAllocation && noJdkZlibDecoder) {
-					throw new IllegalStateException("Your Netty version is too old to use the JZlib decoder!");
-				}
-			} catch (ReflectiveOperationException ex) {
-				throw new ExceptionInInitializerError(ex);
-			}
-		}
-
-		private final WebSocketExtensionDecoder delegate;
-		private final int maxAllocation;
-
-		public WebSocketExtensionDecoderWrapper(WebSocketExtensionDecoder delegate, int maxAllocation) {
-			this.delegate = delegate;
-			this.maxAllocation = maxAllocation;
-		}
-
-		@Override
-		protected void decode(ChannelHandlerContext ctx, WebSocketFrame msg, List<Object> out) throws Exception {
-			if (FIELD_DEFLATER.get(delegate) == null) {
-				if (!(msg instanceof TextWebSocketFrame) && !(msg instanceof BinaryWebSocketFrame)) {
-					throw new CodecException("unexpected initial frame type: " + msg.getClass().getName());
-				}
-				FIELD_DEFLATER.set(delegate, new EmbeddedChannel(newWrappedZlibDecoder()));
-			}
-			try {
-				METH_DECODE.invoke(delegate, ctx, msg, out);
-			} catch (Exception | Error ex) {
-				throw ex;
-			} catch (Throwable exx) {
-				throw new Error(exx);
-			}
-		}
-
-		@Override
-		public void handlerRemoved(ChannelHandlerContext ctx) throws Exception {
-			delegate.handlerRemoved(ctx);
-		}
-
-		@Override
-		public void channelInactive(ChannelHandlerContext ctx) throws Exception {
-			delegate.channelInactive(ctx);
-		}
-
-		@Override
-		public boolean acceptInboundMessage(Object msg) throws Exception {
-			return delegate.acceptInboundMessage(msg);
-		}
-
-		private ZlibDecoder newWrappedZlibDecoder() {
-			if (hasMaxAllocation) {
-				if (noJdkZlibDecoder) {
-					return new JZlibDecoder(ZlibWrapper.NONE, maxAllocation);
-				} else {
-					return new JdkZlibDecoder(ZlibWrapper.NONE, true, maxAllocation);
-				}
-			} else {
-				return new LegacyJdkZlibDecoder(ZlibWrapper.NONE, maxAllocation);
-			}
-		}
-
-	}
-
+        public WebSocketExtensionData newReponseData() {
+            return this.delegate.newReponseData();
+        }
+    }
 }
+

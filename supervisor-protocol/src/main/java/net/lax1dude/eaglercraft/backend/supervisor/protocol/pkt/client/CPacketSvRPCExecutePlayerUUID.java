@@ -63,7 +63,7 @@ public class CPacketSvRPCExecutePlayerUUID implements EaglerSupervisorPacket, IR
 		}
 		playerUUID = new UUID(buffer.readLong(), buffer.readLong());
 		nameLength = buffer.readUnsignedByte();
-		payload = buffer.readRetainedSlice(buffer.readUnsignedMedium());
+		payload = buffer.readSlice(buffer.readUnsignedMedium()).retain();
 	}
 
 	@Override
@@ -76,7 +76,7 @@ public class CPacketSvRPCExecutePlayerUUID implements EaglerSupervisorPacket, IR
 		buffer.writeLong(playerUUID.getMostSignificantBits());
 		buffer.writeLong(playerUUID.getLeastSignificantBits());
 		if (injected != null) {
-			buffer.writeIntLE(0);
+			buffer.writeInt(Integer.reverseBytes(0));
 			int pos = buffer.writerIndex();
 			buffer.setByte(pos - 4, injected.writePayload(buffer));
 			buffer.setMedium(pos - 3, buffer.writerIndex() - pos);

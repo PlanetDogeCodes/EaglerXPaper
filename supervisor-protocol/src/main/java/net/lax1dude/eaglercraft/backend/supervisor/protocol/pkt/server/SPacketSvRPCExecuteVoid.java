@@ -52,14 +52,14 @@ public class SPacketSvRPCExecuteVoid implements EaglerSupervisorPacket, IRefCoun
 		if (payload != null) {
 			payload.release();
 		}
-		payload = buffer.readRetainedSlice(payloadLen);
+		payload = buffer.readSlice(payloadLen).retain();
 	}
 
 	@Override
 	public void writePacket(ByteBuf buffer) {
 		EaglerSupervisorPacket.writeVarInt(buffer, sourceNodeId);
 		if (injected != null) {
-			buffer.writeIntLE(0);
+			buffer.writeInt(Integer.reverseBytes(0));
 			int pos = buffer.writerIndex();
 			buffer.setByte(pos - 4, injected.writePayload(buffer));
 			buffer.setMedium(pos - 3, buffer.writerIndex() - pos);

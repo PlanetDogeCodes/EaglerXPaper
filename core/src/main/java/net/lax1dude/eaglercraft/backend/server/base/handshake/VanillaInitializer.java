@@ -24,6 +24,7 @@ import io.netty.buffer.ByteBuf;
 import io.netty.channel.ChannelHandlerContext;
 import net.lax1dude.eaglercraft.backend.server.base.EaglerXServer;
 import net.lax1dude.eaglercraft.backend.server.base.NettyPipelineData;
+import net.lax1dude.eaglercraft.backend.server.base.pipeline.EaglerCompressionGuardHandler;
 import net.lax1dude.eaglercraft.backend.server.base.pipeline.BufferUtils;
 import net.lax1dude.eaglercraft.backend.server.base.pipeline.WebSocketEaglerInitialHandler;
 
@@ -90,7 +91,14 @@ public class VanillaInitializer {
                 try {
                         BufferUtils.writeVarInt(buffer, 0x00);
                         BufferUtils.writeMCString(buffer, pipelineData.username, 16);
-                        if (pipelineData.minecraftProtocol >= 764) {
+                        // LoginStart ("hello") field history:
+                        // < 759 (1.19): name only
+                        // 759-760 (1.19-1.19.2): name + hasPublicKey boolean
+                        // >= 760 (1.19.1+): name (+bool for 760) + profile UUID
+                        if (pipelineData.minecraftProtocol >= 759 && pipelineData.minecraftProtocol <= 760) {
+                                buffer.writeBoolean(false);
+                        }
+                        if (pipelineData.minecraftProtocol >= 760) {
                                 buffer.writeLong(pipelineData.uuid.getMostSignificantBits());
                                 buffer.writeLong(pipelineData.uuid.getLeastSignificantBits());
                         }
@@ -116,7 +124,9 @@ public class VanillaInitializer {
          */
         private static int playDisconnectId(int mcProto) {
                 if (mcProto <= 47) return 0x40;          // 1.8
-                if (mcProto <= 758) return 0x1A;          // 1.9 – 1.18.2
+                if (mcProto < 393) return 0x1A;          // 1.9 – 1.12.2
+                if (mcProto <= 404) return 0x1B;         // 1.13 – 1.13.2
+                if (mcProto <= 758) return 0x1A;          // 1.14 – 1.18.2
                 if (mcProto <= 759) return 0x1D;          // 1.19
                 if (mcProto <= 761) return 0x17;          // 1.19.1 – 1.19.3
                 if (mcProto <= 765) return 0x1A;          // 1.19.4 – 1.20.4
@@ -136,7 +146,9 @@ public class VanillaInitializer {
          */
         private static int pluginMessagePlayId(int mcProto) {
                 if (mcProto <= 47) return 0x3F;          // 1.8
-                if (mcProto <= 759) return 0x18;          // 1.9 – 1.19
+                if (mcProto < 393) return 0x18;          // 1.9 – 1.12.2
+                if (mcProto <= 404) return 0x19;         // 1.13 – 1.13.2
+                if (mcProto <= 759) return 0x18;          // 1.14 – 1.19
                 if (mcProto <= 761) return 0x15;          // 1.19.1 – 1.19.3
                 if (mcProto <= 765) return 0x0A;          // 1.19.4 – 1.20.4
                 return 0x18;                              // 1.20.5+
@@ -144,9 +156,14 @@ public class VanillaInitializer {
 
         /**
          * 1.20.2+ Configuration-state Disconnect packet ID.
-         * Stable 0x02 from 1.20.2 (proto 764) onward.
+         * 1.20.2-1.20.4 (764-765): PluginMessage=0x00, Disconnect=0x01, FinishConfig=0x02.
+         * 1.20.5+ (766+): CookieRequest=0x00, PluginMessage=0x01, Disconnect=0x02 (verified
+         * against the Paper 1.21.11 configuration registry order).
          */
-        private static final int CONFIG_DISCONNECT_ID = 0x02;
+        private static int configDisconnectId(int mcProto) {
+                if (mcProto >= 764 && mcProto <= 765) return 0x01;
+                return 0x02;
+        }
 
         public void handleInbound(ChannelHandlerContext ctx, ByteBuf msg) {
                 // CRITICAL: Once we've reached the terminal STATE_COMPLETE (after a kick packet
@@ -231,28 +248,35 @@ public class VanillaInitializer {
                                         }
                                         inboundHandler.handleBackendHandshakeSuccess(ctx, usernameStr, playerUUID);
                                 } else if (pktId == 0x03) {
-                                        // S03PacketEnableCompression — ignored, Eagler uses WebSocket compression
+                                        EaglerCompressionGuardHandler.scheduleStrip(ctx.channel());
                                 } else if (pktId == pluginMsgId) {
                                         // PluginMessage (Custom Payload) — buffer for replay after login
                                         msg.resetReaderIndex();
                                         bufferedPackets.add(msg.retain());
+                                } else if (pktId == 0x04) {
+                                        // LoginPluginRequest: the vanilla login listener blocks waiting for a
+                                        // response that an Eagler client can never send (proxy forwarding data,
+                                        // Forge handshake, etc). Terminating with a clear error beats a silent
+                                        // 30-second login timeout stall.
+                                        connectionState = STATE_COMPLETE;
+                                        inboundHandler.terminateErrorCode(ctx, pipelineData.handshakeProtocol,
+                                                        HandshakePacketTypes.SERVER_ERROR_CUSTOM_MESSAGE,
+                                                        "This server requires a login plugin handshake (proxy forwarding or mod support) that Eaglercraft clients cannot provide");
                                 } else {
-                                        // Buffer unknown login-state packets instead of terminating.
-                                        // Future MC additions (LoginPluginRequest 0x04, CookieRequest 0x05, etc.)
-                                        // will be buffered and forwarded downstream after enterPlayState(),
-                                        // rather than killing the Eagler handshake.
-                                        msg.resetReaderIndex();
-                                        bufferedPackets.add(msg.retain());
+                                        // Other unknown login-state packets (CookieRequest 0x05, etc) are optional
+                                        // vanilla queries; dropping them lets the login continue, and replaying
+                                        // them into the post-login stream would corrupt it instead.
                                         pipelineData.connectionLogger.warn(
-                                                        "Buffering unknown login-state packet 0x" + Integer.toHexString(pktId)
-                                                                        + " for replay after enterPlayState()");
+                                                        "Dropping unknown login-state packet 0x" + Integer.toHexString(pktId)
+                                                                        + " (Eagler clients cannot respond to it)");
                                 }
                         } else if (connectionState == STATE_STALLING) {
                                 int mcProto = pipelineData.minecraftProtocol;
                                 int playDisconId = playDisconnectId(mcProto);
-                                // 1.20.2+ Configuration phase uses ID 0x02 for Disconnect.
+                                int configDisconId = configDisconnectId(mcProto);
+                                // 1.20.2+ Configuration phase has its own Disconnect ID.
                                 boolean isConfigPhase = mcProto >= 764;
-                                if (pktId == playDisconId || (isConfigPhase && pktId == CONFIG_DISCONNECT_ID)) {
+                                if (pktId == playDisconId || (isConfigPhase && pktId == configDisconId)) {
                                         // Play-phase or Config-phase Disconnect
                                         handleKickPacket(ctx, msg);
                                 } else {

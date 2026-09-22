@@ -16,6 +16,7 @@
 
 package net.lax1dude.eaglercraft.backend.server.base.skins;
 
+import java.io.UnsupportedEncodingException;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.nio.charset.StandardCharsets;
@@ -54,8 +55,14 @@ public class ProfileResolver implements IProfileResolver {
 		if (callback == null) {
 			throw new NullPointerException("callback");
 		}
+		String encodedUsername;
+		try {
+			encodedUsername = URLEncoder.encode(username, "UTF-8");
+		} catch (UnsupportedEncodingException e) {
+			throw new AssertionError("UTF-8 charset is always available", e);
+		}
 		httpClient.asyncRequest("GET", URI.create("https://api.mojang.com/users/profiles/minecraft/"
-				+ URLEncoder.encode(username, StandardCharsets.UTF_8)), (response) -> {
+				+ encodedUsername), (response) -> {
 			if (response == null) {
 				callback.accept(null);
 			} else if (response.exception != null) {

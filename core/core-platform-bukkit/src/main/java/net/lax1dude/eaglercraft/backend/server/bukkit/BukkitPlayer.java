@@ -1,262 +1,257 @@
 /*
- * Copyright (c) 2025 lax1dude. All Rights Reserved.
+ * Decompiled with CFR 0.152.
  * 
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
- * IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT,
- * INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
- * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
- * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
- * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
- * 
+ * Could not load the following classes:
+ *  io.netty.channel.Channel
+ *  net.md_5.bungee.api.chat.BaseComponent
+ *  net.md_5.bungee.api.chat.TextComponent
+ *  org.bukkit.World
+ *  org.bukkit.entity.Player
+ *  org.bukkit.plugin.Plugin
+ *  org.bukkit.scheduler.BukkitTask
  */
-
 package net.lax1dude.eaglercraft.backend.server.bukkit;
 
-import java.lang.invoke.MethodHandles;
-import java.lang.invoke.VarHandle;
+import io.netty.channel.Channel;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.net.SocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 import java.util.function.Consumer;
-
-import org.bukkit.World;
-import org.bukkit.entity.Player;
-import org.bukkit.scheduler.BukkitTask;
-
-import io.netty.channel.Channel;
 import net.lax1dude.eaglercraft.backend.server.adapter.IPlatformPlayer;
 import net.lax1dude.eaglercraft.backend.server.adapter.IPlatformServer;
+import net.lax1dude.eaglercraft.backend.server.bukkit.BukkitUnsafe;
+import net.lax1dude.eaglercraft.backend.server.bukkit.BukkitWorld;
+import net.lax1dude.eaglercraft.backend.server.bukkit.PlatformPluginBukkit;
 import net.md_5.bungee.api.chat.BaseComponent;
 import net.md_5.bungee.api.chat.TextComponent;
+import org.bukkit.World;
+import org.bukkit.entity.Player;
+import org.bukkit.plugin.Plugin;
+import org.bukkit.scheduler.BukkitTask;
 
-class BukkitPlayer implements IPlatformPlayer<Player> {
+class BukkitPlayer
+implements IPlatformPlayer<Player> {
+    private static final AtomicReferenceFieldUpdater<BukkitPlayer, BukkitTask> CONFIRM_TASK_UPDATER;
+    private static final boolean PAPER_VIEW_DISTANCE_SUPPORT;
+    private static final Method PAPER_SET_VIEW_DISTANCE_SEND;
+    private static final Method PAPER_SET_VIEW_DISTANCE;
+    private final PlatformPluginBukkit plugin;
+    private final Player player;
+    private final Channel channel;
+    volatile BukkitTask confirmTask;
+    Object attachment;
+    private String brandString;
+    Consumer<Object> closeRedirector;
+    boolean closePending;
 
-	private static final VarHandle CONFIRM_TASK_HANDLE;
+    BukkitPlayer(PlatformPluginBukkit plugin, Player player, Channel channel) {
+        this.plugin = plugin;
+        this.player = player;
+        this.channel = channel;
+        this.brandString = null;
+    }
 
-	private static final boolean PAPER_VIEW_DISTANCE_SUPPORT;
-	private static final Method PAPER_SET_VIEW_DISTANCE_SEND;
-	private static final Method PAPER_SET_VIEW_DISTANCE;
+    BukkitTask xchgConfirmTask() {
+        return CONFIRM_TASK_UPDATER.getAndSet(this, null);
+    }
 
-	static {
-		try {
-			MethodHandles.Lookup l = MethodHandles.lookup();
-			CONFIRM_TASK_HANDLE = l.findVarHandle(BukkitPlayer.class, "confirmTask", BukkitTask.class);
-		} catch (ReflectiveOperationException e) {
-			throw new ExceptionInInitializerError(e);
-		}
-		boolean support;
-		Method viewDistance;
-		Method viewDistanceSend;
-		try {
-			viewDistanceSend = Player.class.getMethod("setSendViewDistance", int.class);
-			viewDistance = null;
-			support = true;
-		} catch (NoSuchMethodException ex) {
-			viewDistanceSend = null;
-			try {
-				viewDistance = Player.class.getMethod("setViewDistance", int.class);
-				support = true;
-			} catch (NoSuchMethodException exx) {
-				viewDistance = null;
-				support = false;
-			}
-		}
-		PAPER_VIEW_DISTANCE_SUPPORT = support;
-		PAPER_SET_VIEW_DISTANCE_SEND = viewDistanceSend;
-		PAPER_SET_VIEW_DISTANCE = viewDistance;
-	}
+    @Override
+    public Player getPlayerObject() {
+        return this.player;
+    }
 
-	private final PlatformPluginBukkit plugin;
-	private final Player player;
-	private final Channel channel;
-	volatile BukkitTask confirmTask;
-	Object attachment;
-	private String brandString;
-	Consumer<Object> closeRedirector;
-	boolean closePending;
+    @Override
+    public Channel getChannel() {
+        return this.channel;
+    }
 
-	BukkitPlayer(PlatformPluginBukkit plugin, Player player, Channel channel) {
-		this.plugin = plugin;
-		this.player = player;
-		this.channel = channel;
-		this.brandString = null;
-	}
+    @Override
+    public IPlatformServer<Player> getServer() {
+        World world = this.player.getWorld();
+        return world != null ? new BukkitWorld(this.plugin, world) : null;
+    }
 
-	BukkitTask xchgConfirmTask() {
-		return (BukkitTask) CONFIRM_TASK_HANDLE.getAndSetAcquire(this, null);
-	}
+    @Override
+    public String getUsername() {
+        return this.player.getName();
+    }
 
-	@Override
-	public Player getPlayerObject() {
-		return player;
-	}
+    @Override
+    public UUID getUniqueId() {
+        return this.player.getUniqueId();
+    }
 
-	@Override
-	public Channel getChannel() {
-		return channel;
-	}
+    @Override
+    public boolean isConnected() {
+        if (this.closePending) {
+            return false;
+        }
+        Channel c = BukkitUnsafe.getPlayerChannel(this.player);
+        return c != null && c.isActive();
+    }
 
-	@Override
-	public IPlatformServer<Player> getServer() {
-		World world = player.getWorld();
-		return world != null ? new BukkitWorld(plugin, world) : null;
-	}
+    @Override
+    public SocketAddress getSocketAddress() {
+        return this.player.getAddress();
+    }
 
-	@Override
-	public String getUsername() {
-		return player.getName();
-	}
+    @Override
+    public int getMinecraftProtocol() {
+        return 47;
+    }
 
-	@Override
-	public UUID getUniqueId() {
-		return player.getUniqueId();
-	}
+    @Override
+    public boolean isOnlineMode() {
+        return this.plugin.getServer().getOnlineMode();
+    }
 
-	@Override
-	public boolean isConnected() {
-		if (closePending) {
-			return false;
-		}
-		Channel c = BukkitUnsafe.getPlayerChannel(player);
-		return c != null && c.isActive();
-	}
+    @Override
+    public String getMinecraftBrand() {
+        return this.brandString;
+    }
 
-	@Override
-	public SocketAddress getSocketAddress() {
-		return player.getAddress();
-	}
+    @Override
+    public void sendDataClient(String channel, byte[] message) {
+        this.player.sendPluginMessage((Plugin)this.plugin, channel, message);
+    }
 
-	@Override
-	public int getMinecraftProtocol() {
-		return 47; // TODO: how to get protocol?
-	}
+    @Override
+    public void sendDataBackend(String channel, byte[] message) {
+        throw new UnsupportedOperationException();
+    }
 
-	@Override
-	public boolean isOnlineMode() {
-		return plugin.getServer().getOnlineMode();
-	}
+    @Override
+    public boolean isSetViewDistanceSupportedPaper() {
+        return PAPER_VIEW_DISTANCE_SUPPORT;
+    }
 
-	@Override
-	public String getMinecraftBrand() {
-		return brandString;
-	}
+    @Override
+    public void setViewDistancePaper(int distance) {
+        if (PAPER_SET_VIEW_DISTANCE_SEND != null) {
+            try {
+                PAPER_SET_VIEW_DISTANCE_SEND.invoke((Object)this.player, distance);
+            }
+            catch (IllegalAccessException | IllegalArgumentException | InvocationTargetException e) {
+                throw new RuntimeException("Reflection failed!");
+            }
+        }
+        if (PAPER_SET_VIEW_DISTANCE != null) {
+            try {
+                PAPER_SET_VIEW_DISTANCE.invoke((Object)this.player, distance);
+            }
+            catch (IllegalAccessException | IllegalArgumentException | InvocationTargetException e) {
+                throw new RuntimeException("Reflection failed!");
+            }
+        }
+    }
 
-	@Override
-	public void sendDataClient(String channel, byte[] message) {
-		player.sendPluginMessage(plugin, channel, message);
-	}
+    @Override
+    public String getTexturesProperty() {
+        return BukkitUnsafe.getTexturesProperty(this.player);
+    }
 
-	@Override
-	public void sendDataBackend(String channel, byte[] message) {
-		throw new UnsupportedOperationException();
-	}
+    @Override
+    public void sendMessage(String message) {
+        this.player.sendMessage((BaseComponent)new TextComponent(message));
+    }
 
-	@Override
-	public boolean isSetViewDistanceSupportedPaper() {
-		return PAPER_VIEW_DISTANCE_SUPPORT;
-	}
+    @Override
+    public <ComponentObject> void sendMessage(ComponentObject component) {
+        this.player.sendMessage((BaseComponent)component);
+    }
 
-	@Override
-	public void setViewDistancePaper(int distance) {
-		if (PAPER_SET_VIEW_DISTANCE_SEND != null) {
-			try {
-				PAPER_SET_VIEW_DISTANCE_SEND.invoke(player, distance);
-			} catch (IllegalAccessException | IllegalArgumentException | InvocationTargetException e) {
-				throw new RuntimeException("Reflection failed!");
-			}
-		} else if (PAPER_SET_VIEW_DISTANCE != null) {
-			try {
-				PAPER_SET_VIEW_DISTANCE.invoke(player, distance);
-			} catch (IllegalAccessException | IllegalArgumentException | InvocationTargetException e) {
-				throw new RuntimeException("Reflection failed!");
-			}
-		}
-	}
+    @Override
+    public void disconnect() {
+        this.disconnect("Connection Closed");
+    }
 
-	@Override
-	public String getTexturesProperty() {
-		return BukkitUnsafe.getTexturesProperty(player);
-	}
+    /*
+     * WARNING - Removed try catching itself - possible behaviour change.
+     */
+    @Override
+    public void disconnect(String kickMessage) {
+        this.closePending = true;
+        BukkitPlayer bukkitPlayer = this;
+        synchronized (bukkitPlayer) {
+            if (this.closeRedirector != null) {
+                this.closeRedirector.accept(new TextComponent(kickMessage));
+                return;
+            }
+        }
+        this.plugin.getScheduler().execute(() -> this.player.kickPlayer(kickMessage));
+    }
 
-	@Override
-	public void sendMessage(String message) {
-		player.sendMessage(new TextComponent(message));
-	}
+    /*
+     * WARNING - Removed try catching itself - possible behaviour change.
+     */
+    @Override
+    public <ComponentObject> void disconnect(ComponentObject kickMessage) {
+        this.closePending = true;
+        BukkitPlayer bukkitPlayer = this;
+        synchronized (bukkitPlayer) {
+            if (this.closeRedirector != null) {
+                this.closeRedirector.accept(kickMessage);
+                return;
+            }
+        }
+        String msg = ((BaseComponent)kickMessage).toLegacyText();
+        this.plugin.getScheduler().execute(() -> this.player.kickPlayer(msg));
+    }
 
-	@Override
-	public <ComponentObject> void sendMessage(ComponentObject component) {
-		player.sendMessage((BaseComponent) component);
-	}
+    @Override
+    public <T> T getPlayerAttachment() {
+        return (T)this.attachment;
+    }
 
-	@Override
-	public void disconnect() {
-		disconnect("Connection Closed");
-	}
+    @Override
+    public boolean checkPermission(String permission) {
+        return this.player.hasPermission(permission);
+    }
 
-	@Override
-	public void disconnect(String kickMessage) {
-		closePending = true;
-		synchronized (this) {
-			if (closeRedirector != null) {
-				closeRedirector.accept(new TextComponent(kickMessage));
-				return;
-			}
-		}
-		plugin.getScheduler().execute(() -> {
-			player.kickPlayer(kickMessage);
-		});
-	}
+    @Override
+    public boolean isPlayer() {
+        return true;
+    }
 
-	@Override
-	public <ComponentObject> void disconnect(ComponentObject kickMessage) {
-		closePending = true;
-		synchronized (this) {
-			if (closeRedirector != null) {
-				closeRedirector.accept(kickMessage);
-				return;
-			}
-		}
-		String msg = ((BaseComponent) kickMessage).toLegacyText();
-		plugin.getScheduler().execute(() -> {
-			player.kickPlayer(msg);
-		});
-	}
+    @Override
+    public IPlatformPlayer<Player> asPlayer() {
+        return this;
+    }
 
-	@Override
-	@SuppressWarnings("unchecked")
-	public <T> T getPlayerAttachment() {
-		return (T) attachment;
-	}
+    void handleMCBrandMessage(byte[] data) {
+        int len;
+        if (data.length > 0 && (len = data[0] & 0xFF) < 128 && len == data.length - 1) {
+            this.brandString = new String(data, 1, len, StandardCharsets.UTF_8);
+        }
+    }
 
-	@Override
-	public boolean checkPermission(String permission) {
-		return player.hasPermission(permission);
-	}
-
-	@Override
-	public boolean isPlayer() {
-		return true;
-	}
-
-	@Override
-	public IPlatformPlayer<Player> asPlayer() {
-		return this;
-	}
-
-	void handleMCBrandMessage(byte[] data) {
-		if (data.length > 0) {
-			int len = (int) data[0] & 0xFF;
-			// Brand over 127 chars is probably garbage anyway...
-			if (len < 128 && len == data.length - 1) {
-				brandString = new String(data, 1, len, StandardCharsets.UTF_8);
-			}
-		}
-	}
-
+    static {
+        boolean support;
+        Method viewDistance;
+        Method viewDistanceSend;
+        CONFIRM_TASK_UPDATER = AtomicReferenceFieldUpdater.newUpdater(BukkitPlayer.class, BukkitTask.class, "confirmTask");
+        try {
+            viewDistanceSend = Player.class.getMethod("setSendViewDistance", Integer.TYPE);
+            viewDistance = null;
+            support = true;
+        }
+        catch (NoSuchMethodException ex) {
+            viewDistanceSend = null;
+            try {
+                viewDistance = Player.class.getMethod("setViewDistance", Integer.TYPE);
+                support = true;
+            }
+            catch (NoSuchMethodException exx) {
+                viewDistance = null;
+                support = false;
+            }
+        }
+        PAPER_VIEW_DISTANCE_SUPPORT = support;
+        PAPER_SET_VIEW_DISTANCE_SEND = viewDistanceSend;
+        PAPER_SET_VIEW_DISTANCE = viewDistance;
+    }
 }
+

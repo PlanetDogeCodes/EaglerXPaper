@@ -1,62 +1,58 @@
 /*
- * Copyright (c) 2025 lax1dude. All Rights Reserved.
- * 
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
- * IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT,
- * INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
- * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
- * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
- * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
- * 
+ * Decompiled with CFR 0.152.
  */
-
 package net.lax1dude.eaglercraft.backend.server.base.message;
 
 import net.lax1dude.eaglercraft.backend.server.base.EaglerPlayerInstance;
 import net.lax1dude.eaglercraft.backend.server.base.EaglerXServer;
 import net.lax1dude.eaglercraft.backend.server.base.config.ConfigDataSettings;
+import net.lax1dude.eaglercraft.backend.server.base.message.InjectedMessageController;
+import net.lax1dude.eaglercraft.backend.server.base.message.LegacyMessageController;
+import net.lax1dude.eaglercraft.backend.server.base.message.MessageController;
+import net.lax1dude.eaglercraft.backend.server.base.message.RewindMessageControllerHandle;
+import net.lax1dude.eaglercraft.backend.server.base.message.RewindMessageControllerImpl;
+import net.lax1dude.eaglercraft.backend.server.base.message.ServerMessageHandler;
+import net.lax1dude.eaglercraft.backend.server.base.message.ServerV3MessageHandler;
+import net.lax1dude.eaglercraft.backend.server.base.message.ServerV4MessageHandler;
+import net.lax1dude.eaglercraft.backend.server.base.message.ServerV5MessageHandler;
 import net.lax1dude.eaglercraft.v1_8.socket.protocol.GamePluginMessageProtocol;
 
 public class MessageControllerFactory {
+    public static MessageController initializePlayer(EaglerPlayerInstance<?> instance) {
+        boolean modernChannelNames;
+        GamePluginMessageProtocol protocol = instance.getEaglerProtocol();
+        ServerMessageHandler handler = MessageControllerFactory.createHandler(protocol.ver, instance);
+        RewindMessageControllerHandle rewindHandle = instance.getRewindMessageControllerHandle();
+        if (rewindHandle != null) {
+            return new RewindMessageControllerImpl(rewindHandle, protocol, handler);
+        }
+        EaglerXServer server = instance.getEaglerXServer();
+        ConfigDataSettings settings = server.getConfig().getSettings();
+        int sendDelay = settings.getProtocolV4DefragSendDelay();
+        int maxPackets = settings.getProtocolV4DefragMaxPackets();
+        if (protocol.ver >= 5) {
+            return InjectedMessageController.injectEagler(protocol, handler, instance.getPlatformPlayer().getChannel(), sendDelay, maxPackets);
+        }
+        boolean bl = modernChannelNames = server.getPlatform().isModernPluginChannelNamesOnly() || instance.getMinecraftProtocol() > 340;
+        if (protocol.ver == 4 && sendDelay > 0) {
+            return new LegacyMessageController(protocol, handler, instance.getPlatformPlayer().getChannel().eventLoop(), sendDelay, maxPackets, modernChannelNames);
+        }
+        return new LegacyMessageController(protocol, handler, null, 0, maxPackets, modernChannelNames);
+    }
 
-	public static MessageController initializePlayer(EaglerPlayerInstance<?> instance) {
-		GamePluginMessageProtocol protocol = instance.getEaglerProtocol();
-		ServerMessageHandler handler = createHandler(protocol.ver, instance);
-		RewindMessageControllerHandle rewindHandle = instance.getRewindMessageControllerHandle();
-		if (rewindHandle != null) {
-			return new RewindMessageControllerImpl(rewindHandle, protocol, handler);
-		}
-		EaglerXServer<?> server = instance.getEaglerXServer();
-		ConfigDataSettings settings = server.getConfig().getSettings();
-		int sendDelay = settings.getProtocolV4DefragSendDelay();
-		int maxPackets = settings.getProtocolV4DefragMaxPackets();
-		if (protocol.ver >= 5) {
-			return InjectedMessageController.injectEagler(protocol, handler,
-					instance.getPlatformPlayer().getChannel(), sendDelay, maxPackets);
-		} else {
-			boolean modernChannelNames = server.getPlatform().isModernPluginChannelNamesOnly()
-					|| instance.getMinecraftProtocol() > 340;
-			if (protocol.ver == 4 && sendDelay > 0) {
-				return new LegacyMessageController(protocol, handler,
-						instance.getPlatformPlayer().getChannel().eventLoop(), sendDelay, maxPackets,
-						modernChannelNames);
-			} else {
-				return new LegacyMessageController(protocol, handler, null, 0, maxPackets, modernChannelNames);
-			}
-		}
-	}
-
-	private static ServerMessageHandler createHandler(int ver, EaglerPlayerInstance<?> instance) {
-		return switch (ver) {
-		case 5 -> new ServerV5MessageHandler(instance);
-		case 4 -> new ServerV4MessageHandler(instance);
-		case 3 -> new ServerV3MessageHandler(instance);
-		default -> throw new IllegalStateException();
-		};
-	}
-
+    private static ServerMessageHandler createHandler(int ver, EaglerPlayerInstance<?> instance) {
+        switch (ver) {
+            case 5: {
+                return new ServerV5MessageHandler(instance);
+            }
+            case 4: {
+                return new ServerV4MessageHandler(instance);
+            }
+            case 3: {
+                return new ServerV3MessageHandler(instance);
+            }
+        }
+        throw new IllegalStateException();
+    }
 }
+

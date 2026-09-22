@@ -1,82 +1,74 @@
 /*
- * Copyright (c) 2025 lax1dude. All Rights Reserved.
- * 
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
- * ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
- * WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
- * IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT,
- * INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
- * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
- * PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY,
- * WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
- * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
- * POSSIBILITY OF SUCH DAMAGE.
- * 
+ * Decompiled with CFR 0.152.
  */
-
 package net.lax1dude.eaglercraft.backend.server.util;
 
 import java.util.concurrent.atomic.AtomicInteger;
 
-public class RateLimiterBasic extends AtomicInteger {
+public class RateLimiterBasic
+extends AtomicInteger {
+    private long timer = System.nanoTime();
 
-	private long timer;
+    public RateLimiterBasic() {
+        super(0);
+    }
 
-	public RateLimiterBasic() {
-		super(0);
-		this.timer = System.nanoTime();
-	}
+    public boolean rateLimit(int limitVal) {
+        return this.rateLimit(60000000000L, limitVal);
+    }
 
-	public boolean rateLimit(int limitVal) {
-		return rateLimit(60l * 1000000000l, limitVal);
-	}
+    /*
+     * WARNING - Removed try catching itself - possible behaviour change.
+     */
+    public boolean rateLimit(long periodNanos, int limitVal) {
+        if (this.incrementAndGet() >= limitVal) {
+            RateLimiterBasic rateLimiterBasic = this;
+            synchronized (rateLimiterBasic) {
+                int v = this.get();
+                if (v < limitVal) {
+                    return true;
+                }
+                long period = 60000000000L / (long)limitVal;
+                long delta = (System.nanoTime() - this.timer) / period;
+                if (delta > 0L) {
+                    this.timer += delta * period;
+                    int correction = v - (limitVal << 1);
+                    if (correction > 0) {
+                        delta += (long)correction;
+                    }
+                    return this.addAndGet(-Math.min((int)delta, v)) < limitVal;
+                }
+                return false;
+            }
+        }
+        return true;
+    }
 
-	public boolean rateLimit(long periodNanos, int limitVal) {
-		if (incrementAndGet() >= limitVal) {
-			synchronized (this) {
-				int v = getPlain();
-				if (v < limitVal) {
-					return true;
-				}
-				long period = (long) (60000000000l / limitVal);
-				long delta = (System.nanoTime() - timer) / period;
-				if (delta > 0l) {
-					timer += delta * period;
-					int correction = v - (limitVal << 1);
-					if (correction > 0) {
-						delta += correction;
-					}
-					return addAndGet(-Math.min((int) delta, v)) < limitVal;
-				}
-				return false;
-			}
-		} else {
-			return true;
-		}
-	}
-
-	public boolean checkState(int limitVal) {
-		if (getAcquire() >= limitVal) {
-			synchronized (this) {
-				int v = getPlain();
-				if (v < limitVal) {
-					return true;
-				}
-				long period = (long) (60000000000l / limitVal);
-				long delta = (System.nanoTime() - timer) / period;
-				if (delta > 0l) {
-					timer += delta * period;
-					int correction = v - (limitVal << 1);
-					if (correction > 0) {
-						delta += correction;
-					}
-					return addAndGet(-Math.min((int) delta, v)) < limitVal;
-				}
-				return false;
-			}
-		} else {
-			return true;
-		}
-	}
-
+    /*
+     * WARNING - Removed try catching itself - possible behaviour change.
+     */
+    public boolean checkState(int limitVal) {
+        if (this.get() >= limitVal) {
+            RateLimiterBasic rateLimiterBasic = this;
+            synchronized (rateLimiterBasic) {
+                int v = this.get();
+                if (v < limitVal) {
+                    return true;
+                }
+                long period = 60000000000L / (long)limitVal;
+                long delta = (System.nanoTime() - this.timer) / period;
+                if (delta > 0L) {
+                    this.timer += delta * period;
+                    int correction = v - (limitVal << 1);
+                    if (correction > 0) {
+                        delta += (long)correction;
+                    }
+                    return this.addAndGet(-Math.min((int)delta, v)) < limitVal;
+                }
+                return false;
+            }
+        }
+        return true;
+    }
 }
+
