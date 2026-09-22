@@ -139,4 +139,4 @@ If you find a bug on a specific Paper version, please open an issue and include:
 3. The output of `java -version`
 
 ## LLM Usage Disclaimer 
-GLM 5.3 was used to generate portions of this README that I was too lazy to make myself, and also helped with code checks to eliminate some of my stupid mistakes (like forgetting to include connection headers or accidentally breaking the timer for all packet batching tasks). It is my personal belief that AI is best used as a code reviewer and not writer, so I have acted in accordance to that belief. This project is 100% still managed by a human.
+GLM 5.3 was used to generate portions of this README that I was too lazy to make myself, and also helped with code checks to eliminate some of my stupid mistakes (like forgetting to include connection headers or accidentally breaking the timer for all packet batching tasks). It is my personal belief that AI is best used as a code reviewer and not writer, so I have acted in accordance to that belief. This project and all code is 100% still managed and created by a human.
