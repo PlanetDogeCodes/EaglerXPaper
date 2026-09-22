@@ -1,22 +1,21 @@
 # EaglerXPaper
 
-> Paper 1.17.x to 26.x port of [EaglerXServer](https://github.com/lax1dude/eaglerxserver) 
-
 [![Paper](https://img.shields.io/badge/Paper-1.17+-blue)](https://papermc.io)
 [![Java](https://img.shields.io/badge/Java-25%2B-orange)](https://adoptium.net)
 [![License](https://img.shields.io/badge/license-BSD--3--Clause-green)](LICENSE)
 
-EaglerXPaper is a fork of lax1dude's EaglerXServer that extends Bukkit/Spigot/Paper support from 1.12.2–1.17 up to **1.21.x** (Paper 26.x). It lets Eaglercraft browser clients connect to a modern Paper server alongside vanilla Java Edition players, using the same dual-stack architecture as the original plugin.
+EaglerXPaper is a forward port of lax1dude's EaglerXServer Spigot functionalities that extends Bukkit/Spigot/Paper support from 1.12.2–1.17 **up to 26.x** and **down to 1.8.x**
 
-**This is largely the same project as EaglerXServer** — it only changes a few minor things to ensure 1.17+ compatibility, plus adds a couple of small features. All credit for the actual plugin goes to lax1dude.
+**This is largely the same project as EaglerXServer** — it only changes a few minor things to ensure 1.17+ and 1.8.x compatibility, plus adds a couple of small features. All credit for the actual plugin goes to lax1dude.
 
-Based on EaglerXServer **v1.1.1**
+Currently based on EaglerXServer **v1.1.1**
 
 ## Compatibility
 
 | Platform | Version Range | Status |
 |----------|--------------|--------|
 | **Paper** | 1.12.2 – 1.21.11+ | ✅ Fully supported |
+| **Paper** | 1.8.x | ⚠️ Currently in Beta |
 | **Spigot** | 1.12.2 – 1.21.x | ⚠️ Should work (uses NMS reflection fallback) |
 | **Folia** | Any | ❌ Not supported |
 | **BungeeCord** | 1.21+ | ✅ Use upstream EaglerXServer (already supported) |
@@ -136,7 +135,7 @@ Same as EaglerXServer — see [LICENSE](LICENSE).
 
 If you find a bug on a specific Paper version, please open an issue and include:
 1. The Paper version (e.g. `paper-1.21.11-132`)
-2. The full stack trace from `logs/latest.log`
+2. The full error from `logs/latest.log`
 3. The output of `java -version`
 
 ## LLM Usage Disclaimer 
