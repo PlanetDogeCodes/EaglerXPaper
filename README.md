@@ -18,8 +18,8 @@ Currently based on EaglerXServer **v1.1.1**
 | **Paper** | 1.8.x | ⚠️ Currently in Beta - should work |
 | **Spigot** | 1.12.2 – 1.21.x | ⚠️ Should work (uses NMS reflection fallback) |
 | **Folia** | Any | ❌ Not supported |
-| **BungeeCord** | 1.21+ | ✅ Use upstream EaglerXServer (already supported) |
-| **Velocity** | 3.4+ | ✅ Use upstream EaglerXServer (already supported) |
+| **BungeeCord** | 1.21+ | ❌️ Use normal EaglerXServer |
+| **Velocity** | 3.4+ | ❌️ Use normal EaglerXServer |
 
 **Java requirement:** Java 17+ for Paper 1.12–1.20, Java 21+ for Paper 1.21–1.21.4, Java 25+ for Paper 26.x (1.21.11+).
 
@@ -47,7 +47,6 @@ where `NmsNames.PLAYER_CONNECTION = Set.of("ServerGamePacketListenerImpl", "Play
 
 - **Config structure** — identical to regular EaglerXServer. Existing `plugins/EaglercraftXServer/` configs work without any changes.
 - **Plugin name** — still technically `"EaglercraftXServer"` internally, mostly to maintain compatibility with the base EaglerXServer API.
-- **BungeeCord/Velocity support** — untouched (it already supports 1.21 on those platforms, so no need to change any of that).
 
 ## EaglerXPaper-Exclusive Features
 
