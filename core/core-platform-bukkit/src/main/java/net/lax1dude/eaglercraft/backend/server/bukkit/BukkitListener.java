@@ -136,7 +136,11 @@ implements Listener {
                 GameProfile gameProfile = profile;
                 synchronized (gameProfile) {
                     Property[] toRemove;
+                    // Stable 2 fix (round 3): getProperties returns null when authlib is
+                    // degraded — null-check before iterating (previously NPE'd into the
+                    // silent catch below, leaving $eaglerMarker_ properties in profiles).
                     Multimap<String, Property> props = AuthlibCompat.getProperties(profile);
+                    if (props == null) break block8;
                     for (Property p : toRemove = (Property[])props.values().stream().filter(AuthlibCompat.nameStartsWith("$eaglerMarker_")).toArray(Property[]::new)) {
                         String name = AuthlibCompat.getName(p);
                         AuthlibCompat.remove(props, name, p);
@@ -150,7 +154,10 @@ implements Listener {
                 }
             }
             catch (Throwable throwable) {
-                // empty catch block
+                // Stable 2 fix (round 3): log instead of silently swallowing — a failure
+                // here leaves stale $eaglerMarker_ entries the admin should be able to see.
+                this.plugin.getLogger().warning("EaglerXServer: failed to clean up $eaglerMarker_ properties for "
+                        + evt.getPlayer().getName() + ": " + throwable);
             }
         }
     }

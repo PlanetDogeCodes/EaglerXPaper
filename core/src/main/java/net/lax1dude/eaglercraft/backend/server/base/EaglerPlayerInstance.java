@@ -81,7 +81,7 @@ implements IEaglerPlayer<PlayerObject> {
     private final boolean updateSupport;
     private final PlayerRateLimits rateLimits;
     private final UUID eaglerBrandUUID;
-    MessageController messageController;
+    volatile MessageController messageController;
     IVoiceManagerImpl<PlayerObject> voiceManager;
     NotificationManagerPlayer<PlayerObject> notifManager;
     WebViewManager<PlayerObject> webViewManager;
@@ -296,7 +296,14 @@ implements IEaglerPlayer<PlayerObject> {
         if (packet == null) {
             throw new NullPointerException("packet");
         }
-        this.messageController.sendPacket(packet);
+        // Stable 2 defensive fix: the controller can be nulled by an unregister
+        // racing this call (registration/logout boundary). Drop the message
+        // instead of throwing an NPE into the calling broadcast loop, which
+        // would otherwise kill the broadcast for every OTHER player too.
+        MessageController controller = this.messageController;
+        if (controller != null) {
+            controller.sendPacket(packet);
+        }
     }
 
     @Override
@@ -432,7 +439,10 @@ implements IEaglerPlayer<PlayerObject> {
                 this.sendEaglerMessage(pkt);
                 return pkt.length();
             } : () -> {
-                this.messageController.sendPacketImmediately(pkt);
+                MessageController controller = this.messageController;
+                if (controller != null) {
+                    controller.sendPacketImmediately(pkt);
+                }
                 return pkt.length();
             });
         }
@@ -448,7 +458,10 @@ implements IEaglerPlayer<PlayerObject> {
             if (this.getEaglerProtocol() != GamePluginMessageProtocol.V4) {
                 this.sendEaglerMessage(c2.packet());
             } else {
-                this.messageController.sendPacketImmediately(c2.packet());
+                MessageController controller = this.messageController;
+                if (controller != null) {
+                    controller.sendPacketImmediately(c2.packet());
+                }
             }
         }
     }

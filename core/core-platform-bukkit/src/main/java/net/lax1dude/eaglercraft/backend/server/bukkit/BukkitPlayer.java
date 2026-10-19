@@ -18,6 +18,7 @@ import java.lang.reflect.Method;
 import java.net.SocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.atomic.AtomicReferenceFieldUpdater;
 import java.util.function.Consumer;
 import net.lax1dude.eaglercraft.backend.server.adapter.IPlatformPlayer;
@@ -42,10 +43,29 @@ implements IPlatformPlayer<Player> {
     private final Player player;
     private final Channel channel;
     volatile BukkitTask confirmTask;
+    // Stable 2 fix (round 3): CAS-based join-confirmation state. The 100-tick
+    // "never fired PlayerJoinEvent" timeout task and confirmPlayer() (fired by
+    // PlayerJoinEvent) race at the 5-second boundary; previously the timeout task
+    // could drop a player whose join event was firing concurrently, or the join
+    // handler could confirm a player already being dropped. Exactly one of the
+    // two transitions wins; the loser aborts cleanly.
+    final AtomicReference<ConfirmState> confirmState = new AtomicReference<>(ConfirmState.PENDING);
     Object attachment;
     private String brandString;
     Consumer<Object> closeRedirector;
     boolean closePending;
+
+    private enum ConfirmState {
+        PENDING, CONFIRMED, TIMED_OUT
+    }
+
+    boolean tryMarkConfirmed() {
+        return this.confirmState.compareAndSet(ConfirmState.PENDING, ConfirmState.CONFIRMED);
+    }
+
+    boolean tryMarkTimedOut() {
+        return this.confirmState.compareAndSet(ConfirmState.PENDING, ConfirmState.TIMED_OUT);
+    }
 
     BukkitPlayer(PlatformPluginBukkit plugin, Player player, Channel channel) {
         this.plugin = plugin;

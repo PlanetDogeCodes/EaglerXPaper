@@ -135,13 +135,13 @@ import org.bukkit.plugin.messaging.Messenger;
 import org.bukkit.plugin.messaging.PluginMessageListener;
 import org.bukkit.scheduler.BukkitTask;
 
-@Plugin(name="EaglercraftXServer", version="1.1.1 Stable 1", description="Official EaglercraftX plugin for Spigot and Paper servers", spigot=@Plugin.Spigot(authors={"lax1dude"}, website="https://lax1dude.net/eaglerxserver", prefix="EaglerXServer"), dependencies={@Dependency(name="SkinsRestorer", type=DependencyType.SOFTDEPEND)})
+@Plugin(name="EaglercraftXServer", version="1.1.1 Stable 2", description="Official EaglercraftX plugin for Spigot and Paper servers", spigot=@Plugin.Spigot(authors={"lax1dude"}, website="https://lax1dude.net/eaglerxserver", prefix="EaglerXServer"), dependencies={@Dependency(name="SkinsRestorer", type=DependencyType.SOFTDEPEND)})
 public class PlatformPluginBukkit
 extends JavaPlugin
 implements IPlatform<Player> {
     public static final String PLUGIN_NAME = "EaglercraftXServer";
     public static final String PLUGIN_AUTHOR = "lax1dude";
-    public static final String PLUGIN_VERSION = "1.1.1 Stable 1";
+    public static final String PLUGIN_VERSION = "1.1.1 Stable 2";
     private IPlatformLogger loggerImpl;
     private IEventDispatchAdapter<Player, BaseComponent> eventDispatcherImpl;
     protected boolean aborted = false;
@@ -164,6 +164,14 @@ implements IPlatform<Player> {
     protected EventLoopGroup eventLoopGroup;
     protected boolean ownsEventLoopGroup;
     protected PlayerPostLoginInjector postLoginInjector;
+    // Stable 2 fix (round 3): set once onServerEnable is actually invoked — the
+    // failed-enable cleanup must not run the server disable handler for a server
+    // that was never enabled.
+    protected boolean serverEnableAttempted = false;
+    // Stable 2 fix (round 3): BukkitCommand instances registered by THIS plugin
+    // instance, so they can be unregistered from the CommandMap on disable (a
+    // manual plugman disable previously left dead /eagler* commands behind).
+    protected final List<BukkitCommand> registeredBukkitCommands = new ArrayList<>();
     private final ConcurrentMap<Player, BukkitPlayer> playerInstanceMap = new MapMaker().initialCapacity(512).concurrencyLevel(16).makeMap();
     private final Class<? extends Channel> channelClassNIO = NioSocketChannel.class;
     private final Class<? extends Channel> channelClassEpoll = EpollSocketChannel.class;
@@ -183,7 +191,10 @@ implements IPlatform<Player> {
         this.cacheConsoleCommandSenderHandle = new BukkitConsole(this.cacheConsoleCommandSenderInstance);
         this.enableNativeTransport = Epoll.isAvailable() && BukkitUnsafe.isEnableNativeTransport(server);
         this.eventLoopGroup = BukkitUnsafe.getEventLoopGroup(server, this.enableNativeTransport);
-        this.ownsEventLoopGroup = PlatformPluginBukkit.isOwnEventLoopGroup(this.eventLoopGroup);
+        // Stable 2 fix (round 3): identity-based ownership tracking (see
+        // BukkitUnsafe.OWNED_EVENT_LOOP_GROUPS) — the old toString() check missed
+        // the unnamed last-resort group, leaking its IO threads on every disable.
+        this.ownsEventLoopGroup = BukkitUnsafe.isOwnEventLoopGroup(this.eventLoopGroup);
         this.postLoginInjector = new PlayerPostLoginInjector(this);
         if (this.enableNativeTransport && !(this.eventLoopGroup instanceof EpollEventLoopGroup)) {
             this.enableNativeTransport = false;
@@ -289,12 +300,48 @@ implements IPlatform<Player> {
             this.loggerImpl.error("***********************************************");
         }
         Server server = this.getServer();
-        server.getPluginManager().registerEvents((Listener)new BukkitListener(this), (org.bukkit.plugin.Plugin)this);
-        CommandMap cmdMap = BukkitUnsafe.getCommandMap(server);
-        for (IEaglerXServerCommandType<Player> cmd : this.commandsList) {
-            server.getPluginManager().addPermission(new Permission(cmd.getPermission(), PermissionDefault.OP));
-            cmdMap.register("eagler", (Command)new BukkitCommand(this, cmd));
+        // Stable 2 (restored feature): ViaVersion-missing startup warning. Eaglercraft
+        // clients speak MC 1.8/1.12.2 protocols, so any server newer than 1.12.2 needs
+        // the Via chain (ViaVersion + ViaBackwards, plus ViaRewind for 1.8 clients) for
+        // them to be able to join at all. This warning was part of the H24 feature set
+        // lost in the decompiled-source rebuild of Stable 1.
+        try {
+            int mcProtocol = BukkitUnsafe.getServerProtocolVersion();
+            if (mcProtocol > 340 && server.getPluginManager().getPlugin("ViaVersion") == null) {
+                this.loggerImpl.warn("***********************************************");
+                this.loggerImpl.warn("* ViaVersion is NOT installed, but this server is running a Minecraft");
+                this.loggerImpl.warn("* version newer than 1.12.2 (protocol " + mcProtocol + ").");
+                this.loggerImpl.warn("* Eaglercraft clients (MC 1.8/1.12.2) will NOT be able to join unless");
+                this.loggerImpl.warn("* you install ViaVersion + ViaBackwards (+ ViaRewind for 1.8 clients).");
+                this.loggerImpl.warn("* Get them at https://viaver.com or from your plugin manager.");
+                this.loggerImpl.warn("***********************************************");
+            }
+        } catch (Throwable t) {
+            // diagnostics only — never block startup on the version probe
         }
+        // Stable 2 fix (round 3): everything below can throw (duplicate permission on
+        // /reload, injection reflection failure, port bind failure). Previously ANY
+        // such exception escaped onEnable with `aborted = true` set, and onDisable
+        // then early-returned — the hijacked channel initializer, the bound Eagler
+        // port and the plugin's own event-loop threads leaked until restart. Wrap
+        // the whole enable and run the full disable cleanup on failure instead.
+        this.serverEnableAttempted = false;
+        try {
+            server.getPluginManager().registerEvents((Listener)new BukkitListener(this), (org.bukkit.plugin.Plugin)this);
+            CommandMap cmdMap = BukkitUnsafe.getCommandMap(server);
+            for (IEaglerXServerCommandType<Player> cmd : this.commandsList) {
+                try {
+                    server.getPluginManager().addPermission(new Permission(cmd.getPermission(), PermissionDefault.OP));
+                }
+                catch (IllegalArgumentException ex) {
+                    // old Spigot /reload paths do not always clear permissions — a
+                    // duplicate registration must not abort the enable
+                    this.loggerImpl.warn("Permission already registered: " + cmd.getPermission());
+                }
+                BukkitCommand registered = new BukkitCommand(this, cmd);
+                cmdMap.register("eagler", (Command)registered);
+                this.registeredBukkitCommands.add(registered);
+            }
         Messenger msgr = server.getMessenger();
         PluginMessageListener ls = (ch, player, data) -> {
             BukkitPlayer playerInstance = (BukkitPlayer)this.playerInstanceMap.get(player);
@@ -415,8 +462,22 @@ implements IPlatform<Player> {
                 }
             });
         }, this.listenerConf);
+        this.serverEnableAttempted = true;
         if (this.onServerEnable != null) {
             this.onServerEnable.run();
+        }
+        }
+        catch (Throwable t) {
+            // Stable 2 fix (round 3): see the comment at the top of the try block —
+            // run the full disable cleanup so a failed enable leaks nothing.
+            this.loggerImpl.error("Error occurred while enabling EaglercraftXServer (running cleanup): ", t);
+            try {
+                this.runDisableCleanup();
+            }
+            catch (Throwable t2) {
+                this.loggerImpl.error("Cleanup after a failed enable also failed: ", t2);
+            }
+            return;
         }
         this.aborted = false;
     }
@@ -425,17 +486,39 @@ implements IPlatform<Player> {
         if (this.aborted) {
             return;
         }
+        this.runDisableCleanup();
+    }
+
+    private void runDisableCleanup() {
         if (this.cleanupListeners != null) {
-            this.cleanupListeners.run();
+            try {
+                this.cleanupListeners.run();
+            }
+            catch (Throwable t) {
+                this.loggerImpl.error("Failed to remove the channel initializer injection", t);
+            }
             this.cleanupListeners = null;
         }
         if (this.onServerDisable != null) {
-            this.onServerDisable.run();
+            if (this.serverEnableAttempted) {
+                try {
+                    this.onServerDisable.run();
+                }
+                catch (Throwable t) {
+                    this.loggerImpl.error("Failed to run the server disable handler", t);
+                }
+            }
         }
         Server server = this.getServer();
         for (IEaglerXServerCommandType<Player> cmd : this.commandsList) {
-            server.getPluginManager().removePermission(cmd.getPermission());
+            try {
+                server.getPluginManager().removePermission(cmd.getPermission());
+            }
+            catch (Throwable throwable) {
+                // best effort — permission removal is cosmetic on most servers
+            }
         }
+        this.unregisterBukkitCommands();
         Messenger msgr = server.getMessenger();
         if (!this.post_v1_13) {
             msgr.unregisterIncomingPluginChannel((org.bukkit.plugin.Plugin)this, "MC|Brand");
@@ -464,20 +547,38 @@ implements IPlatform<Player> {
         }
     }
 
-    private static boolean isOwnEventLoopGroup(EventLoopGroup group) {
-        if (group == null) {
-            return false;
+    private void unregisterBukkitCommands() {
+        // Stable 2 fix (round 3): best-effort removal of this plugin's commands from
+        // the server's CommandMap backing map. After a manual disable (plugman), the
+        // /eagler* commands otherwise stay registered pointing at a dead plugin
+        // instance and every execution logs a command error. Failures are cosmetic
+        // (dead entries until restart) and silently ignored.
+        if (this.registeredBukkitCommands.isEmpty()) {
+            return;
         }
         try {
-            String str = group.toString();
-            if (str != null && str.contains("EaglerXPaper IO")) {
-                return true;
+            CommandMap cmdMap = BukkitUnsafe.getCommandMap(this.getServer());
+            if (cmdMap != null) {
+                for (String fieldName : new String[] { "commands", "knownCommands" }) {
+                    try {
+                        java.lang.reflect.Field f = net.lax1dude.eaglercraft.backend.server.util.Util.findDeclaredField(cmdMap.getClass(), fieldName);
+                        f.setAccessible(true);
+                        Object o = f.get(cmdMap);
+                        if (o instanceof Map) {
+                            ((Map<?, ?>)o).values().removeIf(this.registeredBukkitCommands::contains);
+                            break;
+                        }
+                    }
+                    catch (Throwable t) {
+                        // try the next known field name
+                    }
+                }
             }
         }
-        catch (Exception exception) {
-            // empty catch block
+        catch (Throwable t) {
+            // best effort only
         }
-        return false;
+        this.registeredBukkitCommands.clear();
     }
 
     @Override
@@ -599,7 +700,15 @@ implements IPlatform<Player> {
 
     @Override
     public int getPlayerTotal() {
-        return this.getServer().getOnlinePlayers().size();
+        // Stable 2 fix (round 3): reachable from the MOTD/query path (Netty thread).
+        // Legacy servers expose a live list; size() is a cheap field read, but guard
+        // anyway — a failing read must never kill the MOTD path.
+        try {
+            return this.getServer().getOnlinePlayers().size();
+        }
+        catch (Throwable t) {
+            return this.playerInstanceMap.size();
+        }
     }
 
     @Override
@@ -648,15 +757,23 @@ implements IPlatform<Player> {
         this.loginInitializer.initializeLogin(loginData);
         if (loginData.eaglerPlayerProperty != 0 || loginData.texturesPropertyValue != null) {
             BukkitUnsafe.PropertyInjector injector = BukkitUnsafe.propertyInjector(player);
-            if (loginData.texturesPropertyValue != null) {
-                injector.injectTexturesProperty(loginData.texturesPropertyValue, loginData.texturesPropertySignature);
-                loginData.texturesPropertyValue = null;
-                loginData.texturesPropertySignature = null;
+            if (injector != null) {
+                if (loginData.texturesPropertyValue != null) {
+                    injector.injectTexturesProperty(loginData.texturesPropertyValue, loginData.texturesPropertySignature);
+                    loginData.texturesPropertyValue = null;
+                    loginData.texturesPropertySignature = null;
+                }
+                if (loginData.eaglerPlayerProperty != 0) {
+                    injector.injectIsEaglerPlayerProperty(loginData.eaglerPlayerProperty == 2);
+                }
+                injector.complete();
             }
-            if (loginData.eaglerPlayerProperty != 0) {
-                injector.injectIsEaglerPlayerProperty(loginData.eaglerPlayerProperty == 2);
+            else {
+                // Stable 2 fix (round 3): propertyInjector now returns null instead of
+                // throwing when authlib is degraded — skip the injection (feature
+                // degradation) instead of letting the exception cancel the login.
+                this.loggerImpl.warn("EaglerXServer: GameProfile property injection unavailable (degraded authlib) for player " + player.getName() + " — skin/isEaglerPlayer properties will not be set");
             }
-            injector.complete();
         }
         final BukkitPlayer p = new BukkitPlayer(this, player, channel);
         p.closeRedirector = new CloseRedirector();
@@ -698,6 +815,14 @@ implements IPlatform<Player> {
                 final BukkitPlayer p2 = p;
                 p.confirmTask = PlatformPluginBukkit.this.getServer().getScheduler().runTaskLaterAsynchronously((org.bukkit.plugin.Plugin)PlatformPluginBukkit.this, () -> {
                     p2.confirmTask = null;
+                    // Stable 2 fix (round 3): CAS PENDING -> TIMED_OUT. If the join event
+                    // confirmed the player concurrently (PENDING -> CONFIRMED won the race),
+                    // abort the drop — the old code removed a just-confirmed player from
+                    // the instance map mid-join, leaving a live player with no platform
+                    // instance (no Eagler features, dead brand listener).
+                    if (!p2.tryMarkTimedOut()) {
+                        return;
+                    }
                     PlatformPluginBukkit.this.getLogger().warning("Player " + p.getUsername() + " was initialized, but never fired PlayerJoinEvent, dropping...");
                     PlatformPluginBukkit.this.dropPlayer(player);
                 }, 100L);
@@ -732,7 +857,9 @@ implements IPlatform<Player> {
 
     public void confirmPlayer(Player player) {
         BukkitPlayer p = (BukkitPlayer)this.playerInstanceMap.get(player);
-        if (p != null) {
+        if (p != null && p.tryMarkConfirmed()) {
+            // Stable 2 fix (round 3): CAS PENDING -> CONFIRMED guarantees exactly one
+            // of {confirmPlayer, timeout-task} wins; the loser aborts cleanly.
             IEaglerXServerJoinListener<Player> listener;
             BukkitTask conf = p.xchgConfirmTask();
             if (conf != null) {

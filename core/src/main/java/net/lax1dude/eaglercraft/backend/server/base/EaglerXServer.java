@@ -99,6 +99,8 @@ import net.lax1dude.eaglercraft.backend.server.base.ServerIconLoader;
 import net.lax1dude.eaglercraft.backend.server.base.UpdateChecker;
 import net.lax1dude.eaglercraft.backend.server.base.collect.HPPCFactory;
 import net.lax1dude.eaglercraft.backend.server.base.command.CommandBrand;
+import net.lax1dude.eaglercraft.backend.server.base.command.CommandClients;
+import net.lax1dude.eaglercraft.backend.server.base.command.CommandDiagnose;
 import net.lax1dude.eaglercraft.backend.server.base.command.CommandConfirmCode;
 import net.lax1dude.eaglercraft.backend.server.base.command.CommandDomain;
 import net.lax1dude.eaglercraft.backend.server.base.command.CommandProtocol;
@@ -327,7 +329,7 @@ IEaglerXServerAPI.NettyUnsafe {
         init.setConnectionInitializer(new EaglerXServerLoginInitializer(this));
         init.setPlayerInitializer(new EaglerXServerPlayerInitializer(this));
         init.setServerJoinListener(new EaglerXServerJoinListener(this));
-        init.setCommandRegistry(Arrays.asList(new CommandVersion(this), new CommandBrand(this), new CommandProtocol(this), new CommandDomain(this), new CommandUserAgent(this), new CommandConfirmCode(this)));
+        init.setCommandRegistry(Arrays.asList(new CommandVersion(this), new CommandBrand(this), new CommandProtocol(this), new CommandDomain(this), new CommandUserAgent(this), new CommandConfirmCode(this), new CommandDiagnose(this), new CommandClients(this)));
         if (this.platform.getType().proxy) {
             this.loadProxying((IPlatform.InitProxying)init);
         } else {
@@ -417,6 +419,7 @@ IEaglerXServerAPI.NettyUnsafe {
             if (!skinConf.isSkinCacheSQLiteCompatible() || skinConf.isSkinCacheForceConnectionPool()) {
                 connectionCount = threadCount;
             }
+            datastore = null;
             try {
                 this.skinCacheJDBCHandle = EaglerDrivers.connectToDatabase(skinConf.getSkinCacheDBURI(), skinConf.getSkinCacheDriverClass(), skinConf.getSkinCacheDriverPath(), new Properties(), this.platform.getDataFolder(), this.logger(), connectionCount);
                 datastore = new SkinCacheDatastore(this.skinCacheJDBCHandle, threadCount, skinConf.getSkinCacheDiskKeepObjectsDays(), skinConf.getSkinCacheDiskMaxObjects(), Math.min(skinConf.getSkinCacheCompressionLevel(), 9), skinConf.isSkinCacheSQLiteCompatible(), this.logger());
@@ -436,15 +439,28 @@ IEaglerXServerAPI.NettyUnsafe {
                     }
                     this.skinCacheJDBCHandle = null;
                 }
-                return;
+                // v1.1.1 Stable 2 fix: the old code did a hard `return` here, which
+                // silently disabled the skin service, update service, update checker,
+                // supervisor service AND the ViaVersion nag for the entire server run
+                // whenever the skin cache DB failed to connect (bad JDBC URI, SQLite
+                // lock, missing driver) — a common misconfiguration. Continue enabling
+                // the rest of the plugin; only the disk-backed skin cache is degraded.
+                this.logger().error("Skin cache service is degraded (skins from URLs will be unavailable), skins will not be cached to disk. Fix the database configuration and restart the server to enable it.");
+                // Round 4 fix: install the fail-fast degraded delegate so URL skin/cape
+                // lookups answer immediately (missing skin) instead of queueing on
+                // DeferredStartSkinCache forever — callbacks would otherwise never fire
+                // and the deferred list would grow for the whole server uptime.
+                this.skinCacheService.setDelegate(DeferredStartSkinCache.degraded());
             }
-            this.skinCacheService.setDelegate(new SkinCacheService(new SkinCacheDownloader(this.httpClient, skinConf.getValidSkinDownloadURLs()), datastore, skinConf.getSkinCacheMemoryKeepSeconds(), skinConf.getSkinCacheMemoryMaxObjects(), this.logger()));
-            if (EaglerXPaperConfig.enableSkinPrewarm) {
-                try {
-                    this.prewarmSkinCache(skinConf);
-                }
-                catch (Exception e) {
-                    this.logger().warn("Could not start skin cache pre-warming: " + e.getMessage());
+            if (datastore != null) {
+                this.skinCacheService.setDelegate(new SkinCacheService(new SkinCacheDownloader(this.httpClient, skinConf.getValidSkinDownloadURLs()), datastore, skinConf.getSkinCacheMemoryKeepSeconds(), skinConf.getSkinCacheMemoryMaxObjects(), this.logger()));
+                if (EaglerXPaperConfig.enableSkinPrewarm) {
+                    try {
+                        this.prewarmSkinCache(skinConf);
+                    }
+                    catch (Exception e) {
+                        this.logger().warn("Could not start skin cache pre-warming: " + e.getMessage());
+                    }
                 }
             }
         }
@@ -507,13 +523,16 @@ IEaglerXServerAPI.NettyUnsafe {
                     this.logger().info("Disconnected from skin cache database successfully!");
                 }
             }
-            this.skinCacheService.setDelegate(null);
+            this.skinCacheService.setDelegate(DeferredStartSkinCache.degraded());
         }
         if (this.updateService != null) {
             this.updateService.stop();
         }
         this.updateChecker.handleDisable();
         this.supervisorService.handleDisable();
+        // Stable 2 fix (round 5): release the packet-journal dump thread (if any dump
+        // ever ran) so a /reload does not pin the old plugin classloader.
+        net.lax1dude.eaglercraft.backend.server.base.pipeline.OutboundPacketJournalHandler.shutdownDumpExecutor();
     }
 
     public void registerPlayer(BasePlayerInstance<PlayerObject> playerInstance) {
@@ -524,10 +543,13 @@ IEaglerXServerAPI.NettyUnsafe {
     }
 
     public void registerEaglerPlayer(EaglerPlayerInstance<PlayerObject> playerInstance, NettyPipelineData.ProfileDataHolder profileData, Runnable onComplete) {
+        // Stable 2 fix: the message controller MUST exist before the player becomes
+        // visible in the eaglerPlayers set — a broadcast racing the registration
+        // (update certs, skin packets) previously NPE'd on messageController == null.
+        playerInstance.messageController = MessageControllerFactory.initializePlayer(playerInstance);
         if (!this.eaglerPlayers.add(playerInstance)) {
             throw new RegistrationStateException();
         }
-        playerInstance.messageController = MessageControllerFactory.initializePlayer(playerInstance);
         if (this.updateService != null) {
             playerInstance.updateCertificate = this.updateService.createUpdateCertificate(playerInstance, profileData.updateCertInit);
         }
@@ -575,6 +597,10 @@ IEaglerXServerAPI.NettyUnsafe {
     }
 
     public void unregisterPlayer(BasePlayerInstance<PlayerObject> playerInstance) {
+        // Stable 2: drop the RPC manager reference eagerly (all consumers are
+        // null-checked) so a departing vanilla player's manager is collectable
+        // immediately instead of lingering until the whole player object is GC'd
+        playerInstance.backendRPCManager = null;
     }
 
     public void unregisterEaglerPlayer(EaglerPlayerInstance<PlayerObject> playerInstance) {
@@ -687,11 +713,11 @@ IEaglerXServerAPI.NettyUnsafe {
 
     @Override
     public String getServerVersion() {
-        return "1.1.1 Stable 1";
+        return "1.1.1 Stable 2";
     }
 
     public String getServerVersionString() {
-        return "EaglercraftXServer/1.1.1 Stable 1";
+        return "EaglercraftXServer/1.1.1 Stable 2";
     }
 
     @Override
@@ -1200,11 +1226,15 @@ IEaglerXServerAPI.NettyUnsafe {
     }
 
     public boolean testServerListConfirmCode(String code) {
-        if (this.serverListConfirmCode != null && code.equals(this.serverListConfirmCode)) {
-            this.serverListConfirmCode = null;
-            return true;
+        // Stable 2 fix: synchronize the single-use check-and-clear — two concurrent
+        // handshakes presenting the same code previously could both succeed (TOCTOU)
+        synchronized (this) {
+            if (this.serverListConfirmCode != null && code.equals(this.serverListConfirmCode)) {
+                this.serverListConfirmCode = null;
+                return true;
+            }
+            return false;
         }
-        return false;
     }
 
     public static class RegistrationStateException

@@ -120,6 +120,16 @@ public class CompoundRateLimiterMap {
         private RateLimiterLocking ratelimitHTTP;
 
         private RateLimits() {
+            // Stable 2 fix: eagerly instantiate all four limiters. The old lazy
+            // null-check-then-create raced when two event-loop threads handled
+            // the first simultaneous connections from one IP: both created a
+            // limiter, one write was orphaned, and both connections then counted
+            // against different limiter instances — halving (or worse) the
+            // configured rate limit for the lifetime of the cache entry.
+            this.ratelimitLogin = new RateLimiterLocking();
+            this.ratelimitMOTD = new RateLimiterLocking();
+            this.ratelimitQuery = new RateLimiterLocking();
+            this.ratelimitHTTP = new RateLimiterLocking();
         }
 
         @Override

@@ -152,6 +152,9 @@ INettyChannel.NettyUnsafe {
     public void exceptionCaught(ChannelHandlerContext ctx, Throwable cause) throws Exception {
         if (ctx.channel().isActive()) {
             this.pipelineData.connectionLogger.error("Uncaught exception in handler pipeline", cause);
+            // Stable 2: close dead connections — otherwise a malformed query stream leaves
+            // this handler (and its waitingPromiseCount bookkeeping) attached forever
+            ctx.close();
         }
     }
 

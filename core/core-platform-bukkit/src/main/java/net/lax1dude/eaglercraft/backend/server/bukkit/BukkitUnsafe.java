@@ -25,6 +25,7 @@ package net.lax1dude.eaglercraft.backend.server.bukkit;
 
 import com.google.common.collect.ForwardingList;
 import com.google.common.collect.LinkedListMultimap;
+import com.google.common.collect.MapMaker;
 import com.google.common.collect.Multimap;
 import com.mojang.authlib.GameProfile;
 import com.mojang.authlib.properties.Property;
@@ -46,9 +47,12 @@ import java.lang.reflect.Type;
 import java.net.SocketAddress;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ThreadFactory;
 import java.util.function.Consumer;
@@ -75,6 +79,11 @@ public class BukkitUnsafe {
     private static Field field_NetworkManager_address = null;
     private static final Property isEaglerPlayerPropertyT = new Property("isEaglerPlayer", "true", null);
     private static final Property isEaglerPlayerPropertyF = new Property("isEaglerPlayer", "false", null);
+    // Stable 2 fix (round 3): event-loop groups CREATED by this class are tracked
+    // here (weak identity set) so ownership can be decided reliably — including the
+    // last-resort plain NioEventLoopGroup whose thread names never matched the old
+    // string-based check, which leaked its IO threads on every disable.
+    private static final Set<EventLoopGroup> OWNED_EVENT_LOOP_GROUPS = Collections.newSetFromMap(new MapMaker().<EventLoopGroup, Boolean>weakKeys().makeMap());
 
     private static synchronized void bindCraftPlayer(Player playerObject) {
         if (class_CraftPlayer != null) {
@@ -190,14 +199,68 @@ public class BukkitUnsafe {
             return (Channel)field_NetworkManager_channel.get(field_PlayerConnection_networkManager.get(field_EntityPlayer_playerConnection.get(method_CraftPlayer_getHandle.invoke((Object)playerObject, new Object[0]))));
         }
         catch (Throwable e) {
-            if (e instanceof ReflectiveOperationException) {
-                throw Util.propagateReflectThrowable((ReflectiveOperationException)e);
-            }
-            if (e instanceof RuntimeException) {
-                throw (RuntimeException)e;
-            }
-            throw new RuntimeException("getPlayerChannel failed", e);
+            // Stable 2 fix (round 3): the playerConnection field is nulled on legacy
+            // servers during logout, and isConnected() is invoked from Netty/async
+            // threads exactly when a concurrent quit can null it. A channel-lookup
+            // failure must mean "not connected" (null), never a thrown exception —
+            // the old behavior propagated RuntimeException out of a safe predicate
+            // into unrelated pipelines.
+            return null;
         }
+    }
+
+    /**
+     * Stable 2 (restored feature): best-effort probe of the running server's
+     * Minecraft protocol version, used by the ViaVersion-missing startup warning.
+     * Tries net.minecraft.SharedConstants (1.16+ Mojang-mapped Paper, including
+     * 26.x) for the current WorldVersion, reading protocolVersion() whether it
+     * returns an int or an Optional&lt;Integer&gt;. Returns -1 when the probe fails
+     * (older Spigot-mapped servers) — callers must treat -1 as "unknown".
+     */
+    public static int getServerProtocolVersion() {
+        try {
+            Class<?> shared;
+            try {
+                shared = Class.forName("net.minecraft.SharedConstants");
+            } catch (ClassNotFoundException e) {
+                return -1;
+            }
+            Object version = null;
+            for (String getter : new String[] { "getCurrentVersion", "getGameVersion" }) {
+                try {
+                    version = shared.getMethod(getter).invoke(null);
+                    if (version != null) {
+                        break;
+                    }
+                } catch (ReflectiveOperationException ignored) {
+                }
+            }
+            if (version == null) {
+                return -1;
+            }
+            Class<?> versionClass = version.getClass();
+            for (String name : new String[] { "protocolVersion", "getProtocolVersion" }) {
+                try {
+                    Method m = versionClass.getMethod(name);
+                    Object result = m.invoke(version);
+                    if (result instanceof Integer) {
+                        return (Integer) result;
+                    }
+                    if (result instanceof java.util.Optional) {
+                        Object inner = ((java.util.Optional<?>) result).orElse(null);
+                        if (inner instanceof Integer) {
+                            return (Integer) inner;
+                        }
+                    }
+                } catch (ReflectiveOperationException ignored) {
+                }
+            }
+        } catch (Throwable t) {
+            // Stable 2 fix (round 3): never block startup, but leave a trace — a bare
+            // silent catch(Throwable) also swallowed OOM/LinkageError with no hint.
+            System.err.println("[EaglerXServer] server protocol version probe failed: " + t);
+        }
+        return -1;
     }
 
     public static String getTexturesProperty(Player player) {
@@ -234,18 +297,20 @@ public class BukkitUnsafe {
                 BukkitUnsafe.bindCraftPlayer(player);
             }
             if ((props = AuthlibCompat.getProperties(profile = (GameProfile)method_EntityPlayer_getProfile.invoke(entityPlayer = method_CraftPlayer_getHandle.invoke((Object)player, new Object[0]), new Object[0]))) == null) {
-                throw new IllegalStateException("Could not get GameProfile properties via AuthlibCompat");
+                // Stable 2 fix (round 3): degraded authlib previously THREW
+                // IllegalStateException here, which bubbled up through
+                // PlatformPluginBukkit.initializePlayer into BukkitListener's catch
+                // and CANCELLED the login — every Eagler player kicked on servers
+                // where the authlib smoke test had merely warned. Return null:
+                // callers skip property injection (feature degradation), not kick.
+                System.err.println("[EaglerXServer] propertyInjector: GameProfile properties unavailable (degraded authlib) for player " + player.getName());
+                return null;
             }
             return new PropertyInjector(props, profile, entityPlayer, profile);
         }
         catch (Throwable e) {
-            if (e instanceof ReflectiveOperationException) {
-                throw Util.propagateReflectThrowable((ReflectiveOperationException)e);
-            }
-            if (e instanceof RuntimeException) {
-                throw (RuntimeException)e;
-            }
-            throw new RuntimeException("propertyInjector failed", e);
+            System.err.println("[EaglerXServer] propertyInjector failed for player " + player.getName() + ": " + e);
+            return null;
         }
     }
 
@@ -421,28 +486,52 @@ public class BukkitUnsafe {
         catch (ReflectiveOperationException ex) {
             return BukkitUnsafe.injectChannelInitializerOld(server, initHandler, listener);
         }
-        return BukkitUnsafe.injectChannelInitializerPaper(paperChannelInitHolder, paperChannelInitListener, keyClz, eaglerKey, initHandler, listener);
+        try {
+            return BukkitUnsafe.injectChannelInitializerPaper(paperChannelInitHolder, paperChannelInitListener, keyClz, eaglerKey, initHandler, listener);
+        }
+        catch (Throwable t) {
+            // Stable 2 fix (round 3): the Paper API classes exist but invoking them
+            // failed (signature change on a future Paper build, etc). Fall back to
+            // the legacy ServerConnection reflection path instead of letting the
+            // failure abort the entire plugin enable.
+            System.err.println("[EaglerXServer] Paper channel initializer API failed (" + t + "), falling back to legacy injection");
+            return BukkitUnsafe.injectChannelInitializerOld(server, initHandler, listener);
+        }
     }
 
     private static Runnable injectChannelInitializerPaper(Class<?> paperChannelInitHolder, Class<?> paperChannelInitListener, Class<?> keyClz, Object eaglerKey, Consumer<Channel> initHandler, IEaglerXServerListener listener) {
+        Method addListener;
+        Method removeListener;
         try {
-            Method addListener = paperChannelInitHolder.getMethod("addListener", keyClz, paperChannelInitListener);
-            Method removeListener = paperChannelInitHolder.getMethod("removeListener", keyClz);
-            ChannelInitializeListener listenerImpl = initHandler::accept;
-            addListener.invoke(null, eaglerKey, listenerImpl);
-            listener.reportPaperMCInjected();
-            return () -> {
-                try {
-                    removeListener.invoke(null, eaglerKey);
-                }
-                catch (ReflectiveOperationException e) {
-                    throw Util.propagateReflectThrowable(e);
-                }
-            };
+            addListener = paperChannelInitHolder.getMethod("addListener", keyClz, paperChannelInitListener);
+            removeListener = paperChannelInitHolder.getMethod("removeListener", keyClz);
         }
         catch (ReflectiveOperationException e) {
+            // signature lookup failed — nothing was registered, caller's fallback is safe
             throw Util.propagateReflectThrowable(e);
         }
+        ChannelInitializeListener listenerImpl = initHandler::accept;
+        try {
+            addListener.invoke(null, eaglerKey, listenerImpl);
+        }
+        catch (Throwable t) {
+            // nothing was registered — caller's fallback path is safe
+            throw new RuntimeException("ChannelInitializeListenerHolder.addListener failed", t);
+        }
+        try {
+            listener.reportPaperMCInjected();
+        }
+        catch (Throwable t) {
+            // reporting is cosmetic — never fail the injection for it
+        }
+        return () -> {
+            try {
+                removeListener.invoke(null, eaglerKey);
+            }
+            catch (ReflectiveOperationException e) {
+                throw Util.propagateReflectThrowable(e);
+            }
+        };
     }
 
     private static Runnable injectChannelInitializerOld(Server server, final Consumer<Channel> initHandler, final IEaglerXServerListener listener) {
@@ -503,6 +592,12 @@ public class BukkitUnsafe {
                     return true;
                 }
             };
+            // Stable 2 fix (round 3): remember the exact wrapper instance so the
+            // cleanup can restore by IDENTITY — the old name-based check
+            // ("ForwardingList" in the runtime class name) never matched our own
+            // anonymous subclass, so the wrapper (and the plugin classloader it
+            // captured) stayed installed in ServerConnection on every disable.
+            cleanupList.installedHackList = hackList;
             channelFuturesList.set(serverConnection, hackList);
             return cleanupList;
         }
@@ -827,7 +922,7 @@ public class BukkitUnsafe {
         if (enableNativeTransport) {
             try {
                 Class<?> epollCls = Class.forName("io.netty.channel.epoll.EpollEventLoopGroup");
-                return (EventLoopGroup)epollCls.getConstructor(ThreadFactory.class).newInstance(tf);
+                return BukkitUnsafe.registerOwnEventLoopGroup((EventLoopGroup)epollCls.getConstructor(ThreadFactory.class).newInstance(tf));
             }
             catch (ReflectiveOperationException epollCls) {
                 // empty catch block
@@ -835,11 +930,37 @@ public class BukkitUnsafe {
         }
         try {
             Class<?> nioCls = Class.forName("io.netty.channel.nio.NioEventLoopGroup");
-            return (EventLoopGroup)nioCls.getConstructor(ThreadFactory.class).newInstance(tf);
+            return BukkitUnsafe.registerOwnEventLoopGroup((EventLoopGroup)nioCls.getConstructor(ThreadFactory.class).newInstance(tf));
         }
         catch (ReflectiveOperationException e) {
-            return new NioEventLoopGroup();
+            // Stable 2 fix (round 3): track even the unnamed last-resort group so
+            // it is shut down on disable (see OWNED_EVENT_LOOP_GROUPS).
+            return BukkitUnsafe.registerOwnEventLoopGroup(new NioEventLoopGroup());
         }
+    }
+
+    private static EventLoopGroup registerOwnEventLoopGroup(EventLoopGroup group) {
+        OWNED_EVENT_LOOP_GROUPS.add(group);
+        return group;
+    }
+
+    public static boolean isOwnEventLoopGroup(EventLoopGroup group) {
+        if (group == null) {
+            return false;
+        }
+        if (OWNED_EVENT_LOOP_GROUPS.contains(group)) {
+            return true;
+        }
+        try {
+            String str = group.toString();
+            if (str != null && str.contains("EaglerXPaper IO")) {
+                return true;
+            }
+        }
+        catch (Exception exception) {
+            // empty catch block
+        }
+        return false;
     }
 
     private static ThreadFactory createDefaultThreadFactory(String name) {
@@ -859,6 +980,7 @@ public class BukkitUnsafe {
         protected Field restoreField;
         protected Object restoreTarget;
         protected List<ChannelFuture> restoreOriginalList;
+        protected List<ChannelFuture> installedHackList;
 
         private CleanupList() {
         }
@@ -895,7 +1017,12 @@ public class BukkitUnsafe {
             if (this.restoreField != null && this.restoreTarget != null && this.restoreOriginalList != null) {
                 try {
                     Object current = this.restoreField.get(this.restoreTarget);
-                    if (current != null && current.getClass().getName().contains("ForwardingList") && current != this.restoreOriginalList) {
+                    if (current == this.installedHackList) {
+                        // Stable 2 fix (round 3): restore by exact identity of the wrapper WE
+                        // installed (see injectChannelInitializerOld). The old class-NAME check
+                        // never matched our anonymous ForwardingList subclass, so this restore
+                        // never ran — the dead wrapper stayed in ServerConnection pinning the
+                        // old plugin classloader across /reload cycles.
                         this.restoreField.set(this.restoreTarget, this.restoreOriginalList);
                     } else if (current != this.restoreOriginalList) {
                         System.err.println("[EaglerXServer] ServerConnection channel futures list was replaced by another plugin; not restoring original to avoid clobbering their wrapper.");
@@ -907,6 +1034,7 @@ public class BukkitUnsafe {
                 this.restoreField = null;
                 this.restoreTarget = null;
                 this.restoreOriginalList = null;
+                this.installedHackList = null;
             }
         }
     }

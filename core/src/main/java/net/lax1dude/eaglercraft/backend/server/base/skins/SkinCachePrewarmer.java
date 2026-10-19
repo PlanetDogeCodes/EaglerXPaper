@@ -309,6 +309,9 @@ public class SkinCachePrewarmer {
                 }
                 if ((capeElem = texturesObj.get("CAPE")) == null || !capeElem.isJsonObject() || (urlElem = (capeObj = capeElem.getAsJsonObject()).get("url")) == null || !urlElem.isJsonPrimitive() || (capeUrl = urlElem.getAsString()) == null || capeUrl.isEmpty()) break;
                 this.skinCacheService.resolveCapeByURL(capeUrl, data -> {});
+                // Stable 2 fix: only count the cape when one was actually found — the old
+                // `++capesLoaded` in the return inflated the cape count for every profile
+                ++capesLoaded;
                 break;
             }
             catch (Exception exception) {
@@ -316,7 +319,7 @@ public class SkinCachePrewarmer {
                 break;
             }
         }
-        return new int[]{skinsLoaded, ++capesLoaded};
+        return new int[]{skinsLoaded, capesLoaded};
     }
 
     /*

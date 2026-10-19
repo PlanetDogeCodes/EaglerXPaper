@@ -34,6 +34,13 @@ public class VanillaInitializer {
         protected final NettyPipelineData pipelineData;
         protected final WebSocketEaglerInitialHandler inboundHandler;
         protected final List<ByteBuf> bufferedPackets;
+        // v1.1.1 Stable 2 fix: the STALLING buffer had no cap — a client that stalls
+        // after LoginSuccess could make the server buffer the entire join/chunk stream
+        // (~1-2 MB per connection) for the full 30s login timeout, multiplied per
+        // malicious connection. Mirror EaglerPlayStateSyncHandler's bounded-buffer hygiene.
+        private long bufferedBytes = 0;
+        private static final int MAX_STALLED_PACKETS = 512;
+        private static final long MAX_STALLED_BYTES = 256L * 1024L;
 
         private static final int STATE_PRE = 0;
         private static final int STATE_SENT_LOGIN = 1;
@@ -251,8 +258,7 @@ public class VanillaInitializer {
                                         EaglerCompressionGuardHandler.scheduleStrip(ctx.channel());
                                 } else if (pktId == pluginMsgId) {
                                         // PluginMessage (Custom Payload) — buffer for replay after login
-                                        msg.resetReaderIndex();
-                                        bufferedPackets.add(msg.retain());
+                                        bufferStalledPacket(ctx, msg);
                                 } else if (pktId == 0x04) {
                                         // LoginPluginRequest: the vanilla login listener blocks waiting for a
                                         // response that an Eagler client can never send (proxy forwarding data,
@@ -280,8 +286,7 @@ public class VanillaInitializer {
                                         // Play-phase or Config-phase Disconnect
                                         handleKickPacket(ctx, msg);
                                 } else {
-                                        msg.resetReaderIndex();
-                                        bufferedPackets.add(msg.retain());
+                                        bufferStalledPacket(ctx, msg);
                                 }
                         } else {
                                 pipelineData.connectionLogger
@@ -289,7 +294,9 @@ public class VanillaInitializer {
                                 inboundHandler.terminateInternalError(ctx, pipelineData.handshakeProtocol);
                         }
                 } catch (IndexOutOfBoundsException ex) {
-                        ex.printStackTrace();
+                        // Stable 2 fix (round 5): use the per-connection logger instead of raw
+                        // printStackTrace — a malformed-packet flood stays structured.
+                        pipelineData.connectionLogger.error("VanillaInitializer: malformed login-state packet (IndexOutOfBounds)", ex);
                         inboundHandler.terminateInternalError(ctx, pipelineData.handshakeProtocol);
                 } catch (Throwable t) {
                         // Defensive: any unexpected Throwable (e.g. DecoderException from BufferUtils
@@ -311,6 +318,29 @@ public class VanillaInitializer {
                                 HandshakePacketTypes.SERVER_ERROR_CUSTOM_MESSAGE, pkt);
         }
 
+        /**
+         * Buffers a packet for replay after the login completes (STALLING phase).
+         * Bounded: a connection that stalls after LoginSuccess while the server
+         * keeps streaming packets gets terminated with a clear error instead of
+         * buffering unbounded data for the full login timeout (Stable 2 fix).
+         */
+        private void bufferStalledPacket(ChannelHandlerContext ctx, ByteBuf msg) {
+                msg.resetReaderIndex();
+                if (bufferedPackets.size() >= MAX_STALLED_PACKETS
+                                || bufferedBytes + msg.readableBytes() > MAX_STALLED_BYTES) {
+                        connectionState = STATE_COMPLETE;
+                        pipelineData.connectionLogger.warn("Login stalled with too much buffered server data ("
+                                        + bufferedPackets.size() + " packets, " + bufferedBytes + " bytes), disconnecting");
+                        release();
+                        inboundHandler.terminateErrorCode(ctx, pipelineData.handshakeProtocol,
+                                        HandshakePacketTypes.SERVER_ERROR_CUSTOM_MESSAGE,
+                                        "Login timed out (too much pending data while the client stalled)");
+                        return;
+                }
+                bufferedBytes += msg.readableBytes();
+                bufferedPackets.add(msg.retain());
+        }
+
         public void flushBufferedPackets(ChannelHandlerContext ctx) {
                 if (!bufferedPackets.isEmpty()) {
                         try {
@@ -330,6 +360,7 @@ public class VanillaInitializer {
                                 buf.release();
                         }
                         bufferedPackets.clear();
+                        bufferedBytes = 0;
                 }
         }
 

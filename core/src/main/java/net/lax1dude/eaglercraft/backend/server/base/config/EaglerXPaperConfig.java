@@ -16,11 +16,25 @@
 
 package net.lax1dude.eaglercraft.backend.server.base.config;
 
-// EaglerXPaper-specific feature toggles, loaded from settings.yml
-
+/**
+ * EaglerXPaper-specific feature toggles, loaded from settings.yml by
+ * EaglerConfigLoader. These sit on top of the upstream EaglercraftXServer
+ * configuration and control the Stable-2 additions (adaptive batching,
+ * outbound packet journal, skin cache pre-warm).
+ */
 public class EaglerXPaperConfig {
     public static volatile boolean enableSkinPrewarm = true;
     public static volatile int prewarmMaxPlayers = 50;
 
     public static volatile boolean enableAdaptiveBatching = true;
+
+    // Outbound packet journal (v1.1.1 Stable 2): per-connection ring journal
+    // of the outbound WIRE frame stream (vanilla MC packets + Eagler-protocol
+    // plugin frames, in exact wire order), dumped to a log file when the
+    // connection closes. Field instrument for diagnosing client-side
+    // packet decode kicks ("kicked whenever they load a chunk where a
+    // wither's hitbox is inside water" class of reports).
+    public static volatile boolean enablePacketJournal = false;
+    public static volatile int journalMaxPackets = 512;
+    public static volatile int journalSnapshotBytes = 48;
 }

@@ -46,7 +46,6 @@ public class UpdateChecker {
         this.server.getInternalHTTPClient().asyncRequest("GET", URI.create("https://lax1dude.net/eaglerxserver/version.txt"), res -> {
             block13: {
                 try {
-                    SemanticVersion ver;
                     if (res.exception != null) {
                         this.server.logger().error("Could not check for server updates: " + res.exception.toString());
                         break block13;
@@ -60,16 +59,17 @@ public class UpdateChecker {
                         break block13;
                     }
                     String str = BufferUtils.readCharSequence(res.data, res.data.readableBytes(), StandardCharsets.UTF_8).toString().trim();
+                    SemanticVersion ver = null;
                     try {
                         ver = SemanticVersion.parse(str);
                     }
                     catch (IllegalArgumentException ex) {
                         this.server.logger().error("Could not check for server updates, response invalid");
-                        if (res.data != null) {
-                            res.data.release();
-                        }
-                        return;
                     }
+                    if (ver == null) break block13;
+                    // Stable 2 fix: the old code released res.data inside the catch and
+                    // again in the finally below (double release -> IllegalReference
+                    // ReferenceCountException propagating through the HTTP callback)
                     if (ver.greaterThan(EaglerXServerVersion.UPDATE_VERSION)) {
                         this.available = ver.toString();
                         this.server.logger().warn("=============================================");

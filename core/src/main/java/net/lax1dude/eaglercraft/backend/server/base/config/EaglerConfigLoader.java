@@ -105,6 +105,13 @@ public class EaglerConfigLoader {
                 batching.setComment("EaglerXPaper feature: batches outbound packets to reduce WebSocket frame overhead. Automatically activates when a connection sends many packets rapidly (e.g. chunk loading). Reduces bandwidth usage for mobile/slow Eaglercraft connections.");
             }
             EaglerXPaperConfig.enableAdaptiveBatching = batching.getBoolean("enable", true, "Default value is true, if adaptive packet batching should be enabled");
+            IEaglerConfSection journal = config.getSection("outbound_packet_journal");
+            if (!journal.exists()) {
+                journal.setComment("EaglerXPaper feature (v1.1.1 Stable 2): records every outbound binary WebSocket frame sent to each Eaglercraft connection (vanilla Minecraft packets AND Eagler-protocol plugin frames, in exact wire order) in a bounded ring buffer and writes it to a log file in the plugin's logs folder when the connection closes. This is the field instrument for diagnosing client-side packet decode kicks (for example players getting kicked when loading a chunk containing certain entities). Enable it only while debugging a problem, it costs some memory and disk per connection while active. At most 200 journal files are kept, the oldest are deleted.");
+            }
+            EaglerXPaperConfig.enablePacketJournal = journal.getBoolean("enable", false, "Default value is false, set to true to record a journal of the outbound wire frames sent to each Eaglercraft connection and dump it to plugins/EaglercraftXServer/logs/journal-<player>-<time>.log when they disconnect");
+            EaglerXPaperConfig.journalMaxPackets = journal.getInteger("max_packets", 512, "Default value is 512, the maximum number of outbound frames retained in the journal ring buffer per connection (the most recent frames are kept)");
+            EaglerXPaperConfig.journalSnapshotBytes = journal.getInteger("snapshot_bytes", 48, "Default value is 48, the number of leading bytes captured from each outbound frame in the journal (enough to identify the packet type and key fields without copying whole chunk payloads)");
             IEaglerConfSection protocols = config.getSection("protocols");
             if (!protocols.exists()) {
                 protocols.setComment("Sets the protocol versions Eaglercraft players should be allowed to join this server with.");

@@ -19,6 +19,26 @@
  * of packets (more than burstThreshold packets within the monitoring window).
  * This means idle connections see zero overhead, and active connections
  * benefit from automatic batching.
+ *
+ * v1.1.1 Stable 2 hardening (verified against the wither-in-water
+ * chunk-load reproduction harness):
+ *  1. Ordering fence: non-ByteBuf writes (WebSocket control frames, raw RPC
+ *     frames) arriving from threads OTHER than the event loop are re-routed
+ *     through the event loop behind a buffer flush, so they can never
+ *     overtake gameplay packets already sitting in the batch buffer.
+ *  2. flush() interception: an explicit channel flush now flushes the batch
+ *     immediately instead of passing through while packets are still buffered.
+ *  3. The scheduled flush task always propagates a flush downstream, so a
+ *     write issued right after a buffer flush can never sit in the outbound
+ *     buffer with no flush behind it (previously delayed pings indefinitely
+ *     on quiet connections).
+ *  4. Byte budget: the buffer is bounded by totalBytes as well as packet
+ *     count, so bursts of large packets (chunk data) cannot buffer megabytes
+ *     of data or delay the flush past the latency target.
+ *  5. Large packet fast path: packets larger than largePacketPassthroughBytes
+ *     flush the current batch and pass straight through instead of being
+ *     batched. Big packets (map chunks) gain nothing from batching but
+ *     previously added up to maxDelayMs of latency each.
  */
 
 package net.lax1dude.eaglercraft.backend.server.base.pipeline;
@@ -36,8 +56,8 @@ import io.netty.util.concurrent.ScheduledFuture;
 
 /**
  * A per-channel handler that batches outbound ByteBufs to reduce WebSocket
- * frame overhead. Must be inserted AFTER the eagler frame codec in the
- * pipeline (so it receives raw ByteBufs, not BinaryWebSocketFrames).
+ * frame overhead. Must be inserted AFTER the eagler frame codec in the pipeline
+ * (so it receives raw ByteBufs, not BinaryWebSocketFrames).
  *
  * Behavior:
  * - If packets arrive slowly (< burstThreshold per window), pass through immediately.
@@ -45,10 +65,20 @@ import io.netty.util.concurrent.ScheduledFuture;
  *   buffer packets for up to maxDelayMs, then flush as a single write.
  * - After maxBurstDurationMs of continuous batching, flush immediately to prevent
  *   excessive latency buildup.
+ * - Packets larger than largePacketPassthroughBytes are never buffered; they
+ *   force a flush of the current batch first (preserving order) and then pass
+ *   straight through.
+ * - The total buffered byte count is capped at maxBufferedBytes (a hard
+ *   memory/latency bound in addition to the packet count bound).
  */
 public class AdaptivePacketBatcher extends ChannelDuplexHandler {
 
     public static final String HANDLER_NAME = "eagler-adaptive-batcher";
+
+    /** Packets at least this large (default 16 KiB) skip the batch. */
+    public static final int DEFAULT_LARGE_PACKET_PASSTHROUGH_BYTES = 16 * 1024;
+    /** Hard cap on total bytes buffered (default 256 KiB). */
+    public static final int DEFAULT_MAX_BUFFERED_BYTES = 256 * 1024;
 
     // Configuration
     private final int burstThreshold;           // packets per window to trigger batching
@@ -56,14 +86,21 @@ public class AdaptivePacketBatcher extends ChannelDuplexHandler {
     private final long maxDelayMs;              // max buffer time in batched mode
     private final long maxBurstDurationMs;      // max continuous batching before forced flush
     private final int maxBufferSize;            // max packets buffered before forced flush
+    private final int largePacketPassthroughBytes; // packets >= this size bypass the buffer
+    private final int maxBufferedBytes;         // total bytes buffered before forced flush
 
-    // State — all accessed only from the channel's event loop thread
+    // State — batchingActive is volatile so the foreign-thread write fence
+    // below can safely test it (everything else is event-loop-confined)
+    private volatile boolean batchingActive = false;
     private int packetCountInWindow = 0;
     private long windowStartMs = 0;
-    private boolean batchingActive = false;
     private long batchingStartedMs = 0;
     private final List<ByteBuf> buffer = new ArrayList<>();
     private final List<ChannelPromise> promises = new ArrayList<>();
+    // Stable 2 fix (round 4): volatile — getBufferedBytes() is read by
+    // /eaglerdiagnose from the platform main thread; without volatile a 64-bit
+    // long written only on the event loop could tear on 32-bit JVMs.
+    private volatile long bufferedBytes = 0;
     private ScheduledFuture<?> flushTask = null;
 
     /**
@@ -71,11 +108,20 @@ public class AdaptivePacketBatcher extends ChannelDuplexHandler {
      */
     public AdaptivePacketBatcher(int burstThreshold, long windowMs, long maxDelayMs,
             long maxBurstDurationMs, int maxBufferSize) {
+        this(burstThreshold, windowMs, maxDelayMs, maxBurstDurationMs, maxBufferSize,
+                DEFAULT_LARGE_PACKET_PASSTHROUGH_BYTES, DEFAULT_MAX_BUFFERED_BYTES);
+    }
+
+    public AdaptivePacketBatcher(int burstThreshold, long windowMs, long maxDelayMs,
+            long maxBurstDurationMs, int maxBufferSize, int largePacketPassthroughBytes,
+            int maxBufferedBytes) {
         this.burstThreshold = Math.max(1, burstThreshold);
         this.windowMs = Math.max(10, windowMs);
         this.maxDelayMs = Math.max(1, maxDelayMs);
         this.maxBurstDurationMs = Math.max(maxDelayMs, maxBurstDurationMs);
         this.maxBufferSize = Math.max(1, maxBufferSize);
+        this.largePacketPassthroughBytes = Math.max(0, largePacketPassthroughBytes);
+        this.maxBufferedBytes = Math.max(this.largePacketPassthroughBytes, maxBufferedBytes);
     }
 
     /**
@@ -87,9 +133,13 @@ public class AdaptivePacketBatcher extends ChannelDuplexHandler {
 
     @Override
     public void handlerRemoved(ChannelHandlerContext ctx) throws Exception {
-        // Clean up if removed from pipeline without channelInactive
+        // Stable 2 fix: a plugin rebuilding/removing this pipeline section while
+        // the channel is still active must not drop the buffered packets — a
+        // dropped packet mid-stream is exactly the client-side stream
+        // misalignment class this fork fights. Forward them instead; the
+        // discard path stays reserved for dead channels.
         cancelFlushTask();
-        flushBuffer(ctx, true);
+        flushBuffer(ctx, !ctx.channel().isActive());
         super.handlerRemoved(ctx);
     }
 
@@ -103,9 +153,42 @@ public class AdaptivePacketBatcher extends ChannelDuplexHandler {
     @Override
     public void write(ChannelHandlerContext ctx, Object msg, ChannelPromise promise) throws Exception {
         if (!(msg instanceof ByteBuf)) {
+            if (!ctx.channel().eventLoop().inEventLoop()) {
+                // Foreign-thread write (RPC/webview/scheduler calling the handler
+                // directly — standard channel/ctx writes are marshaled by Netty and
+                // never reach this branch, but defensive plugins and reflection can).
+                // Re-enter write() ON the event loop so the buffered packets are
+                // flushed first and ordering is preserved.
+                if (batchingActive) {
+                    try {
+                        ctx.channel().eventLoop().execute(() -> {
+                            try {
+                                write(ctx, msg, promise);
+                            } catch (Throwable t) {
+                                ReferenceCountUtil.release(msg);
+                                try {
+                                    promise.setFailure(t);
+                                } catch (Exception ignored) {
+                                }
+                            }
+                        });
+                    } catch (Throwable rejected) {
+                        // event loop is shutting down — release cleanly instead of
+                        // leaking the message through a rejected task
+                        ReferenceCountUtil.release(msg);
+                        try {
+                            promise.setFailure(rejected);
+                        } catch (Exception ignored) {
+                        }
+                    }
+                    return;
+                }
+                ctx.write(msg, promise);
+                return;
+            }
             // Flush anything buffered first so the packet stream stays ordered
             // around non-ByteBuf writes that bypass the buffer
-            if (batchingActive && !buffer.isEmpty() && ctx.channel().eventLoop().inEventLoop()) {
+            if (batchingActive && !buffer.isEmpty()) {
                 cancelFlushTask();
                 flushBuffer(ctx, false);
                 if (ctx.channel().isActive()) {
@@ -113,8 +196,10 @@ public class AdaptivePacketBatcher extends ChannelDuplexHandler {
                     scheduleFlush(ctx);
                 }
             }
-            // Non-ByteBuf writes (like BinaryWebSocketFrame) pass through immediately
+            // Non-ByteBuf writes (like BinaryWebSocketFrame) pass through immediately,
+            // followed by a flush so they cannot sit unflushed behind us
             ctx.write(msg, promise);
+            ctx.flush();
             return;
         }
 
@@ -122,6 +207,26 @@ public class AdaptivePacketBatcher extends ChannelDuplexHandler {
         if (buf.readableBytes() == 0) {
             // Empty buffers pass through (matches WebSocketEaglerFrameCodec behavior)
             ctx.write(msg, promise);
+            return;
+        }
+
+        // Large-packet fast path (Stable 2): a packet this big gains nothing
+        // from batching but adds up to maxDelayMs of latency and inflates the
+        // memory bound. Flush what we have (preserving order), then let this
+        // packet through unbatched and flushed immediately.
+        if (this.largePacketPassthroughBytes > 0 && buf.readableBytes() >= this.largePacketPassthroughBytes) {
+            if (batchingActive) {
+                if (!buffer.isEmpty()) {
+                    cancelFlushTask();
+                    flushBuffer(ctx, false);
+                }
+                if (ctx.channel().isActive()) {
+                    batchingStartedMs = System.currentTimeMillis();
+                    scheduleFlush(ctx);
+                }
+            }
+            ctx.write(msg, promise);
+            ctx.flush();
             return;
         }
 
@@ -156,9 +261,11 @@ public class AdaptivePacketBatcher extends ChannelDuplexHandler {
             // Buffer this packet
             buffer.add(buf);
             promises.add(promise);
+            bufferedBytes += buf.readableBytes();
 
-            // Check if we need to force a flush
-            if (buffer.size() >= maxBufferSize || (now - batchingStartedMs) >= maxBurstDurationMs) {
+            // Check if we need to force a flush (count, bytes, or duration)
+            if (buffer.size() >= maxBufferSize || bufferedBytes >= maxBufferedBytes
+                    || (now - batchingStartedMs) >= maxBurstDurationMs) {
                 cancelFlushTask();
                 flushBuffer(ctx, false);
                 // Stay in batching mode — reschedule flush for next batch
@@ -171,6 +278,23 @@ public class AdaptivePacketBatcher extends ChannelDuplexHandler {
             // Pass through immediately — low-throughput connection
             ctx.write(msg, promise);
         }
+    }
+
+    @Override
+    public void flush(ChannelHandlerContext ctx) throws Exception {
+        // Stable 2: an explicit flush from upstream (vanilla per-tick flush,
+        // keep-alive writers, etc.) must not sail past a full batch buffer.
+        // Netty only invokes us here on the event loop thread, so the state
+        // access below is safe.
+        if (!buffer.isEmpty()) {
+            cancelFlushTask();
+            flushBuffer(ctx, false);
+            if (batchingActive && ctx.channel().isActive()) {
+                batchingStartedMs = System.currentTimeMillis();
+                scheduleFlush(ctx);
+            }
+        }
+        ctx.flush();
     }
 
     private void scheduleFlush(ChannelHandlerContext ctx) {
@@ -194,10 +318,14 @@ public class AdaptivePacketBatcher extends ChannelDuplexHandler {
             if (batchingActive && channel.isActive() && !buffer.isEmpty()) {
                 scheduleFlush(ctx);
             } else if (batchingActive && buffer.isEmpty()) {
-                // No more packets — exit batching mode
+                // No more packets — exit batching mode, but still push a
+                // flush downstream: the last write made before the buffer
+                // emptied (e.g. a control frame written between batches)
+                // otherwise has no flush behind it
                 batchingActive = false;
                 batchingStartedMs = 0;
             }
+            ctx.flush();
         }, maxDelayMs, java.util.concurrent.TimeUnit.MILLISECONDS);
     }
 
@@ -232,12 +360,14 @@ public class AdaptivePacketBatcher extends ChannelDuplexHandler {
             }
             buffer.clear();
             promises.clear();
+            bufferedBytes = 0;
             return;
         }
 
         try {
             while (!buffer.isEmpty()) {
                 ByteBuf buf = buffer.remove(0);
+                bufferedBytes -= buf.readableBytes();
                 ChannelPromise promise = promises.remove(0);
                 try {
                     ctx.write(buf, promise);
@@ -263,6 +393,7 @@ public class AdaptivePacketBatcher extends ChannelDuplexHandler {
             }
             buffer.clear();
             promises.clear();
+            bufferedBytes = 0;
         }
     }
 
@@ -278,5 +409,12 @@ public class AdaptivePacketBatcher extends ChannelDuplexHandler {
      */
     public int getBufferSize() {
         return buffer.size();
+    }
+
+    /**
+     * Returns the current number of buffered bytes (Stable 2).
+     */
+    public long getBufferedBytes() {
+        return bufferedBytes;
     }
 }

@@ -90,7 +90,14 @@ public class InjectedMessageController extends MessageController {
         public void readPacket(ByteBuf buffer) {
                 try {
                         GameMessagePacket pkt;
-                        if (buffer.readableBytes() > 0) {
+                        // Stable 2 fix: a 1-byte message (just the 0xEE marker) previously fell
+                        // through to getUnsignedByte at the writer index and threw an UNCAUGHT
+                        // IndexOutOfBoundsException (not an IOException, so it escaped the
+                        // handler below). Reject it cleanly instead.
+                        if (buffer.readableBytes() == 1) {
+                                throw new IOException("Received an empty injected message");
+                        }
+                        if (buffer.readableBytes() > 1) {
                                 ByteBufInputWrapper is = inputWrapper;
                                 is.buffer = buffer.skipBytes(1);
                                 int ii = buffer.readerIndex();

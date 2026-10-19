@@ -26,48 +26,56 @@ import io.netty.handler.codec.ByteToMessageDecoder;
 
 public class HAProxyDetectionHandler extends ByteToMessageDecoder {
 
-	private final ChannelHandler handlerToRemove;
+        private final ChannelHandler handlerToRemove;
 
-	public HAProxyDetectionHandler(ChannelHandler handlerToRemove) {
-		this.handlerToRemove = handlerToRemove;
-	}
+        public HAProxyDetectionHandler(ChannelHandler handlerToRemove) {
+                this.handlerToRemove = handlerToRemove;
+        }
 
-	@Override
-	protected void decode(ChannelHandlerContext ctx, ByteBuf in, List<Object> out) throws Exception {
-		int readable = in.readableBytes();
-		if (!ctx.channel().isActive()) {
-			in.skipBytes(readable);
-		} else {
-			boolean proxy = false;
-			eagler: {
-				int readerIndex = in.readerIndex();
-				if (readable >= 12) {
-					proxy = in.getByte(readerIndex) == (byte) 0x0D && in.getByte(readerIndex + 1) == (byte) 0x0A
-							&& in.getByte(readerIndex + 2) == (byte) 0x0D && in.getByte(readerIndex + 3) == (byte) 0x0A
-							&& in.getByte(readerIndex + 4) == (byte) 0x00 && in.getByte(readerIndex + 5) == (byte) 0x0D
-							&& in.getByte(readerIndex + 6) == (byte) 0x0A && in.getByte(readerIndex + 7) == (byte) 0x51
-							&& in.getByte(readerIndex + 8) == (byte) 0x55 && in.getByte(readerIndex + 9) == (byte) 0x49
-							&& in.getByte(readerIndex + 10) == (byte) 0x54
-							&& in.getByte(readerIndex + 11) == (byte) 0x0A;
-					if (proxy) {
-						break eagler;
-					}
-				}
-				if (readable >= 6) {
-					proxy = in.getByte(readerIndex) == (byte) 'P' && in.getByte(readerIndex + 1) == (byte) 'R'
-							&& in.getByte(readerIndex + 2) == (byte) 'O' && in.getByte(readerIndex + 3) == (byte) 'X'
-							&& in.getByte(readerIndex + 4) == (byte) 'Y' && in.getByte(readerIndex + 5) == (byte) ' ';
-					break eagler;
-				}
-				return;
-			}
-			ChannelPipeline pipeline = ctx.pipeline();
-			if (!proxy) {
-				pipeline.remove(handlerToRemove);
-			}
-			ctx.fireChannelRead(BufferUtils.readRetainedSlice(in, readable));
-			pipeline.remove(this);
-		}
-	}
+        @Override
+        protected void decode(ChannelHandlerContext ctx, ByteBuf in, List<Object> out) throws Exception {
+                int readable = in.readableBytes();
+                if (!ctx.channel().isActive()) {
+                        in.skipBytes(readable);
+                } else {
+                        boolean proxy = false;
+                        eagler: {
+                                int readerIndex = in.readerIndex();
+                                if (readable >= 12) {
+                                        proxy = in.getByte(readerIndex) == (byte) 0x0D && in.getByte(readerIndex + 1) == (byte) 0x0A
+                                                        && in.getByte(readerIndex + 2) == (byte) 0x0D && in.getByte(readerIndex + 3) == (byte) 0x0A
+                                                        && in.getByte(readerIndex + 4) == (byte) 0x00 && in.getByte(readerIndex + 5) == (byte) 0x0D
+                                                        && in.getByte(readerIndex + 6) == (byte) 0x0A && in.getByte(readerIndex + 7) == (byte) 0x51
+                                                        && in.getByte(readerIndex + 8) == (byte) 0x55 && in.getByte(readerIndex + 9) == (byte) 0x49
+                                                        && in.getByte(readerIndex + 10) == (byte) 0x54
+                                                        && in.getByte(readerIndex + 11) == (byte) 0x0A;
+                                        if (proxy) {
+                                                break eagler;
+                                        }
+                                }
+                                // Stable 2 fix: a PROXY v2 header fragmented across TCP segments into
+                                // 6-11 readable bytes previously fell through to the (unmatched) v1
+                                // "PROXY " check and was misclassified as non-proxy data. If the first
+                                // two bytes look like the v2 preamble, wait for the full 12 bytes.
+                                if (readable >= 2 && in.getByte(readerIndex) == (byte) 0x0D
+                                                && in.getByte(readerIndex + 1) == (byte) 0x0A && readable < 12) {
+                                        return;
+                                }
+                                if (readable >= 6) {
+                                        proxy = in.getByte(readerIndex) == (byte) 'P' && in.getByte(readerIndex + 1) == (byte) 'R'
+                                                        && in.getByte(readerIndex + 2) == (byte) 'O' && in.getByte(readerIndex + 3) == (byte) 'X'
+                                                        && in.getByte(readerIndex + 4) == (byte) 'Y' && in.getByte(readerIndex + 5) == (byte) ' ';
+                                        break eagler;
+                                }
+                                return;
+                        }
+                        ChannelPipeline pipeline = ctx.pipeline();
+                        if (!proxy) {
+                                pipeline.remove(handlerToRemove);
+                        }
+                        ctx.fireChannelRead(BufferUtils.readRetainedSlice(in, readable));
+                        pipeline.remove(this);
+                }
+        }
 
 }

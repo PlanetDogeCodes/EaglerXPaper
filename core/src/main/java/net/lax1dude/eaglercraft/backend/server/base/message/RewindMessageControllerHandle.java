@@ -23,36 +23,39 @@ import net.lax1dude.eaglercraft.v1_8.socket.protocol.pkt.GameMessagePacket;
 
 public class RewindMessageControllerHandle implements IMessageController {
 
-	IPlatformLogger logger;
-	GameMessageHandler handler;
-	RewindMessageControllerImpl impl;
+        IPlatformLogger logger;
+        GameMessageHandler handler;
+        // Stable 2 fix: assigned on the login/async thread, read by the rewind addon
+        // from other threads — a stale null read otherwise permanently drops inbound
+        // packets for that connection ("connection is not ready").
+        volatile RewindMessageControllerImpl impl;
 
-	public RewindMessageControllerHandle(IPlatformLogger logger) {
-		this.logger = logger;
-	}
+        public RewindMessageControllerHandle(IPlatformLogger logger) {
+                this.logger = logger;
+        }
 
-	@Override
-	public void setOutboundHandler(GameMessageHandler handler) {
-		this.handler = handler;
-	}
+        @Override
+        public void setOutboundHandler(GameMessageHandler handler) {
+                this.handler = handler;
+        }
 
-	@Override
-	public void recieveInboundMessage(GameMessagePacket packet) {
-		if (impl != null) {
-			impl.handlePacket(packet);
-		} else {
-			logger.error("Dropping inbound packet " + packet.getClass().getSimpleName()
-					+ " on rewind connection because the connection is not ready!");
-		}
-	}
+        @Override
+        public void recieveInboundMessage(GameMessagePacket packet) {
+                if (impl != null) {
+                        impl.handlePacket(packet);
+                } else {
+                        logger.error("Dropping inbound packet " + packet.getClass().getSimpleName()
+                                        + " on rewind connection because the connection is not ready!");
+                }
+        }
 
-	void recieveOutboundMessage(GameMessagePacket packet) {
-		if (handler != null) {
-			packet.handlePacket(handler);
-		} else {
-			logger.error("Dropping outbound packet " + packet.getClass().getSimpleName()
-					+ " on rewind connection because no handler is registered!");
-		}
-	}
+        void recieveOutboundMessage(GameMessagePacket packet) {
+                if (handler != null) {
+                        packet.handlePacket(handler);
+                } else {
+                        logger.error("Dropping outbound packet " + packet.getClass().getSimpleName()
+                                        + " on rewind connection because no handler is registered!");
+                }
+        }
 
 }

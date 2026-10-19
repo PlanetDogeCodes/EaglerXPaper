@@ -483,6 +483,11 @@ extends ChannelInboundHandlerAdapter {
         if (!(cause instanceof ReadTimeoutException) && ctx.channel().isActive()) {
             this.pipelineData.connectionLogger.error("Uncaught exception in pipeline", cause);
         }
+        // Stable 2: close dead connections — a DecoderException otherwise leaves this
+        // handler attached to a live channel doing nothing until the idle handler reaps it
+        if (ctx.channel().isActive()) {
+            ctx.close();
+        }
     }
 }
 

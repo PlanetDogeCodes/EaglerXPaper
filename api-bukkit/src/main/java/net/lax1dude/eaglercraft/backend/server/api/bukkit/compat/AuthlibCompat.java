@@ -343,7 +343,16 @@ public final class AuthlibCompat {
             signatureMH = lookup2.unreflect(signatureMethod).asType(strType.appendParameterTypes(Property.class));
         }
         catch (ReflectiveOperationException e) {
-            throw new ExceptionInInitializerError("Could not bind authlib Property accessors: " + e);
+            // v1.1.1 Stable 2 fix: the class invariant is "NEVER throw from <clinit>"
+            // (this class is loaded from dozens of call sites; an
+            // ExceptionInInitializerError here would turn every later touch into
+            // NoClassDefFoundError). Degrade to null handles — the getters already
+            // null-check their handles, and smokeTest() reports the degraded mode
+            // at startup instead of bricking the plugin.
+            nameMH = null;
+            valueMH = null;
+            signatureMH = null;
+            authlib6 = false;
         }
         AUTHLIB_6_PLUS = authlib6;
         MH_NAME = nameMH;
@@ -353,39 +362,46 @@ public final class AuthlibCompat {
             lookup = MethodHandles.lookup();
         }
         catch (Exception e) {
-            throw new ExceptionInInitializerError("Could not create MethodHandles.lookup: " + e);
+            // Stable 2: preserve the never-throw-from-clinit invariant — degrade
+            // instead of throwing (lookup is only used for optional binds below;
+            // a null lookup skips them, smokeTest reports degraded mode)
+            lookup = null;
         }
         MethodHandle legacyMH = null;
-        try {
-            legacyMH = lookup.unreflect(GameProfile.class.getMethod("getProperties", new Class[0])).asType(MethodType.methodType(Multimap.class, GameProfile.class));
-        }
-        catch (NoSuchMethodException strType) {
-        }
-        catch (ReflectiveOperationException strType) {
-        }
-        catch (IllegalArgumentException strType) {
-            // empty catch block
+        if (lookup != null) {
+            try {
+                legacyMH = lookup.unreflect(GameProfile.class.getMethod("getProperties", new Class[0])).asType(MethodType.methodType(Multimap.class, GameProfile.class));
+            }
+            catch (NoSuchMethodException strType) {
+            }
+            catch (ReflectiveOperationException strType) {
+            }
+            catch (IllegalArgumentException strType) {
+                // empty catch block
+            }
         }
         if (legacyMH != null) {
             getPropsMH = legacyMH;
             gameProfileIsRecord = false;
         } else {
             MethodHandle recordMH = null;
-            try {
-                Class<?> propertyMapClass;
+            if (lookup != null) {
                 try {
-                    propertyMapClass = Class.forName("com.mojang.authlib.properties.PropertyMap");
+                    Class<?> propertyMapClass;
+                    try {
+                        propertyMapClass = Class.forName("com.mojang.authlib.properties.PropertyMap");
+                    }
+                    catch (ClassNotFoundException cnfe) {
+                        propertyMapClass = Object.class;
+                    }
+                    recordMH = lookup.findVirtual(GameProfile.class, "properties", MethodType.methodType(propertyMapClass));
                 }
-                catch (ClassNotFoundException cnfe) {
-                    propertyMapClass = Object.class;
+                catch (NoSuchMethodException e) {
+                    recordMH = null;
                 }
-                recordMH = lookup.findVirtual(GameProfile.class, "properties", MethodType.methodType(propertyMapClass));
-            }
-            catch (NoSuchMethodException e) {
-                recordMH = null;
-            }
-            catch (ReflectiveOperationException e) {
-                recordMH = null;
+                catch (ReflectiveOperationException e) {
+                    recordMH = null;
+                }
             }
             if (recordMH != null) {
                 getPropsMH = recordMH.asType(MethodType.methodType(Object.class, GameProfile.class));
@@ -399,29 +415,31 @@ public final class AuthlibCompat {
         MH_GAMEPROFILE_GET_PROPERTIES = getPropsMH;
         MethodHandle getIdMH = null;
         MethodHandle getNameMH = null;
-        try {
-            getIdMH = lookup.findVirtual(GameProfile.class, "getId", MethodType.methodType(UUID.class));
-        }
-        catch (NoSuchMethodException e) {
+        if (lookup != null) {
             try {
-                getIdMH = lookup.findVirtual(GameProfile.class, "id", MethodType.methodType(UUID.class));
+                getIdMH = lookup.findVirtual(GameProfile.class, "getId", MethodType.methodType(UUID.class));
             }
-            catch (ReflectiveOperationException reflectiveOperationException) {}
-        }
-        catch (ReflectiveOperationException e) {
-            // empty catch block
-        }
-        try {
-            getNameMH = lookup.findVirtual(GameProfile.class, "getName", MethodType.methodType(String.class));
-        }
-        catch (NoSuchMethodException e) {
+            catch (NoSuchMethodException e) {
+                try {
+                    getIdMH = lookup.findVirtual(GameProfile.class, "id", MethodType.methodType(UUID.class));
+                }
+                catch (ReflectiveOperationException reflectiveOperationException) {}
+            }
+            catch (ReflectiveOperationException e) {
+                // empty catch block
+            }
             try {
-                getNameMH = lookup.findVirtual(GameProfile.class, "name", MethodType.methodType(String.class));
+                getNameMH = lookup.findVirtual(GameProfile.class, "getName", MethodType.methodType(String.class));
             }
-            catch (ReflectiveOperationException reflectiveOperationException) {}
-        }
-        catch (ReflectiveOperationException reflectiveOperationException) {
-            // empty catch block
+            catch (NoSuchMethodException e) {
+                try {
+                    getNameMH = lookup.findVirtual(GameProfile.class, "name", MethodType.methodType(String.class));
+                }
+                catch (ReflectiveOperationException reflectiveOperationException) {}
+            }
+            catch (ReflectiveOperationException reflectiveOperationException) {
+                // empty catch block
+            }
         }
         MH_GAMEPROFILE_GET_ID = getIdMH;
         MH_GAMEPROFILE_GET_NAME = getNameMH;

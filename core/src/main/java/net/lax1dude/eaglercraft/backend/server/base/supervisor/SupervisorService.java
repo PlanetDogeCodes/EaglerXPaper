@@ -157,10 +157,13 @@ IEaglerXServerPlayerCountHandler {
         SupervisorConnection handler = CURRENT_CONNECTION_HANDLE.getAndSet(this, null);
         if (handler != null) {
             try {
-                handler.getChannel().close().await();
+                // Stable 2 fix (round 5): bound the close wait (an untimed await() on the
+                // platform main thread could hang server shutdown forever) and restore the
+                // interrupt flag if we are interrupted while waiting.
+                handler.getChannel().close().await(5000L, java.util.concurrent.TimeUnit.MILLISECONDS);
             }
             catch (InterruptedException interruptedException) {
-                // empty catch block
+                Thread.currentThread().interrupt();
             }
         }
         this.onConnectionEnd();

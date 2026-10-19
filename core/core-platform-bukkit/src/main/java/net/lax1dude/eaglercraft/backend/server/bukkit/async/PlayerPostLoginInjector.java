@@ -19,6 +19,7 @@
 package net.lax1dude.eaglercraft.backend.server.bukkit.async;
 
 import com.google.common.collect.MapMaker;
+import com.google.common.collect.Multimap;
 import com.mojang.authlib.GameProfile;
 import com.mojang.authlib.properties.Property;
 import io.netty.channel.Channel;
@@ -94,6 +95,9 @@ public class PlayerPostLoginInjector {
     protected Field packetLoginDisconnectMsg;
     protected final ConcurrentMap<Property, Player> entityPlayers;
     protected final ConcurrentMap<UUID, LoginEventContext> ctxByUUID;
+    // Stable 2 fix (round 3): degraded-authlib marker-injection failures are logged
+    // once per server run instead of once per (vanilla + Eagler) login.
+    protected volatile boolean markerWarnOnce = false;
     private static final String[] KNOWN_PLAY_DISCONNECT_FQNS = new String[]{"net.minecraft.network.protocol.common.ClientboundDisconnectPacket", "net.minecraft.network.protocol.game.ClientboundDisconnectPacket", "net.minecraft.server.v1_12_R1.PacketPlayOutKickDisconnect"};
     private static final String[] LEGACY_COMPRESSION_METHOD_NAMES = new String[]{"setCompressionLevel", "a"};
 
@@ -629,19 +633,26 @@ public class PlayerPostLoginInjector {
                                     Player player = null;
                                     GameProfile gameProfile = err.gameProfile;
                                     synchronized (gameProfile) {
-                                        Iterator itr = AuthlibCompat.getProperties(err.gameProfile).values().iterator();
-                                        while (itr.hasNext()) {
-                                            Property prop = (Property)itr.next();
-                                            String propName = AuthlibCompat.getName(prop);
-                                            if (propName == null || !propName.startsWith("$eaglerMarker_")) continue;
-                                            Player e = (Player)this.entityPlayers.remove(prop);
-                                            if (e != null) {
-                                                player = e;
+                                        // Stable 2 fix (round 3): getProperties returns null when authlib is
+                                        // degraded — null-guard before iterating. An NPE here would escape
+                                        // into the vanilla tick loop (only UnsupportedOperationException
+                                        // is caught further down) and risk a server crash report.
+                                        Multimap<String, Property> errProps = AuthlibCompat.getProperties(err.gameProfile);
+                                        if (errProps != null) {
+                                            Iterator itr = errProps.values().iterator();
+                                            while (itr.hasNext()) {
+                                                Property prop = (Property)itr.next();
+                                                String propName = AuthlibCompat.getName(prop);
+                                                if (propName == null || !propName.startsWith("$eaglerMarker_")) continue;
+                                                Player e = (Player)this.entityPlayers.remove(prop);
+                                                if (e != null) {
+                                                    player = e;
+                                                }
+                                                try {
+                                                    itr.remove();
+                                                }
+                                                catch (UnsupportedOperationException unsupportedOperationException) {}
                                             }
-                                            try {
-                                                itr.remove();
-                                            }
-                                            catch (UnsupportedOperationException unsupportedOperationException) {}
                                         }
                                     }
                                     if (player != null) {
@@ -823,10 +834,22 @@ public class PlayerPostLoginInjector {
                     clz = Class.forName(nm2 + "PacketPlayOutKickDisconnect");
                 }
                 catch (ReflectiveOperationException ex) {
+                    // Stable 2 fix (round 3): the decompiled control flow rethrew ex
+                    // unconditionally, discarding a SUCCESSFUL `.game.` sibling lookup —
+                    // on versions not covered by KNOWN_PLAY_DISCONNECT_FQNS a
+                    // login-state kick arriving after play-state was silently dropped
+                    // (client hung instead of seeing the kick message). Only rethrow
+                    // when the fallback lookup also fails or does not apply.
                     if (nm2.endsWith(".login.")) {
-                        clz = Class.forName(nm2.substring(0, nm2.length() - 7) + ".game.PacketPlayOutKickDisconnect");
+                        try {
+                            clz = Class.forName(nm2.substring(0, nm2.length() - 7) + ".game.PacketPlayOutKickDisconnect");
+                        }
+                        catch (ReflectiveOperationException ex2) {
+                            throw ex;
+                        }
+                    } else {
+                        throw ex;
                     }
-                    throw ex;
                 }
             }
             Constructor<?> ctor = null;
@@ -871,19 +894,35 @@ public class PlayerPostLoginInjector {
             try {
                 Object player = BukkitUnsafe.getHandle(event.getPlayer());
                 GameProfile profile = BukkitUnsafe.getGameProfile(player);
-                if (AuthlibCompat.containsKey(AuthlibCompat.getProperties(profile), "floodgate:is_bedrock")) {
+                // Stable 2 fix (round 3): null-safe containsKey — getProperties returns
+                // null when authlib is degraded (previously NPE'd into the catch below
+                // and logged a failure for every single login).
+                Multimap<String, Property> loginEventProps = AuthlibCompat.getProperties(profile);
+                if (loginEventProps != null && AuthlibCompat.containsKey(loginEventProps, "floodgate:is_bedrock")) {
                     return;
                 }
                 Property marker = BukkitUnsafe.injectProfileProperty(player, markerName, "TMP", null);
                 if (marker == null) {
-                    this.plugin.logger().warn("EaglerXServer: could not inject $eaglerMarker_ property into GameProfile for player " + event.getPlayer().getName() + " \u2014 post-login Eagler features will be unavailable");
+                    // Stable 2 fix (round 3): degraded-authlib marker failures are logged
+                    // once per server run instead of once per (vanilla + Eagler) login.
+                    if (!this.markerWarnOnce) {
+                        this.markerWarnOnce = true;
+                        this.plugin.logger().warn("EaglerXServer: could not inject $eaglerMarker_ properties into GameProfiles (degraded authlib?) \u2014 post-login Eagler features will be unavailable (warning once)");
+                    }
                     return;
                 }
                 this.entityPlayers.put(marker, event.getPlayer());
                 if (!this.isModernLoginFlow()) break block9;
                 LoginEventContext ctx = (LoginEventContext)this.ctxByUUID.get(event.getPlayer().getUniqueId());
                 if (ctx == null) {
-                    this.plugin.logger().warn("EaglerXServer: no login context found for Eagler player " + event.getPlayer().getName() + " \u2014 post-login Eagler features will be unavailable for this connection");
+                    // Stable 2 fix (round 3): this handler runs for EVERY login \u2014 the
+                    // marker injection above is by design applied to all profiles \u2014 but
+                    // only Eagler connections ever register a login context by UUID.
+                    // Only warn when the connection actually looks like an Eaglercraft
+                    // connection; previously every vanilla join spammed this warning.
+                    if (PlayerPostLoginInjector.isEaglerChannel(event.getPlayer())) {
+                        this.plugin.logger().warn("EaglerXServer: no login context found for Eagler player " + event.getPlayer().getName() + " \u2014 post-login Eagler features will be unavailable for this connection");
+                    }
                 }
                 if (ctx == null) break block9;
                 this.ctxByUUID.remove(event.getPlayer().getUniqueId());
@@ -935,6 +974,32 @@ public class PlayerPostLoginInjector {
 
     public void fireEventLoginInit(Channel channel) {
         this.plugin.getServer().getPluginManager().callEvent((Event)new PlayerLoginInitEventImpl(channel));
+    }
+
+    private static boolean isEaglerChannel(Player player) {
+        // Stable 2 fix (round 3): Eagler-only pipeline marker check. These handler
+        // names are installed exclusively on Eagler-protocol connections (both
+        // player and query paths); the shared "eagler-login-uuid-registrar" is
+        // deliberately NOT checked because the modern-flow init hook adds it to
+        // every vanilla connection too.
+        try {
+            Channel ch = BukkitUnsafe.getPlayerChannel(player);
+            if (ch == null) {
+                return false;
+            }
+            for (String name : ch.pipeline().names()) {
+                if ("eagler-frame-codec".equals(name) || "eagler-handshake".equals(name)
+                        || "eagler-ws-initial".equals(name) || "eagler-ws-ping-handler".equals(name)
+                        || "eagler-query".equals(name)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+        catch (Throwable t) {
+            // cannot tell — keep the warning (conservative)
+            return true;
+        }
     }
 
     private void fireEventLoginPostAsync(Player player, LoginEventContext ctx, Consumer<PlayerLoginPostEvent> callback) {

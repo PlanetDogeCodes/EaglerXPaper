@@ -114,7 +114,13 @@ extends ChannelDuplexHandler {
                 return true;
             }
             catch (Throwable throwable) {
-                // empty catch block
+                // Stable 2: a failed strip means vanilla compression stays installed and
+                // the Eaglercraft client receives double-framed data — log it loudly
+                // instead of silently swallowing the failure.
+                if (this.pipelineData != null && this.pipelineData.connectionLogger != null) {
+                    this.pipelineData.connectionLogger.warn(
+                            "Failed to strip vanilla compression handler \"" + name + "\": " + throwable);
+                }
             }
         }
         return false;
@@ -132,7 +138,12 @@ extends ChannelDuplexHandler {
                 pipeline.replace(name, name, (ChannelHandler)NOPDummyHandler.INSTANCE);
                 stripped = true;
             }
-            catch (Throwable throwable) {}
+            catch (Throwable throwable) {
+                if (this.pipelineData != null && this.pipelineData.connectionLogger != null) {
+                    this.pipelineData.connectionLogger.warn(
+                            "Failed to strip vanilla compression handler \"" + name + "\": " + throwable);
+                }
+            }
         }
         return stripped;
     }

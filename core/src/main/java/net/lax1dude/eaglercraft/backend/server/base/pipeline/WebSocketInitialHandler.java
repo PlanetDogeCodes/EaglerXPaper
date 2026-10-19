@@ -72,6 +72,35 @@ extends ChannelInboundHandlerAdapter {
                             pipelineData.server.logger().warn("Could not install the adaptive packet batcher", e);
                         }
                     }
+                    if (EaglerXPaperConfig.enablePacketJournal) {
+                        // Stable 2 (round 4 fix): the journal is installed HEAD-ward of the
+                        // frame codec so it observes every encoded BinaryWebSocketFrame
+                        // handed to the WebSocket transport — vanilla Minecraft packets
+                        // AND the Eagler-protocol plugin frames (skins, capes, BackendRPC,
+                        // webview, voice) injected between the frame codec and the guard,
+                        // in exact wire order, after the batcher has forwarded its buffers.
+                        // (The previous tail-of-batcher position was blind to the injected
+                        // stream — precisely the stream a client-side decode-kick report
+                        // needs evidence from.)
+                        try {
+                            pipeline.addBefore("eagler-frame-codec", OutboundPacketJournalHandler.HANDLER_NAME,
+                                            (ChannelHandler)new OutboundPacketJournalHandler(pipelineData));
+                        }
+                        catch (Exception e) {
+                            pipelineData.server.logger().warn("Could not install the outbound packet journal", e);
+                        }
+                    }
+                    // Stable 2 (restored feature): per-connection traffic statistics for
+                    // /eaglerclients and /eaglerdiagnose — near-zero cost, always installed.
+                    // Round 4 fix: moved head-ward of the frame codec together with the
+                    // journal so the reported bandwidth covers the full wire stream.
+                    try {
+                        pipeline.addBefore("eagler-frame-codec", ConnectionStatsHandler.HANDLER_NAME,
+                                        (ChannelHandler)new ConnectionStatsHandler());
+                    }
+                    catch (Exception e) {
+                        pipelineData.server.logger().warn("Could not install the connection stats handler", e);
+                    }
                     pipeline.fireUserEventTriggered((Object)EnumPipelineEvent.EAGLER_INJECTED_FRAME_HANDLERS);
                     ctx.fireChannelRead((Object)msg2.content().retain());
                     break block21;
@@ -91,6 +120,10 @@ extends ChannelInboundHandlerAdapter {
                     pipeline.remove("eagler-ws-initial");
                     pipeline.addLast("eagler-query", (ChannelHandler)new WebSocketQueryHandler(pipelineData.server, pipelineData));
                     pipeline.fireUserEventTriggered((Object)EnumPipelineEvent.EAGLER_STATE_WEBSOCKET_QUERY);
+                    // Stable 2 fix: this connection is now a long-lived query/MOTD channel, not
+                    // a player login — the 30s login timeout armed at WS-upgrade would otherwise
+                    // force-close it mid-session. No cancelling handler exists on this path.
+                    pipelineData.cancelLoginTimeoutHelper();
                     ctx.fireChannelRead((Object)msg2.retain());
                 } else {
                     ctx.close();
