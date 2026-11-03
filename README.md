@@ -4,7 +4,7 @@
 [![Java](https://img.shields.io/badge/Java-25%2B-orange)](https://adoptium.net)
 [![License](https://img.shields.io/badge/license-BSD--3--Clause-green)](LICENSE)
 
-EaglerXPaper is a forward port of lax1dude's EaglerXServer Spigot functionalities that extends Bukkit/Spigot/Paper support **up to 26.x** and **down to 1.8.x**
+EaglerXPaper is a forward port of lax1dude's EaglerXServer Spigot functionalities that extends Bukkit/Spigot/Paper support **up to 26.x** and **down to 1.8.x**. **ViaVersion and ViaBackwards are NEEDED for this plugin to function** and ViaRewind is needed if you want 1.8 clients to be able to join.
 
 **This is largely the same project as EaglerXServer** — it only changes a few minor things to ensure 1.17+ and 1.8.x compatibility, plus adds a couple of small features. All credit for the actual plugin goes to lax1dude.
 
